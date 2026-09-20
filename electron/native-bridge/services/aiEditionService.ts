@@ -175,6 +175,17 @@ export class AiEditionService {
 		const credentialSummary: AiEditionLlmSnapshot["credentialSummary"] = [];
 		const connectedProviders: string[] = [];
 		for (const def of PROVIDER_DEFINITIONS) {
+			if (def.authKind === "local-login") {
+				const connected = config?.provider === def.id;
+				if (connected) connectedProviders.push(def.id);
+				credentialSummary.push({
+					providerId: def.id,
+					connected,
+					authKind: def.authKind,
+					credentialKind: connected ? "local-login" : null,
+				});
+				continue;
+			}
 			const resolved = this.llmConfig.getCredential(def.id, def.envKeys);
 			const connected = Boolean(resolved);
 			if (connected) connectedProviders.push(def.id);
@@ -199,6 +210,18 @@ export class AiEditionService {
 
 	async llmSetConfig(config: AiEditionLlmConfig): Promise<AiEditionDocumentResult> {
 		try {
+			if (config.provider === "github-copilot") {
+				const { listCopilotModels } = await import("../../ai-edition/copilot");
+				const models = await listCopilotModels();
+				if (!models.includes(config.model)) {
+					throw new Error("Select a model available to your GitHub Copilot account.");
+				}
+				config = {
+					provider: config.provider,
+					model: config.model,
+					allowAgentEdits: config.allowAgentEdits,
+				};
+			}
 			await this.llmConfig.setConfig(config);
 			return { success: true };
 		} catch (error) {
@@ -208,6 +231,9 @@ export class AiEditionService {
 
 	async llmSetApiKey(providerId: string, apiKey: string): Promise<AiEditionDocumentResult> {
 		try {
+			if (providerId === "github-copilot") {
+				throw new Error("GitHub Copilot uses your local GitHub login, not an API key.");
+			}
 			const entry: LlmCredential = { kind: "api-key", apiKey };
 			await this.llmConfig.setCredential(providerId, entry);
 			return { success: true };
@@ -226,7 +252,7 @@ export class AiEditionService {
 	}
 
 	async llmDisconnect(providerId: string): Promise<AiEditionLlmDisconnectResult> {
-		await this.llmConfig.removeCredential(providerId);
+		if (providerId !== "github-copilot") await this.llmConfig.removeCredential(providerId);
 		const active = this.llmConfig.getConfig();
 		if (active?.provider === providerId) {
 			await this.llmConfig.setConfig({
@@ -241,6 +267,10 @@ export class AiEditionService {
 		try {
 			const def = PROVIDER_DEFINITIONS.find((d) => d.id === providerId);
 			if (!def) return { models: [], error: `Unknown provider ${providerId}` };
+			if (providerId === "github-copilot") {
+				const { listCopilotModels } = await import("../../ai-edition/copilot");
+				return { models: await listCopilotModels() };
+			}
 			const cred = this.llmConfig.getCredential(providerId, def.envKeys);
 			if (!cred) return { models: [], error: "Not connected" };
 			const config = this.llmConfig.getConfig();

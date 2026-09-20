@@ -4,6 +4,7 @@ import {
 	type AboutFacts,
 	COPYRIGHT,
 	formatAboutDetail,
+	PRODUCT_NAME,
 	usesNativeAboutPanel,
 	WEBSITE_URL,
 } from "./about";
@@ -20,6 +21,14 @@ function facts(overrides: Partial<AboutFacts> = {}): AboutFacts {
 		...overrides,
 	};
 }
+
+it("uses the packaged fork name on native UI surfaces", () => {
+	const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+	const builder = readFileSync(new URL("../electron-builder.json5", import.meta.url), "utf8");
+	expect(PRODUCT_NAME).toBe("Openscreen Copilot");
+	expect(manifest).toMatchObject({ productName: PRODUCT_NAME });
+	expect(builder.match(/["']?productName["']?\s*:\s*["']([^"']*)["']/)?.[1]).toBe(PRODUCT_NAME);
+});
 
 describe("formatAboutDetail", () => {
 	it("lays the runtime, the install and the project out one per line", () => {

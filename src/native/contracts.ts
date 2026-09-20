@@ -257,7 +257,12 @@ export interface AiEditionLlmConfig {
 	allowAgentEdits?: boolean;
 }
 
-export type AiEditionLlmCredentialKind = "api-key" | "codex" | "github-device" | "github-pat";
+export type AiEditionLlmCredentialKind =
+	| "api-key"
+	| "codex"
+	| "github-device"
+	| "github-pat"
+	| "local-login";
 
 export interface AiEditionLlmSnapshot {
 	config: AiEditionLlmConfig | null;

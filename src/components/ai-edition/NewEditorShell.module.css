@@ -2087,30 +2087,155 @@
 .providerForm {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
+}
+.providerForm > .backBtn {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
 }
 .providerForm .title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 .providerForm .title h3 {
   margin: 0;
-  font: 600 16px var(--font-display);
+  font: 600 18px var(--font-display);
   color: var(--fg);
 }
 .providerForm .actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding-top: 8px;
+  padding-top: 16px;
   border-top: 1px solid var(--border-soft);
   margin-top: 4px;
 }
 .providerForm .actionsLeft {
   display: flex;
   gap: 8px;
+  margin-inline-end: auto;
+}
+.providerForm .field {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 0;
+}
+.providerForm .field label {
+  color: var(--fg-2);
+  font: 600 13px/1.4 var(--font-body);
+}
+.providerForm .field input,
+.providerForm .field select {
+  min-height: 40px;
+  padding: 9px 12px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+.providerHint {
+  display: block;
+  margin: 0;
+  color: var(--muted);
+  font: 400 12px/1.6 var(--font-body);
+  overflow-wrap: anywhere;
+}
+.providerLoading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font: 400 12px/1.5 var(--font-body);
+}
+.providerLoginNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font: 400 13px/1.6 var(--font-body);
+  color: var(--muted);
+}
+.providerLoginNote > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--success);
+}
+.providerLoginNote strong {
+  color: var(--fg-2);
+  font-weight: 600;
+}
+.providerLoginNote p {
+  margin: 4px 0 0;
+}
+.providerPermission {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  cursor: pointer;
+}
+.providerPermissionCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--fg-2);
+  font: 600 13px/1.5 var(--font-body);
+}
+.providerSwitch {
+  appearance: none;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 22px;
+  margin: 0;
+  padding: 2px;
+  border: 1px solid var(--border-hi);
+  border-radius: 999px;
+  background: var(--surface-3);
+  cursor: pointer;
+}
+.providerSwitch::before {
+  content: "";
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--fg-2);
+}
+.providerSwitch:checked {
+  background: var(--success);
+  border-color: var(--success);
+}
+.providerSwitch:checked::before {
+  transform: translateX(14px);
+  background: white;
+}
+.providerSwitch:focus-visible,
+.providerForm .field input:focus-visible,
+.providerForm .field select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.providerSwitch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+@media (max-width: 480px) {
+  .providerForm .actions {
+    flex-wrap: wrap;
+  }
+  .providerForm .actionsLeft {
+    flex-basis: 100%;
+  }
+  .providerGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .dangerBtn {
   background: color-mix(in srgb, var(--danger) 14%, transparent);

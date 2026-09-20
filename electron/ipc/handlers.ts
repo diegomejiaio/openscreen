@@ -42,7 +42,6 @@ import type {
 	ProjectFileResult,
 	ProjectPathResult,
 } from "../../src/native/contracts";
-import { PRODUCT_NAME } from "../about";
 import {
 	compactSessionNow,
 	createSession,
@@ -4593,8 +4592,9 @@ export function registerIpcHandlers(
 
 	// Same one-instance rule: the service serialises its writes per instance. The folder is
 	// in Documents, not userData, because presets are files users are meant to find and share.
+	// Keep its existing name independently of the fork's display name.
 	const stylePresets = new StylePresetService(
-		path.join(app.getPath("documents"), `${PRODUCT_NAME} Presets`),
+		path.join(app.getPath("documents"), "OpenScreen Presets"),
 	);
 
 	// One instance each, not one per call. DocumentService serialises saves of a

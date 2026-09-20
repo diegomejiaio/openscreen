@@ -9,10 +9,8 @@
 import type { InstallChannel } from "./install-channel";
 
 export const WEBSITE_URL = "https://getopenscreen.com";
-/** The brand spelling, for the surfaces we render ourselves. NOT `app.name`: that resolves to
- *  electron-builder's `productName` ("Openscreen") when packaged and to package.json's `name`
- *  ("openscreen") in dev, so the About box would disagree with its own title bar. */
-export const PRODUCT_NAME = "OpenScreen";
+/** The fork's display name; `app.name` uses the package name in development. */
+export const PRODUCT_NAME = "Openscreen Copilot";
 /** The collective form, and deliberately NOT the whole of LICENSE. LICENSE carries two holders:
  *  Siddharth Vaddem, who created the project — MIT obliges us to keep that notice on a codebase
  *  that still contains his code — and the contributors collectively. This is the line every user
@@ -45,7 +43,7 @@ export interface AboutFacts {
 	node: string;
 }
 
-/** The block under "Openscreen <version>". Untranslated on purpose: every line is a version
+/** The block under the product name and version. Untranslated on purpose: every line is a version
  *  number, a platform identifier or a URL, and a pasted bug report reads the same whatever
  *  locale the reporter runs.
  *

@@ -32,9 +32,9 @@ type ModelHistory = Array<{ role: "user" | "assistant" | "system"; content: stri
 
 let histories: ModelHistory[] = [];
 
-function stubConfig(): LlmConfigStore {
+function stubConfig(provider = "openai"): LlmConfigStore {
 	return {
-		getConfig: () => ({ provider: "openai", model: "gpt-4o" }),
+		getConfig: () => ({ provider, model: "gpt-4o" }),
 		getApiKey: () => "sk-test",
 		getCredential: () => ({ value: "sk-test", entry: { kind: "api-key", apiKey: "sk-test" } }),
 	} as unknown as LlmConfigStore;
@@ -59,8 +59,39 @@ beforeEach(() => {
 	invokeMock.mockReset();
 	chatModelMock.mockReset();
 	invokeMock.mockImplementation(async (args) => {
-		histories.push([...args.history]);
+		histories.push([...args.history, { role: "user", content: args.userMessage }]);
 		return { text: "ok", document: args.document, mutated: false };
+	});
+});
+
+describe("turn history", () => {
+	it.each([
+		"openai",
+		"github-copilot",
+	])("sends the current turn separately without dropping repeated requests (%s)", async (provider) => {
+		const projectId = `proj_turn_history_${provider}`;
+		const session = createSession(projectId);
+		const expectedHistory: ModelHistory = [];
+		for (let turn = 0; turn < 3; turn += 1) {
+			const result = await runChat(projectId, session.id, "Repeat this", stubConfig(provider));
+			expect(result.success).toBe(true);
+			expect(invokeMock).toHaveBeenCalledTimes(turn + 1);
+			expect(invokeMock.mock.calls[turn]?.[0]).toMatchObject({
+				model: { provider },
+				history: [...expectedHistory],
+				userMessage: "Repeat this",
+			});
+			expectedHistory.push(
+				{ role: "user", content: "Repeat this" },
+				{ role: "assistant", content: "ok" },
+			);
+		}
+		expect(
+			selectSession(projectId, session.id)?.messages.map(({ role, content }) => ({
+				role,
+				content,
+			})),
+		).toEqual(expectedHistory);
 	});
 });
 

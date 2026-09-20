@@ -376,6 +376,8 @@
 		"disconnected": "{{provider}} bağlantısı kesildi",
 		"pillConnected": "Bağlı",
 		"pillApiKey": "API anahtarı",
+		"pillLocalLogin": "Yerel oturum",
+		"localLoginHint": "Resmi Copilot SDK ile GitHub CLI oturumunu kullanır. Önce gh auth login çalıştırın. Kullanım Copilot planınıza sayılır. Buradan bağlantıyı kesmek GitHub oturumunu kapatmaz.",
 		"notConnected": "Bağlı değil",
 		"back": "Geri",
 		"modelLabel": "Model",

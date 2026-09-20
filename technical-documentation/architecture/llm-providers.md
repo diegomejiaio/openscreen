@@ -7,7 +7,8 @@ The provider layer defines model metadata, protects credentials, discovers model
 | [`electron/ai-edition/provider-registry.ts`](../../electron/ai-edition/provider-registry.ts) | Static `ProviderDefinition[]`, id normalization, reasoning-effort option lists and labels. No runtime deps. |
 | [`electron/ai-edition/llm-config-store.ts`](../../electron/ai-edition/llm-config-store.ts) | `LlmConfigStore` — plain JSON for selection, `safeStorage` blob for credentials. |
 | [`electron/ai-edition/llm-provider-auth.ts`](../../electron/ai-edition/llm-provider-auth.ts) | Model-list discovery per provider. Despite the filename it performs no authentication any more — see [Known gaps](#known-gaps). |
-| [`electron/ai-edition/deep-agent/chat-model.ts`](../../electron/ai-edition/deep-agent/chat-model.ts) | `createOpenScreenChatModel` — the single transport. Picks a `@langchain/*` chat model class per provider. |
+| [`electron/ai-edition/deep-agent/chat-model.ts`](../../electron/ai-edition/deep-agent/chat-model.ts) | `createOpenScreenChatModel` — API-key adapters and the text-only Copilot adapter. |
+| [`electron/ai-edition/copilot.ts`](../../electron/ai-edition/copilot.ts) | Official Copilot SDK runtime, local authentication, model discovery, tool permissions, and cleanup. |
 | [`electron/ai-edition/deep-agent/chat-model.ts`](../../electron/ai-edition/deep-agent/chat-model.ts) | Per-provider reasoning-effort capability and its LangChain wire options. |
 | [`electron/native-bridge/services/aiEditionService.ts`](../../electron/native-bridge/services/aiEditionService.ts) | IPC surface: connect / disconnect, snapshot, `llmListProviderModels`. |
 | [`src/components/ai-edition/ProviderSettings.tsx`](../../src/components/ai-edition/ProviderSettings.tsx) | Renders cards and forms directly from `PROVIDER_DEFINITIONS`. `ProviderSettingsDialog`, in the same file, is its one mount — `App.tsx`, beside `ShortcutsConfigDialog`. |
@@ -20,12 +21,12 @@ The provider layer defines model metadata, protects credentials, discovers model
 > mounts only in Edit mode with the chat panel expanded, which would have left the menu item
 > dead in Media and Rec (issue #420).
 
-> **There is one transport.** `llm-call.ts` (`streamLlm` / `callLlm`) and
+> **Two supported transports.** `llm-call.ts` (`streamLlm` / `callLlm`) and
 > `codex-session.ts` were deleted in 1.8.0 along with the two account-backed
-> providers that needed them. Everything now goes through
-> `createOpenScreenChatModel`; neither symbol has any remaining reference in
-> the repo. The duplicated fetch-vs-LangChain routing that earlier revisions
-> of this document called out as a gap no longer exists.
+> providers that needed them. API-key providers still use LangChain. This
+> personal fork adds the official Copilot SDK, not the removed proxy:
+> the agent uses SDK custom tools, while caption translation and compaction
+> use a text-only `BaseChatModel` adapter through `createOpenScreenChatModel`.
 
 ## The registry
 
@@ -33,6 +34,7 @@ Each `ProviderDefinition` carries a stable id and label, default model, `authKin
 
 | ID | Display name | Default model | Wire shape |
 |---|---|---|---|
+| `github-copilot` | GitHub Copilot | `gpt-5.4-mini` | Official Copilot SDK, local GitHub CLI login |
 | `anthropic` | Claude API | `claude-haiku-4-5` | Anthropic Messages (`ChatAnthropic`) |
 | `openai` | OpenAI API | `gpt-4o` | OpenAI-compatible (`ChatOpenAI`) |
 | `google` | Gemini API | `gemini-3-flash-preview` | Google's OpenAI-compatible endpoint (`/v1beta/openai`) |
@@ -50,11 +52,28 @@ MiniMax's `baseUrl` deliberately omits `/v1`: `ChatAnthropic` wraps `@anthropic-
 
 `openai-oauth` (ChatGPT) and `copilot-proxy` (GitHub Copilot) were deleted. Both reached a user's subscription by presenting GitHub's and OpenAI's own client IDs and an editor `User-Agent` against endpoints reserved for first-party clients (`api.github.com/copilot_internal`, `chatgpt.com/backend-api`) — from inside a signed installer. Both vendors expose a sanctioned surface instead: GitHub's Copilot SDK (register our own OAuth App, pass the user's `gho_` token) and `codex app-server` (drives the user's own `codex login`, ships no client ID at all). Those are separate integrations rather than a header swap, so they return in their own PR.
 
-The removal note lives at [`provider-registry.ts:92`](../../electron/ai-edition/provider-registry.ts). `authKind` is narrowed to the literal `"api-key"` so the type widens again only when one of those lands.
+The removal note lives in [`provider-registry.ts`](../../electron/ai-edition/provider-registry.ts).
+The new `github-copilot` provider is distinct from `copilot-proxy`; `authKind`
+now supports `"api-key" | "local-login"`.
 
 ## Auth
 
-One mode. The user pastes a key in `ProviderSettings`, or the main process resolves the first populated env var listed by the definition — `getCredential` checks `envKeys` **before** the stored blob, so an env var always wins.
+For API-key providers, the user pastes a key in `ProviderSettings`, or the main process resolves the first populated env var listed by the definition — `getCredential` checks `envKeys` **before** the stored blob, so an env var always wins.
+
+Copilot instead discovers the user's `gh auth login` through the official SDK.
+It requires an eligible Copilot plan and permitted model; usage counts toward
+that plan. There is no API-key input or app-owned OAuth registration in this
+personal integration. The SDK uses an isolated directory under app user data,
+not the user's Copilot CLI profile. The SDK receives an allowlisted environment:
+OS paths and temporary directories, GitHub CLI configuration, locale, Linux
+keyring access, and proxy/CA settings. Unrelated provider keys, automation tokens,
+runtime overrides, and Node injection options are not inherited. Standard
+Homebrew binary paths are included on macOS so Finder-launched builds can find `gh`.
+
+Saving a Copilot selection checks authentication and model availability.
+The settings snapshot means the provider was selected, not that authentication
+was just revalidated; every request rechecks it. Disconnect clears the selection
+without logging the user out of GitHub.
 
 A custom OpenAI-compatible endpoint may omit authentication entirely; `resolveOpenAIChatApiKey` substitutes the `OPENAI_COMPATIBLE_NO_AUTH_API_KEY` placeholder so the SDK has something to send.
 
@@ -70,6 +89,7 @@ Two compatibility behaviours in the loader are load-bearing:
 - `getCredential` matches on **a usable `apiKey` field, not on `kind`**. A blob written by a pre-1.8.0 build still carries `kind: "codex"` / `"github-device"` / `"github-pat"` rows; narrowing on the current one-member union would make those unreadable and crash the read. They resolve to nothing instead, because no provider claims those ids — so no migration is needed.
 
 Renderer snapshots expose connection summaries, never raw credential values.
+Copilot stores no credential in `LlmConfigStore`; GitHub CLI owns its login.
 
 ## Calling a model
 
@@ -78,13 +98,14 @@ Renderer snapshots expose connection summaries, never raw credential values.
 - `minimax` / `minimax-token-plan` → `ChatAnthropic` with `anthropicApiUrl` pointed at the MiniMax base and an explicit `maxTokens` (`ANTHROPIC_API_MAX_OUTPUT_TOKENS`, 16384). ChatAnthropic's default-output table only knows Claude slugs (16k) and falls back to 4096 for anything else — with adaptive thinking on, a cold-start MiniMax turn could spend that entire budget on reasoning and truncate before any text block (the "first call returns empty" bug, #181).
 - `anthropic` → `ChatAnthropic`, plus `thinking` / `outputConfig` when reasoning is on. Known `claude-*` slugs keep LangChain's per-model `maxTokens` default (overriding it would exceed legacy limits like claude-3-haiku's 4096); non-Claude model names — a self-hosted Anthropic-compatible endpoint behind `baseUrl` — get the same 16384 floor as MiniMax.
 - `mistral` → `ChatMistralAI`.
+- `github-copilot` → `CopilotChatModel` for text-only transforms.
 - everything else (`openai`, `google`, `openrouter`, `openai-compatible`) → `ChatOpenAI`, with the base URL defaulted per provider and `disableStreaming` set for Gemini 3, whose OpenAI-compat path cannot stream and tool-call at the same time.
 
 The `maxTokens` floor is Anthropic-wire-only by design: the OpenAI-shaped transports send no `max_tokens` by default (the provider's own limit applies), so there is no 4096 fallback to fix — and adding a cap would truncate outputs that are uncapped today.
 
 An unrecognised provider reaching `createLocalProviderChatModel` throws rather than silently defaulting to OpenAI.
 
-Three call sites share that factory:
+Three call sites use that factory, except for the Copilot agent's SDK branch:
 
 | Caller | What it does |
 |---|---|
@@ -93,6 +114,18 @@ Three call sites share that factory:
 | [`caption-translate.ts`](../../electron/ai-edition/caption-translate.ts) | One-shot caption translation. Deliberately not the agent loop: a pure text transform has no reason to hold document-mutating tools. |
 
 `messageContentToText` flattens LangChain `MessageContent` for the two one-shot callers without dragging in the agent tool graph.
+
+The Copilot agent reuses `buildTools`, including schema validation, edit-consent
+checks, cursor telemetry, and real tool-result events. Calls are serialized to
+avoid racing document updates. A failed turn returns the original document.
+For every provider, `runChat` separates previous history from the current user
+message so the agent receives the current request exactly once. The combined
+payload retains the 20-message window and any pinned compaction summary;
+repeated requests remain in the transcript rather than being deduplicated by text.
+SDK sessions allow only those named custom tools: builtins and MCP tools,
+config discovery, tool search, and infinite sessions are disabled. Text-only
+calls have no tools at all. Requests have a 120-second response timeout followed
+by explicit abort/disconnect and runtime cleanup.
 
 ## Reasoning effort
 
@@ -108,6 +141,7 @@ MiniMax's `thinking` block is binary (`{type: "adaptive"}` or absent), so `getRe
 
 | Provider | Source |
 |---|---|
+| `github-copilot` | Official SDK `listModels`, excluding policy-disabled models; no inference |
 | `anthropic` | `GET /v1/models` with `x-api-key` |
 | `google` | `GET /v1beta/openai/models`, filtered to `gemini-*` |
 | `mistral` | `GET /v1/models` |
