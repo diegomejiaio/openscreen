@@ -1,15 +1,16 @@
 // @see - https://www.electron.build/configuration/configuration
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.etiennelescot.openscreen",
+  "appId": "local.openscreen.copilot",
   "asar": true,
   // .node binaries can't be dlopen'd from inside an asar — must live unpacked.
   // onnxruntime-node distributes as a `.node` shared object that whisper.cpp
   // helpers run from process spawn, so they all unpack via the same glob.
   "asarUnpack": [
-    "**/*.node"
+    "**/*.node",
+    "node_modules/@github/copilot-sdk*/**"
   ],
-  "productName": "Openscreen",
+  "productName": "Openscreen Copilot",
   // There is deliberately no `electronVersion` here. electron-builder needs an EXACT
   // version because it downloads the binaries for one release, and it takes that from
   // package.json's `electron` devDependency, which is pinned without a caret for this
@@ -44,7 +45,7 @@
   "publish": [
     {
       "provider": "github",
-      "owner": "getopenscreen",
+      "owner": "diegomejiaio",
       "repo": "openscreen"
     }
   ],

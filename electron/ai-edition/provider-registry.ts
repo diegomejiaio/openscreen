@@ -10,10 +10,7 @@ export interface ProviderDefinition {
 	id: string;
 	label: string;
 	defaultModel: string;
-	/** Only API-key providers ship today — see the removal note in
-	 * PROVIDER_DEFINITIONS. Widen this again when the Copilot SDK / Codex
-	 * app-server providers land. */
-	authKind: "api-key";
+	authKind: "api-key" | "local-login";
 	supportsReasoningEffort: boolean;
 	/** True when this provider always requires the user to enter a base URL
 	 * (e.g. openai-compatible). False when the default is implicit. */
@@ -30,6 +27,14 @@ export interface ProviderDefinition {
 }
 
 export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
+	{
+		id: "github-copilot",
+		label: "GitHub Copilot",
+		defaultModel: "gpt-5.4-mini",
+		authKind: "local-login",
+		supportsReasoningEffort: false,
+		envKeys: [],
+	},
 	{
 		id: "anthropic",
 		label: "Claude API",

@@ -373,6 +373,10 @@ export async function createOpenScreenChatModel(
 		...input,
 		provider: normalizeProviderId(input.provider) ?? input.provider,
 	};
+	if (config.provider === "github-copilot") {
+		const { CopilotChatModel } = await import("./copilot-chat-model");
+		return new CopilotChatModel(config.model);
+	}
 
 	const reasoningOptions = buildLangChainReasoningOptions(
 		config.provider,

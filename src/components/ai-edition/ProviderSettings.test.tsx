@@ -8,7 +8,7 @@
 // string rather than two that can drift apart.
 
 import "@testing-library/jest-dom";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EditorDialogsProvider, useEditorDialogActions } from "@/contexts/EditorDialogsContext";
 import { I18nProvider } from "@/contexts/I18nContext";
@@ -17,6 +17,10 @@ import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 
 // The dialog reads a provider snapshot over the native bridge the moment it opens. Answer with
 // an empty one: which providers exist is the registry's business, and this file's is the door.
+const copilotMocks = vi.hoisted(() => ({
+	setConfig: vi.fn(),
+	setApiKey: vi.fn(),
+}));
 vi.mock("@/native/client", () => ({
 	nativeBridgeClient: {
 		aiEdition: {
@@ -28,6 +32,8 @@ vi.mock("@/native/client", () => ({
 					credentialSummary: [],
 				}),
 			llmListProviderModels: () => Promise.resolve({ models: [] }),
+			llmSetConfig: copilotMocks.setConfig,
+			llmSetApiKey: copilotMocks.setApiKey,
 		},
 	},
 }));
@@ -87,6 +93,8 @@ function openAiSettingsFromAppMenu() {
 
 beforeEach(() => {
 	localStorage.clear();
+	vi.clearAllMocks();
+	copilotMocks.setConfig.mockResolvedValue({ success: true });
 });
 
 afterEach(() => {
@@ -95,6 +103,63 @@ afterEach(() => {
 });
 
 describe("ProviderSettings, reached from the app menu", () => {
+	it("labels the controls and preserves the edit-permission setting when saving", async () => {
+		renderEditorChrome("en");
+		openAiSettingsFromAppMenu();
+		fireEvent.click(screen.getByRole("button", { name: /GitHub Copilot/ }));
+		expect(screen.getByRole("textbox", { name: "Model" })).toHaveValue("gpt-5.4-mini");
+		const permission = screen.getByRole("switch", { name: "Allow the agent to edit the project" });
+		expect(permission).toBeChecked();
+		expect(permission).toHaveAccessibleDescription(/When off, the agent must ask/);
+		fireEvent.click(permission);
+		expect(permission).not.toBeChecked();
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		await waitFor(() =>
+			expect(copilotMocks.setConfig).toHaveBeenCalledWith(
+				expect.objectContaining({ allowAgentEdits: false }),
+			),
+		);
+	});
+
+	it("keeps API-key providers editable with associated labels", async () => {
+		renderEditorChrome("en");
+		openAiSettingsFromAppMenu();
+		fireEvent.click(screen.getByRole("button", { name: /OpenAI API/ }));
+		expect(screen.getByLabelText("API key")).toHaveAttribute("type", "password");
+		fireEvent.change(screen.getByLabelText("API key"), { target: { value: "test-key" } });
+		expect(screen.getByRole("button", { name: "Save & use" })).toBeEnabled();
+		await screen.findByRole("heading", { name: "OpenAI API" });
+	});
+
+	it("uses local login for Copilot without requiring or sending an API key", async () => {
+		renderEditorChrome("en");
+		openAiSettingsFromAppMenu();
+		fireEvent.click(screen.getByRole("button", { name: /GitHub Copilot/ }));
+		expect(screen.getByText(/Run gh auth login first/)).toBeInTheDocument();
+		expect(document.querySelector('input[type="password"]')).toBeNull();
+		const save = screen.getByRole("button", { name: "Save" });
+		expect(save).toBeEnabled();
+		fireEvent.click(save);
+		await waitFor(() =>
+			expect(copilotMocks.setConfig).toHaveBeenCalledWith(
+				expect.objectContaining({ provider: "github-copilot", model: "gpt-5.4-mini" }),
+			),
+		);
+		expect(copilotMocks.setApiKey).not.toHaveBeenCalled();
+	});
+
+	it("surfaces a failed local login instead of reporting a successful save", async () => {
+		copilotMocks.setConfig.mockResolvedValue({
+			success: false,
+			error: "Sign in with gh auth login.",
+		});
+		renderEditorChrome("en");
+		openAiSettingsFromAppMenu();
+		fireEvent.click(screen.getByRole("button", { name: /GitHub Copilot/ }));
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		expect(await screen.findByText("Sign in with gh auth login.")).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "GitHub Copilot" })).toBeInTheDocument();
+	});
 	it("is absent until the menu row is clicked, then mounted as a dialog", () => {
 		renderEditorChrome("en");
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

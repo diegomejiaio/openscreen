@@ -376,6 +376,8 @@
 		"disconnected": "تم قطع الاتصال بـ {{provider}}",
 		"pillConnected": "متصل",
 		"pillApiKey": "مفتاح API",
+		"pillLocalLogin": "تسجيل دخول محلي",
+		"localLoginHint": "يستخدم تسجيل دخول GitHub CLI عبر Copilot SDK الرسمي. شغّل gh auth login أولاً. يُحتسب الاستخدام ضمن خطة Copilot. قطع الاتصال هنا لا يسجّل خروجك من GitHub.",
 		"notConnected": "غير متصل",
 		"back": "رجوع",
 		"modelLabel": "النموذج",

@@ -376,6 +376,8 @@
 		"disconnected": "{{provider}} の接続を解除しました",
 		"pillConnected": "接続済み",
 		"pillApiKey": "API キー",
+		"pillLocalLogin": "ローカルログイン",
+		"localLoginHint": "公式 Copilot SDK で GitHub CLI のログインを使用します。先に gh auth login を実行してください。利用量は Copilot プランに計上されます。ここで切断しても GitHub からログアウトしません。",
 		"notConnected": "未接続",
 		"back": "戻る",
 		"modelLabel": "モデル",

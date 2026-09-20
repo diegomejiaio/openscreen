@@ -376,6 +376,8 @@
 		"disconnected": "Đã ngắt kết nối {{provider}}",
 		"pillConnected": "Đã kết nối",
 		"pillApiKey": "Khóa API",
+		"pillLocalLogin": "Đăng nhập cục bộ",
+		"localLoginHint": "Dùng đăng nhập GitHub CLI qua Copilot SDK chính thức. Chạy gh auth login trước. Mức sử dụng được tính vào gói Copilot. Ngắt kết nối ở đây không đăng xuất GitHub.",
 		"notConnected": "Chưa kết nối",
 		"back": "Quay lại",
 		"modelLabel": "Mô hình",

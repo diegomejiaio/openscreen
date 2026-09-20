@@ -17,9 +17,11 @@ const FIRST_PARTY_ONLY_HOSTS = [
 ];
 
 describe("PROVIDER_DEFINITIONS", () => {
-	it("ships only API-key providers", () => {
+	it("offers local authentication only through the official Copilot SDK", () => {
 		const others = PROVIDER_DEFINITIONS.filter((def) => def.authKind !== "api-key");
-		expect(others.map((d) => d.id)).toEqual([]);
+		expect(others.map((d) => d.id)).toEqual(["github-copilot"]);
+		expect(others[0].authKind).toBe("local-login");
+		expect(others[0].envKeys).toEqual([]);
 	});
 
 	it("points at no endpoint reserved for a vendor's own clients", () => {

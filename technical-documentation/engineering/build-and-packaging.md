@@ -8,6 +8,7 @@ OpenScreen builds its renderer, Electron main process, preload bridge, native he
 |---|---|
 | `npm run dev` | Starts Vite with the Electron plugin; builds and launches main/preload unless `NO_ELECTRON` is set. |
 | `npm run build-vite` | Runs TypeScript checking and Vite only. It produces `dist/` and `dist-electron/` but no installer. |
+| `npm run build:mac:local` | Personal Copilot fork, Apple Silicon only: builds JS, packages without publishing, applies the macOS workflow's ad-hoc signature, and verifies the signature and fork identity. Requires already-staged native artifacts. Quit the app first. |
 | `npm run build` | Runs TypeScript checking, Vite, then unrestricted `electron-builder`. This is the full generic packaging command, but it does not proactively build platform helpers. **On Windows, prefer `build:win`** — see [Stale native artifacts](#stale-native-artifacts). |
 | `npm run build:mac` | Builds the ScreenCaptureKit and cursor helpers, checks TypeScript, runs Vite, and packages the macOS target. |
 | `npm run build:win` | Builds WGC/cursor helpers and the D3D11 compositor addon, fetches FFmpeg, checks TypeScript, runs Vite, and packages the Windows NSIS target without npm rebuild. |

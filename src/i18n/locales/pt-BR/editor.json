@@ -376,6 +376,8 @@
 		"disconnected": "{{provider}} desconectado",
 		"pillConnected": "Conectado",
 		"pillApiKey": "Chave de API",
+		"pillLocalLogin": "Login local",
+		"localLoginHint": "Usa seu login do GitHub CLI pelo SDK oficial do Copilot. Execute gh auth login primeiro. O uso conta no seu plano Copilot. Desconectar aqui não encerra sua sessão do GitHub.",
 		"notConnected": "Não conectado",
 		"back": "Voltar",
 		"modelLabel": "Modelo",

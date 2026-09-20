@@ -17,6 +17,8 @@
 // middlewares (they are in `REQUIRED_MIDDLEWARE_NAMES`), so the fix is to stop
 // going through it: `createAgent` is what it wrapped, minus the sandbox.
 
+import type { StructuredToolInterface } from "@langchain/core/tools";
+import { toJsonSchema } from "@langchain/core/utils/json_schema";
 import { anthropicPromptCachingMiddleware, createAgent, tool } from "langchain";
 import { z } from "zod";
 import type { AxcutDocument } from "../../../src/lib/ai-edition/schema";
@@ -330,7 +332,7 @@ export function buildTools(
 	sink: OpenScreenAgentSink,
 	editsAllowed = true,
 	runtime: ToolRuntime = {},
-) {
+): StructuredToolInterface[] {
 	const build = <S extends z.ZodType>(name: string, schema: S) =>
 		documentTool(holder, sink, name, schema, editsAllowed, runtime);
 	return [
@@ -466,12 +468,50 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	// runtime side-effects (langgraph thread) are tied to the agent instance —
 	// checkpoint-based stateful threads can land later by passing a
 	// `checkpointer`; for v1 each turn is single-shot.
-	const chatModel = await createOpenScreenChatModel(model);
 	const availableByAssetId = await probeCursorTelemetry(document, args.cursor);
 	const tools = buildTools(holder, sink, editsAllowed, {
 		cursor: args.cursor,
 		availableByAssetId,
 	});
+	if (model.provider === "github-copilot") {
+		const { runCopilot } = await import("../copilot");
+		try {
+			// Serialize calls: two edits must not race while cursor telemetry is loading.
+			let queue: Promise<unknown> = Promise.resolve();
+			const text = await runCopilot({
+				model: model.model,
+				system: buildSystemPrompt({ editsAllowed }),
+				prompt: JSON.stringify({ history, userMessage }),
+				onText: sink.text,
+				tools: tools.map((entry) => ({
+					name: entry.name,
+					description: entry.description,
+					parameters: toJsonSchema(entry.schema),
+					defer: "never",
+					handler: (input: unknown) => {
+						const result = queue.then(() => {
+							if (!input || typeof input !== "object" || Array.isArray(input)) {
+								throw new Error("Tool arguments must be an object.");
+							}
+							return entry.invoke(input);
+						});
+						queue = result.catch(() => undefined);
+						return result;
+					},
+				})),
+			});
+			return {
+				text,
+				document: holder.current,
+				mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
+			};
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			sink.error(reason);
+			return { text: "", document, mutated: false, reason };
+		}
+	}
+	const chatModel = await createOpenScreenChatModel(model);
 	const agent = createAgent({
 		model: chatModel,
 		tools,

@@ -551,6 +551,12 @@ function createShimBridgeClient() {
 			},
 			llmGetSnapshot: () => Promise.resolve(buildLlmSnapshot()),
 			llmSetConfig: (config: ShimLlmConfig) => {
+				if (config.provider === "github-copilot") {
+					return Promise.resolve({
+						success: false,
+						error: "GitHub Copilot requires the desktop app.",
+					});
+				}
 				activeConfig = config;
 				saveLlmState();
 				return Promise.resolve({ success: true });
@@ -575,7 +581,13 @@ function createShimBridgeClient() {
 			},
 			llmListProviderModels: (providerId: string) =>
 				Promise.resolve({
-					models: [`${providerId}-demo-model-1`, `${providerId}-demo-model-2`],
+					models:
+						providerId === "github-copilot"
+							? []
+							: [`${providerId}-demo-model-1`, `${providerId}-demo-model-2`],
+					...(providerId === "github-copilot"
+						? { error: "GitHub Copilot requires the desktop app." }
+						: {}),
 				}),
 			chatRun: (projectId: string, sessionId: string, message?: string) => {
 				const sessions = getSessions(projectId);

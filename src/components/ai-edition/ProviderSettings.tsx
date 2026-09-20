@@ -8,16 +8,14 @@
 //                       optional reasoning effort + api-key field +
 //                       Save/Disconnect buttons.
 //
-// Every provider is API-key based since 1.8.0 dropped the ChatGPT and Copilot
-// OAuth providers (see provider-registry.ts); the device-challenge screen went
-// with them. Credentials live in the safeStorage blob (LlmConfigStore) — the
-// renderer never sees raw keys, only `kind`.
+// API keys live in safeStorage. Copilot uses the official SDK's local GitHub
+// authentication; the renderer never reads or stores its credentials.
 //
 // `ProviderSettingsDialog` at the bottom is the only mount, and the only caller of the
 // `open` / `onClose` component above it. Internal state is local-only.
 
-import { AlertCircle, Check, Loader2, Unplug, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { AlertCircle, ArrowLeft, Check, Loader2, ShieldCheck, Unplug } from "lucide-react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { useEditorDialogActions, useEditorDialogSection } from "@/contexts/EditorDialogsContext";
 import { useScopedT } from "@/contexts/I18nContext";
@@ -133,10 +131,12 @@ function ProviderSettings({ open, onClose }: ProviderSettingsProps) {
 		setError(null);
 		try {
 			if (apiKey.trim()) {
-				await nativeBridgeClient.aiEdition.llmSetApiKey(active.id, apiKey.trim());
+				const result = await nativeBridgeClient.aiEdition.llmSetApiKey(active.id, apiKey.trim());
+				if (!result.success) throw new Error(result.error);
 				setApiKey("");
 			}
-			await nativeBridgeClient.aiEdition.llmSetConfig(config);
+			const result = await nativeBridgeClient.aiEdition.llmSetConfig(config);
+			if (!result.success) throw new Error(result.error);
 			await refreshSnapshot();
 			toast.success(te("providerSettings.saved", { provider: active.label }));
 			setMode("list");
@@ -186,10 +186,6 @@ function ProviderSettings({ open, onClose }: ProviderSettingsProps) {
 				<ProviderForm
 					def={active}
 					isConnected={(snapshot?.connectedProviders ?? []).includes(active.id)}
-					credentialKind={
-						snapshot?.credentialSummary.find((c) => c.providerId === active.id)?.credentialKind ??
-						null
-					}
 					apiKey={apiKey}
 					setApiKey={setApiKey}
 					config={config}
@@ -253,7 +249,9 @@ function ProviderList({
 							) : (
 								<span className={`${styles.statusPill} ${styles.idle}`}>
 									<KeyIcon />
-									{te("providerSettings.pillApiKey")}
+									{def.authKind === "local-login"
+										? te("providerSettings.pillLocalLogin")
+										: te("providerSettings.pillApiKey")}
 								</span>
 							)}
 						</div>
@@ -285,7 +283,6 @@ function KeyIcon() {
 function ProviderForm({
 	def,
 	isConnected,
-	credentialKind,
 	apiKey,
 	setApiKey,
 	config,
@@ -299,7 +296,6 @@ function ProviderForm({
 }: {
 	def: ProviderDefinition;
 	isConnected: boolean;
-	credentialKind: string | null;
 	apiKey: string;
 	setApiKey: (v: string) => void;
 	config: AiEditionLlmConfig | null;
@@ -312,6 +308,7 @@ function ProviderForm({
 	listProviderModels: (providerId: string) => Promise<{ models: string[]; error?: string }>;
 }) {
 	const te = useScopedT("editor");
+	const formId = useId();
 	const showBaseUrl = def.id === "openai-compatible" || Boolean(def.baseUrl);
 	// Every provider exposes a live model list once connected: each hits its own
 	// /models endpoint, or a probe call for MiniMax.
@@ -320,7 +317,7 @@ function ProviderForm({
 	const [modelsError, setModelsError] = useState<string | null>(null);
 
 	useEffect(() => {
-		if (!isConnected) {
+		if (!isConnected && def.authKind !== "local-login") {
 			setModelOptions([]);
 			setModelsError(null);
 			return;
@@ -345,30 +342,29 @@ function ProviderForm({
 		return () => {
 			cancelled = true;
 		};
-	}, [def.id, isConnected, listProviderModels]);
+	}, [def.id, def.authKind, isConnected, listProviderModels]);
 
 	const modelSelectable = modelOptions.length > 0;
 
 	return (
 		<div className={styles.providerForm}>
+			<button
+				type="button"
+				className={styles.backBtn}
+				onClick={onBack}
+				disabled={busy}
+				title={te("providerSettings.back")}
+				aria-label={te("providerSettings.back")}
+			>
+				<ArrowLeft size={14} aria-hidden />
+				{te("providerSettings.back")}
+			</button>
 			<div className={styles.title}>
-				<button
-					type="button"
-					className={styles.backBtn}
-					onClick={onBack}
-					disabled={busy}
-					title={te("providerSettings.back")}
-					aria-label={te("providerSettings.back")}
-				>
-					<X size={14} />
-					{te("providerSettings.back")}
-				</button>
 				<h3>{def.label}</h3>
 				{isConnected ? (
 					<span className={`${styles.statusPill} ${styles.ready}`}>
 						<Check size={10} />
-						{te("providerSettings.pillConnected")}{" "}
-						{credentialKind && credentialKind !== "api-key" ? `· ${credentialKind}` : ""}
+						{te("providerSettings.pillConnected")}
 					</span>
 				) : (
 					<span className={`${styles.statusPill} ${styles.idle}`}>
@@ -378,6 +374,7 @@ function ProviderForm({
 			</div>
 
 			<Field
+				id={`${formId}-model`}
 				label={te("providerSettings.modelLabel")}
 				hint={
 					modelSelectable
@@ -391,6 +388,7 @@ function ProviderForm({
 			>
 				{modelSelectable ? (
 					<select
+						id={`${formId}-model`}
 						value={config?.model ?? def.defaultModel}
 						onChange={(e) =>
 							setConfig({
@@ -415,6 +413,7 @@ function ProviderForm({
 					</select>
 				) : (
 					<input
+						id={`${formId}-model`}
 						type="text"
 						value={config?.model ?? def.defaultModel}
 						placeholder={def.defaultModel}
@@ -428,18 +427,7 @@ function ProviderForm({
 					/>
 				)}
 				{modelsLoading ? (
-					<span
-						style={{
-							display: "inline-flex",
-							alignItems: "center",
-							gap: 4,
-							marginTop: 4,
-							font: "500 10px var(--font-mono)",
-							color: "var(--muted)",
-							letterSpacing: "0.04em",
-							textTransform: "uppercase",
-						}}
-					>
+					<span className={styles.providerLoading} role="status">
 						<Loader2 size={10} className="animate-spin" />
 						{te("providerSettings.loadingModels")}
 					</span>
@@ -448,10 +436,12 @@ function ProviderForm({
 
 			{showBaseUrl ? (
 				<Field
+					id={`${formId}-url`}
 					label={te("providerSettings.baseUrlLabel")}
 					hint={te("providerSettings.baseUrlHint")}
 				>
 					<input
+						id={`${formId}-url`}
 						type="text"
 						value={config?.baseUrl ?? def.baseUrl ?? ""}
 						placeholder={def.baseUrl ?? "https://…"}
@@ -467,8 +457,9 @@ function ProviderForm({
 			) : null}
 
 			{def.supportsReasoningEffort ? (
-				<Field label={te("providerSettings.reasoningEffortLabel")}>
+				<Field id={`${formId}-reasoning`} label={te("providerSettings.reasoningEffortLabel")}>
 					<select
+						id={`${formId}-reasoning`}
 						value={config?.reasoningEffort ?? "none"}
 						onChange={(e) =>
 							setConfig({
@@ -487,47 +478,54 @@ function ProviderForm({
 				</Field>
 			) : null}
 
-			<Field
-				label={te("providerSettings.apiKeyLabel")}
-				hint={isConnected ? te("providerSettings.apiKeyHintStored") : undefined}
-			>
-				<input
-					type="password"
-					value={apiKey}
-					placeholder={isConnected ? "••••••" : "sk-…"}
-					onChange={(e) => setApiKey(e.target.value)}
-					disabled={busy}
-				/>
-			</Field>
-
-			<Field
-				label={te("providerSettings.projectEditsLabel")}
-				hint={te("providerSettings.projectEditsHint")}
-			>
-				<label
-					style={{
-						display: "flex",
-						alignItems: "center",
-						gap: 8,
-						font: "500 12px var(--font-body)",
-						color: "var(--fg-2)",
-						cursor: "pointer",
-					}}
+			{def.authKind === "local-login" ? (
+				<div className={styles.providerLoginNote}>
+					<ShieldCheck size={18} aria-hidden />
+					<div>
+						<strong>{te("providerSettings.pillLocalLogin")}</strong>
+						<p>{te("providerSettings.localLoginHint")}</p>
+					</div>
+				</div>
+			) : (
+				<Field
+					id={`${formId}-key`}
+					label={te("providerSettings.apiKeyLabel")}
+					hint={isConnected ? te("providerSettings.apiKeyHintStored") : undefined}
 				>
 					<input
-						type="checkbox"
-						checked={config?.allowAgentEdits !== false}
+						id={`${formId}-key`}
+						type="password"
+						value={apiKey}
+						placeholder={isConnected ? "••••••" : "sk-…"}
+						onChange={(e) => setApiKey(e.target.value)}
 						disabled={busy}
-						onChange={(e) =>
-							setConfig({
-								...(config ?? { provider: def.id, model: def.defaultModel }),
-								allowAgentEdits: e.target.checked,
-							})
-						}
 					/>
-					{te("providerSettings.allowAgentEdits")}
-				</label>
-			</Field>
+				</Field>
+			)}
+
+			<label className={styles.providerPermission}>
+				<span className={styles.providerPermissionCopy}>
+					<span id={`${formId}-edits-label`}>{te("providerSettings.allowAgentEdits")}</span>
+					<span id={`${formId}-edits-hint`} className={styles.providerHint}>
+						{te("providerSettings.projectEditsHint")}
+					</span>
+				</span>
+				<input
+					type="checkbox"
+					role="switch"
+					className={styles.providerSwitch}
+					aria-labelledby={`${formId}-edits-label`}
+					aria-describedby={`${formId}-edits-hint`}
+					checked={config?.allowAgentEdits !== false}
+					disabled={busy}
+					onChange={(e) =>
+						setConfig({
+							...(config ?? { provider: def.id, model: def.defaultModel }),
+							allowAgentEdits: e.target.checked,
+						})
+					}
+				/>
+			</label>
 
 			{error ? (
 				<p className={styles.errorRow}>
@@ -573,7 +571,7 @@ function ProviderForm({
 						type="button"
 						className={`${styles.btn} ${styles.btnPrimary}`}
 						onClick={onSave}
-						disabled={busy || !apiKey.trim() || !config}
+						disabled={busy || (def.authKind === "api-key" && !apiKey.trim()) || !config}
 					>
 						{busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
 						{apiKey.trim() ? te("providerSettings.saveAndUse") : te("providerSettings.save")}
@@ -585,34 +583,21 @@ function ProviderForm({
 }
 
 function Field({
+	id,
 	label,
 	hint,
 	children,
 }: {
+	id: string;
 	label: string;
 	hint?: string;
 	children: React.ReactNode;
 }) {
 	return (
 		<div className={styles.field}>
-			<label>
-				{label}
-				{hint ? (
-					<span
-						style={{
-							display: "block",
-							font: "500 10px/1.2 var(--font-mono)",
-							color: "var(--muted)",
-							letterSpacing: "0.04em",
-							textTransform: "uppercase",
-							marginTop: 2,
-						}}
-					>
-						{hint}
-					</span>
-				) : null}
-			</label>
+			<label htmlFor={id}>{label}</label>
 			{children}
+			{hint ? <p className={styles.providerHint}>{hint}</p> : null}
 		</div>
 	);
 }

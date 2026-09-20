@@ -376,6 +376,8 @@
 		"disconnected": "已断开 {{provider}}",
 		"pillConnected": "已连接",
 		"pillApiKey": "API 密钥",
+		"pillLocalLogin": "本地登录",
+		"localLoginHint": "通过官方 Copilot SDK 使用 GitHub CLI 登录。请先运行 gh auth login。用量计入 Copilot 套餐。在此断开连接不会退出 GitHub。",
 		"notConnected": "未连接",
 		"back": "返回",
 		"modelLabel": "模型",
