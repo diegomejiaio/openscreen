@@ -64,9 +64,11 @@ Copilot instead discovers the user's `gh auth login` through the official SDK.
 It requires an eligible Copilot plan and permitted model; usage counts toward
 that plan. There is no API-key input or app-owned OAuth registration in this
 personal integration. The SDK uses an isolated directory under app user data,
-not the user's Copilot CLI profile. Inherited automation-token variables are
-removed from the SDK environment. Standard Homebrew binary paths are included
-on macOS so Finder-launched builds can find `gh`.
+not the user's Copilot CLI profile. The SDK receives an allowlisted environment:
+OS paths and temporary directories, GitHub CLI configuration, locale, Linux
+keyring access, and proxy/CA settings. Unrelated provider keys, automation tokens,
+runtime overrides, and Node injection options are not inherited. Standard
+Homebrew binary paths are included on macOS so Finder-launched builds can find `gh`.
 
 Saving a Copilot selection checks authentication and model availability.
 The settings snapshot means the provider was selected, not that authentication
@@ -116,6 +118,10 @@ Three call sites use that factory, except for the Copilot agent's SDK branch:
 The Copilot agent reuses `buildTools`, including schema validation, edit-consent
 checks, cursor telemetry, and real tool-result events. Calls are serialized to
 avoid racing document updates. A failed turn returns the original document.
+For every provider, `runChat` separates previous history from the current user
+message so the agent receives the current request exactly once. The combined
+payload retains the 20-message window and any pinned compaction summary;
+repeated requests remain in the transcript rather than being deduplicated by text.
 SDK sessions allow only those named custom tools: builtins and MCP tools,
 config discovery, tool search, and infinite sessions are disabled. Text-only
 calls have no tools at all. Requests have a 120-second response timeout followed

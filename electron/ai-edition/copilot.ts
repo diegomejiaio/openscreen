@@ -9,8 +9,54 @@ import {
 import { app } from "electron";
 
 const TIMEOUT_MS = 120_000;
+const RUNTIME_ENV_KEYS = [
+	"PATH",
+	"HOME",
+	"USERPROFILE",
+	"HOMEDRIVE",
+	"HOMEPATH",
+	"APPDATA",
+	"LOCALAPPDATA",
+	"SystemRoot",
+	"WINDIR",
+	"COMSPEC",
+	"PATHEXT",
+	"TMPDIR",
+	"TMP",
+	"TEMP",
+	"XDG_CONFIG_HOME",
+	"XDG_CACHE_HOME",
+	"XDG_RUNTIME_DIR",
+	"DBUS_SESSION_BUS_ADDRESS",
+	"GH_CONFIG_DIR",
+	"GH_HOST",
+	"LANG",
+	"LC_ALL",
+	"LC_CTYPE",
+	"TZ",
+	"HTTP_PROXY",
+	"HTTPS_PROXY",
+	"ALL_PROXY",
+	"NO_PROXY",
+	"http_proxy",
+	"https_proxy",
+	"all_proxy",
+	"no_proxy",
+	"NODE_EXTRA_CA_CERTS",
+	"SSL_CERT_FILE",
+	"SSL_CERT_DIR",
+] as const;
 
 export function copilotClientOptions(directory: string) {
+	const env: Record<string, string> = {};
+	for (const key of RUNTIME_ENV_KEYS) {
+		const value = process.env[key];
+		if (value !== undefined) env[key] = value;
+	}
+	// Finder omits Homebrew's directories, where GitHub CLI is commonly installed.
+	if (process.platform === "darwin") {
+		env.PATH = [env.PATH, "/opt/homebrew/bin", "/usr/local/bin"].filter(Boolean).join(delimiter);
+	}
 	const platform = `${process.platform}-${process.arch}`;
 	const runtimePath = app.isPackaged
 		? join(
@@ -31,20 +77,7 @@ export function copilotClientOptions(directory: string) {
 		workingDirectory: directory,
 		useLoggedInUser: true,
 		logLevel: "error" as const,
-		env: {
-			...process.env,
-			// Finder omits Homebrew's directories, where GitHub CLI is commonly installed.
-			PATH:
-				process.platform === "darwin"
-					? [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin"]
-							.filter(Boolean)
-							.join(delimiter)
-					: process.env.PATH,
-			// A shell's automation token must not silently replace the user's login.
-			GH_TOKEN: undefined,
-			GITHUB_TOKEN: undefined,
-			COPILOT_GITHUB_TOKEN: undefined,
-		},
+		env,
 	};
 }
 

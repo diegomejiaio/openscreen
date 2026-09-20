@@ -373,10 +373,13 @@ export async function runChat(
 	// held. Compaction is now only ever what the user asked for by pressing the
 	// button. See chat-compaction.ts.
 
-	const history = modelHistory(session).map((m) => ({
-		role: m.role as "user" | "assistant" | "system",
-		content: m.content,
-	}));
+	// Keep the current turn in the 20-message window, but pass it separately to the agent.
+	const history = modelHistory(session)
+		.slice(0, -1)
+		.map((m) => ({
+			role: m.role as "user" | "assistant" | "system",
+			content: m.content,
+		}));
 
 	const appliedToolCalls: AiEditionToolCallSummary[] = [];
 

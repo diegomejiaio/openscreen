@@ -520,7 +520,7 @@ async function presentAboutDialog() {
 	const heading = `${PRODUCT_NAME} ${facts.version}`;
 	const choice = await showMessageBox({
 		type: "info",
-		title: mainT("common", "actions.about") || "About OpenScreen",
+		title: mainT("common", "actions.about") || `About ${PRODUCT_NAME}`,
 		message: heading,
 		detail,
 		buttons: [

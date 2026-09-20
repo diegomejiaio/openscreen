@@ -389,6 +389,7 @@ export function anthropicCachingMiddleware(chatModel: { getName?: () => string }
 export interface InvokeArgs {
 	document: AxcutDocument;
 	model: OpenScreenChatModelConfig;
+	/** Previous messages only; the current turn is supplied through `userMessage`. */
 	history: Array<{ role: "user" | "assistant" | "system"; content: string }>;
 	userMessage: string;
 	sink: OpenScreenAgentSink;

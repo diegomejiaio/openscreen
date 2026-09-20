@@ -2,6 +2,11 @@
 
 OpenScreen builds its renderer, Electron main process, preload bridge, native helpers, and installers from the root npm scripts, `vite.config.ts`, `electron-builder.json5`, and platform-native projects under `electron/native/`. Nix provides a separate Linux package and development shell.
 
+The personal fork uses `Openscreen Copilot` for its packaged name and native
+About, menu, dialog, tray, and window titles. Existing style presets remain in
+`Documents/OpenScreen Presets`; changing the display name does not relocate
+user data or change the original copyright attribution.
+
 ## Commands
 
 | Command | What it does |
