@@ -609,6 +609,31 @@ describe("useTimeline.applyClipEdit (Edit-clip modal)", () => {
 		});
 		expect(useProjectStore.getState().document?.timeline.clips[0].cropRegion).toBeUndefined();
 	});
+
+	it("stores the clip's volume and mute, and 0 dB / unmuted as absent fields", async () => {
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.applyClipEdit("clip_a", 0, 6, undefined, { gainDb: -12, muted: true });
+		});
+		expect(useProjectStore.getState().document?.timeline.clips[0]).toMatchObject({
+			audioGainDb: -12,
+			audioMuted: true,
+		});
+		// `undefined` leaves the audio alone.
+		await act(async () => {
+			await result.current.applyClipEdit("clip_a", 0, 5);
+		});
+		expect(useProjectStore.getState().document?.timeline.clips[0]).toMatchObject({
+			audioGainDb: -12,
+			audioMuted: true,
+		});
+		await act(async () => {
+			await result.current.applyClipEdit("clip_a", 0, 5, undefined, { gainDb: 0, muted: false });
+		});
+		const clip = useProjectStore.getState().document?.timeline.clips[0];
+		expect(clip).not.toHaveProperty("audioGainDb");
+		expect(clip).not.toHaveProperty("audioMuted");
+	});
 });
 
 // #353. The toolbar button and the `C` shortcut both used to write a region on a

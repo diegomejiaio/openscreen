@@ -27,8 +27,8 @@ use std::ffi::CString;
 use std::ptr;
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, finish_audio, mix_external_tracks,
-    AacEncoder, PlanarPcm,
+    apply_clip_gains, assemble_concatenated_pcm, build_audio_concat_plan, finish_audio,
+    mix_external_tracks, AacEncoder, PlanarPcm,
 };
 use crate::audio_jobs::{decode_and_stretch_clip_audio, ClipAudioJobs};
 use crate::config::Cfg;
@@ -54,6 +54,8 @@ pub struct ClipSource {
     pub source_end_sec: f64,
     pub webcam_offset_sec: f64,
     pub has_audio: bool,
+    /// Per-clip volume (dB) from the Edit clip dialog; 0 leaves the clip's audio as recorded.
+    pub gain_db: f32,
 }
 
 /// Codec cible. Memes variantes que `pipeline_macos::ExportCodec`.
@@ -1186,12 +1188,14 @@ pub fn run_composited_multi(
         // avant d'en collecter un, donc il en reste au plus quatre à attendre ici — bornés
         // par le plus lent, pas par leur somme ; les autres se sont recouverts avec
         // l'encodage vidéo.
-        let clip_pcm: Vec<Option<PlanarPcm>> = audio_jobs
+        let mut clip_pcm: Vec<Option<PlanarPcm>> = audio_jobs
             .into_results()
             .into_iter()
             .map(|slot| slot.flatten())
             .collect();
 
+        let clip_gains: Vec<f32> = clips.iter().map(|c| c.gain_db).collect();
+        apply_clip_gains(&mut clip_pcm, &clip_gains);
         let declared_audio: Vec<bool> = clips.iter().map(|c| c.has_audio).collect();
         let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
         let octx = mux.octx;

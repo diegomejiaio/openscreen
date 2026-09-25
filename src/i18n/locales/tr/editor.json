@@ -318,7 +318,9 @@
 		"reset": "Sıfırla",
 		"apply": "Uygula",
 		"pickClipTitle": "Düzenlenecek klibi seçin",
-		"clipLabel": "Klip {{index}}"
+		"clipLabel": "Klip {{index}}",
+		"volume": "Ses düzeyi",
+		"mute": "Sessiz"
 	},
 	"insertSourceDialog": {
 		"title": "Kaynağı ekle",

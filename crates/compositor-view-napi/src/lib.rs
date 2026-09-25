@@ -364,6 +364,8 @@ pub struct ClipInput {
     pub webcam_offset_sec: f64,
     /// `false` évite une ouverture ffmpeg vouée à échouer et réserve du silence à ce clip.
     pub has_audio: bool,
+    /// Per-clip volume (dB) from the Edit clip dialog. Absent = 0 dB (as recorded).
+    pub gain_db: Option<f64>,
 }
 
 /// The export's pixel size. The SHAPE belongs to the scene: `scene.output` is what the live
@@ -566,6 +568,7 @@ pub fn export_multi(
             source_end_sec: c.source_end_sec,
             webcam_offset_sec: c.webcam_offset_sec,
             has_audio: c.has_audio,
+            gain_db: c.gain_db.unwrap_or(0.0) as f32,
         })
         .collect();
     Ok(AsyncTask::new(ExportMultiTask {
@@ -727,6 +730,7 @@ pub fn export_gif(
             source_end_sec: c.source_end_sec,
             webcam_offset_sec: c.webcam_offset_sec,
             has_audio: c.has_audio,
+            gain_db: c.gain_db.unwrap_or(0.0) as f32,
         })
         .collect();
     let gif_params = params

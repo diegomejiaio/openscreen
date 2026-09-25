@@ -3,8 +3,8 @@
 //! tout le run, deux lectures seulement. Rien dans la boucle ne peut fausser le fps.
 
 use crate::audio::{
-    assemble_concatenated_pcm, build_audio_concat_plan, finish_audio, mix_external_tracks,
-    AacEncoder, PlanarPcm,
+    apply_clip_gains, assemble_concatenated_pcm, build_audio_concat_plan, finish_audio,
+    mix_external_tracks, AacEncoder, PlanarPcm,
 };
 use crate::audio_jobs::{decode_and_stretch_clip_audio, ClipAudioJobs};
 use crate::compositor::{Compositor, OUT_H, OUT_W};
@@ -1265,6 +1265,8 @@ pub struct ClipSource {
     pub source_end_sec: f64,
     pub webcam_offset_sec: f64,
     pub has_audio: bool,
+    /// Per-clip volume (dB) from the Edit clip dialog; 0 leaves the clip's audio as recorded.
+    pub gain_db: f32,
 }
 
 /// Export **multiclip** : rend la timeline (clips ordonnés, avec trims) en un seul MP4.
@@ -1765,12 +1767,14 @@ unsafe fn run_multi_inner(
     // Récupération des jobs audio lancés pendant le parcours. `spawn` en admet quatre avant
     // d'en collecter un, donc il en reste au plus quatre à attendre ici — bornés par le plus
     // lent, pas par leur somme ; tous les autres se sont recouverts avec l'encodage.
-    let clip_pcm: Vec<Option<PlanarPcm>> = audio_jobs
+    let mut clip_pcm: Vec<Option<PlanarPcm>> = audio_jobs
         .into_results()
         .into_iter()
         .map(|slot| slot.flatten())
         .collect();
 
+    let clip_gains: Vec<f32> = clips.iter().map(|clip| clip.gain_db).collect();
+    apply_clip_gains(&mut clip_pcm, &clip_gains);
     let declared_audio: Vec<bool> = clips.iter().map(|clip| clip.has_audio).collect();
     let audio_plan = build_audio_concat_plan(
         &clip_frame_counts,

@@ -143,3 +143,42 @@ describe("EditClipModal trim duration readout (#558)", () => {
 		expect(screen.getByTestId("edit-clip-final-duration")).toHaveTextContent("1:20.0");
 	});
 });
+
+describe("EditClipModal clip audio", () => {
+	function renderWithApply(clip: AxcutClip = CLIP) {
+		const onApply = vi.fn();
+		renderWithI18n(
+			<EditClipModal
+				open
+				onClose={vi.fn()}
+				clip={clip}
+				assetMeta={ASSET}
+				videoSources={[]}
+				onApply={onApply}
+			/>,
+		);
+		return onApply;
+	}
+
+	it("applies a volume change and a mute", () => {
+		const onApply = renderWithApply();
+		expect(screen.getByTestId("edit-clip-volume-value")).toHaveTextContent("0.0 dB");
+		fireEvent.change(screen.getByTestId("edit-clip-volume"), { target: { value: "-9" } });
+		expect(screen.getByTestId("edit-clip-volume-value")).toHaveTextContent("-9.0 dB");
+		fireEvent.click(screen.getByTestId("edit-clip-mute"));
+		expect(screen.getByTestId("edit-clip-mute")).toHaveAttribute("aria-pressed", "true");
+		fireEvent.click(screen.getByRole("button", { name: /Apply/ }));
+		expect(onApply).toHaveBeenCalledWith(20, 105, undefined, { gainDb: -9, muted: true });
+	});
+
+	it("starts from the clip's stored audio and passes no audio edit when untouched", () => {
+		const onApply = renderWithApply({ ...CLIP, audioGainDb: 4.5, audioMuted: true });
+		expect(screen.getByTestId("edit-clip-volume-value")).toHaveTextContent("+4.5 dB");
+		expect(screen.getByTestId("edit-clip-mute")).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByRole("button", { name: /Apply/ })).toBeDisabled();
+		fireEvent.click(screen.getByTestId("edit-clip-mute"));
+		fireEvent.click(screen.getByTestId("edit-clip-mute"));
+		expect(screen.getByRole("button", { name: /Apply/ })).toBeDisabled();
+		expect(onApply).not.toHaveBeenCalled();
+	});
+});

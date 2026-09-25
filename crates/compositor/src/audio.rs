@@ -1338,6 +1338,26 @@ pub fn build_audio_concat_plan(
     AudioConcatPlan { total_samples: cursor, segments }
 }
 
+/// Scale each clip's own audio by its per-clip gain (the Edit clip dialog's volume),
+/// using the same `10^(dB/20)` law and -60..+12 dB range as imported tracks. Runs
+/// before assembly so the boundary crossfades see the already-levelled signal.
+pub fn apply_clip_gains(clip_pcm: &mut [Option<PlanarPcm>], gains_db: &[f32]) {
+    for (pcm, &gain_db) in clip_pcm.iter_mut().zip(gains_db) {
+        if gain_db == 0.0 {
+            continue;
+        }
+        let Some(pcm) = pcm else {
+            continue;
+        };
+        let gain = 10.0f32.powf(gain_db.clamp(-60.0, 12.0) / 20.0);
+        for channel in pcm.iter_mut() {
+            for sample in channel.iter_mut() {
+                *sample *= gain;
+            }
+        }
+    }
+}
+
 pub fn assemble_concatenated_pcm(
     clip_pcm: &[Option<PlanarPcm>],
     plan: &AudioConcatPlan,
@@ -1671,6 +1691,34 @@ mod hold_tests {
         // L'impulsion reste au premier échantillon, pas répartie sur quatre secondes.
         assert!((out[0][0] - 1.0).abs() < 1e-6);
         assert_eq!(out[0][1], 0.0);
+    }
+}
+
+#[cfg(test)]
+mod clip_gain_tests {
+    use super::*;
+
+    #[test]
+    fn scales_each_clip_by_its_own_gain() {
+        let mut pcm = vec![
+            Some(vec![vec![0.5f32; 4]; AUDIO_OUTPUT_CHANNELS]),
+            Some(vec![vec![0.5f32; 4]; AUDIO_OUTPUT_CHANNELS]),
+            None,
+        ];
+        apply_clip_gains(&mut pcm, &[-6.0206, 0.0, 6.0]);
+        let first = pcm[0].as_ref().unwrap();
+        assert!((first[0][0] - 0.25).abs() < 1e-4);
+        assert!((first[1][3] - 0.25).abs() < 1e-4);
+        assert_eq!(pcm[1].as_ref().unwrap()[0][0], 0.5, "0 dB leaves the clip untouched");
+        assert!(pcm[2].is_none());
+    }
+
+    #[test]
+    fn clamps_to_the_inspector_range() {
+        let mut pcm = vec![Some(vec![vec![1.0f32; 1]; AUDIO_OUTPUT_CHANNELS])];
+        apply_clip_gains(&mut pcm, &[99.0]);
+        let expected = 10.0f32.powf(12.0 / 20.0);
+        assert!((pcm[0].as_ref().unwrap()[0][0] - expected).abs() < 1e-4);
     }
 }
 

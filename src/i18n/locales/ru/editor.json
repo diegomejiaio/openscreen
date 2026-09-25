@@ -318,7 +318,9 @@
 		"reset": "Сбросить",
 		"apply": "Применить",
 		"pickClipTitle": "Выберите клип для редактирования",
-		"clipLabel": "Клип {{index}}"
+		"clipLabel": "Клип {{index}}",
+		"volume": "Громкость",
+		"mute": "Без звука"
 	},
 	"insertSourceDialog": {
 		"title": "Вставить источник",

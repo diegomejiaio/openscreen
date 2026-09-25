@@ -318,7 +318,9 @@
 		"reset": "Obnovit",
 		"apply": "Použít",
 		"pickClipTitle": "Vyberte klip k úpravě",
-		"clipLabel": "Klip {{index}}"
+		"clipLabel": "Klip {{index}}",
+		"volume": "Hlasitost",
+		"mute": "Ztlumit"
 	},
 	"insertSourceDialog": {
 		"title": "Vložit zdroj",

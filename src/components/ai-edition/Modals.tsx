@@ -1,4 +1,15 @@
-import { AlertTriangle, Crop, FolderOpen, FolderPlus, Pencil, Plus, Trash2, X } from "lucide-react";
+import {
+	AlertTriangle,
+	Crop,
+	FolderOpen,
+	FolderPlus,
+	Pencil,
+	Plus,
+	Trash2,
+	Volume2,
+	VolumeX,
+	X,
+} from "lucide-react";
 import {
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
@@ -9,6 +20,11 @@ import {
 import type { CropRegion } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
+import {
+	CLIP_AUDIO_GAIN_MAX_DB,
+	CLIP_AUDIO_GAIN_MIN_DB,
+	clipAudioGainDb,
+} from "@/lib/ai-edition/timeline/clipAudio";
 import { formatSeconds } from "@/lib/ai-edition/timeline/format";
 import {
 	cropDraftFromRegion,
@@ -663,6 +679,11 @@ export interface AssetMeta {
 
 const IDENTITY_CROP: CropRegion = { x: 0, y: 0, width: 1, height: 1 };
 
+export interface ClipAudioEdit {
+	gainDb: number;
+	muted: boolean;
+}
+
 interface EditClipModalProps extends BaseModalProps {
 	clip: AxcutClip | null;
 	assetMeta: AssetMeta | null;
@@ -670,7 +691,13 @@ interface EditClipModalProps extends BaseModalProps {
 	/** `cropRegion` is `undefined` when the crop section wasn't touched (Reset
 	 * back to the clip's stored value) — the caller can skip the write in that
 	 * case — and `null` when the user explicitly reset it to "no crop". */
-	onApply: (sourceStartSec: number, sourceEndSec: number, cropRegion?: CropRegion | null) => void;
+	/** `audio` is `undefined` when the clip's volume/mute were left as they were. */
+	onApply: (
+		sourceStartSec: number,
+		sourceEndSec: number,
+		cropRegion?: CropRegion | null,
+		audio?: ClipAudioEdit,
+	) => void;
 }
 
 // Mirrors Axcut's ClipEditDialog: an embedded preview of just this clip plus
@@ -695,6 +722,8 @@ export function EditClipModal({
 	const [draftStart, setDraftStart] = useState(0);
 	const [draftEnd, setDraftEnd] = useState(0);
 	const [activeEdge, setActiveEdge] = useState<"start" | "end" | null>(null);
+	const [draftGainDb, setDraftGainDb] = useState(0);
+	const [draftMuted, setDraftMuted] = useState(false);
 
 	// Crop draft — percentages (0-100), same shape/units CropModal used to
 	// keep locally before it was folded in here.
@@ -720,6 +749,8 @@ export function EditClipModal({
 		setDraftStart(clip.sourceStartSec);
 		setDraftEnd(clip.sourceEndSec ?? clip.sourceStartSec);
 		setActiveEdge(null);
+		setDraftGainDb(clipAudioGainDb(clip));
+		setDraftMuted(Boolean(clip.audioMuted));
 		const region = clip.cropRegion ?? IDENTITY_CROP;
 		const pct = cropDraftToPct(cropDraftFromRegion(region));
 		setCropXPct(pct.x);
@@ -791,7 +822,9 @@ export function EditClipModal({
 	const hasTrimChanges =
 		Math.abs(draftStart - clip.sourceStartSec) > 0.001 ||
 		Math.abs(draftEnd - (clip.sourceEndSec ?? 0)) > 0.001;
-	const hasChanges = hasTrimChanges || cropTouched;
+	const audioTouched =
+		draftGainDb !== clipAudioGainDb(clip) || draftMuted !== Boolean(clip.audioMuted);
+	const hasChanges = hasTrimChanges || cropTouched || audioTouched;
 	const clipSources = videoSources.filter((s) => s.id === clip.assetId);
 	const cropPreviewSource = clipSources[0] ?? null;
 
@@ -998,6 +1031,8 @@ export function EditClipModal({
 	const handleReset = () => {
 		setDraftStart(clip.sourceStartSec);
 		setDraftEnd(clip.sourceEndSec ?? clip.sourceStartSec);
+		setDraftGainDb(clipAudioGainDb(clip));
+		setDraftMuted(Boolean(clip.audioMuted));
 		const region = clip.cropRegion ?? IDENTITY_CROP;
 		const pct = cropDraftToPct(cropDraftFromRegion(region));
 		setCropXPct(pct.x);
@@ -1016,7 +1051,12 @@ export function EditClipModal({
 		};
 		const isIdentity =
 			nextCrop.x === 0 && nextCrop.y === 0 && nextCrop.width === 1 && nextCrop.height === 1;
-		onApply(draftStart, draftEnd, cropTouched ? (isIdentity ? null : nextCrop) : undefined);
+		onApply(
+			draftStart,
+			draftEnd,
+			cropTouched ? (isIdentity ? null : nextCrop) : undefined,
+			audioTouched ? { gainDb: draftGainDb, muted: draftMuted } : undefined,
+		);
 		onClose();
 	};
 
@@ -1314,6 +1354,67 @@ export function EditClipModal({
 						{displayPct(cropWPct)}% × {displayPct(cropHPct)}%
 					</span>
 				</div>
+			</div>
+
+			<div
+				style={{
+					display: "flex",
+					alignItems: "center",
+					gap: 12,
+					paddingTop: 10,
+					marginTop: 10,
+					flexShrink: 0,
+					borderTop: "1px solid var(--border-soft)",
+				}}
+			>
+				<label
+					htmlFor="edit-clip-volume"
+					style={{
+						font: "600 10px/1 var(--font-mono)",
+						letterSpacing: "0.04em",
+						textTransform: "uppercase",
+						color: "var(--muted)",
+						whiteSpace: "nowrap",
+					}}
+				>
+					{t("editClipDialog.volume")}
+				</label>
+				<input
+					id="edit-clip-volume"
+					data-testid="edit-clip-volume"
+					type="range"
+					min={CLIP_AUDIO_GAIN_MIN_DB}
+					max={CLIP_AUDIO_GAIN_MAX_DB}
+					step={0.5}
+					value={draftGainDb}
+					disabled={draftMuted}
+					onChange={(e) => setDraftGainDb(Number(e.target.value))}
+					style={{ flex: 1, accentColor: "var(--accent)" }}
+				/>
+				<span
+					data-testid="edit-clip-volume-value"
+					style={{
+						font: "500 11px/1 var(--font-mono)",
+						color: "var(--muted)",
+						minWidth: 56,
+						textAlign: "right",
+						whiteSpace: "nowrap",
+					}}
+				>
+					{draftGainDb > 0 ? "+" : ""}
+					{draftGainDb.toFixed(1)} dB
+				</span>
+				<button
+					type="button"
+					data-testid="edit-clip-mute"
+					className={`${styles.btn} ${styles.btnSecondary}`}
+					aria-pressed={draftMuted}
+					title={t("editClipDialog.mute")}
+					onClick={() => setDraftMuted((muted) => !muted)}
+				>
+					{draftMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+					{t("editClipDialog.mute")}
+				</button>
 			</div>
 
 			<div

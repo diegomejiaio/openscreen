@@ -318,7 +318,9 @@
 		"reset": "重設",
 		"apply": "套用",
 		"pickClipTitle": "選擇要編輯的片段",
-		"clipLabel": "片段 {{index}}"
+		"clipLabel": "片段 {{index}}",
+		"volume": "音量",
+		"mute": "靜音"
 	},
 	"insertSourceDialog": {
 		"title": "插入來源",

@@ -318,7 +318,9 @@
 		"reset": "Đặt lại",
 		"apply": "Áp dụng",
 		"pickClipTitle": "Chọn clip để chỉnh sửa",
-		"clipLabel": "Clip {{index}}"
+		"clipLabel": "Clip {{index}}",
+		"volume": "Âm lượng",
+		"mute": "Tắt tiếng"
 	},
 	"insertSourceDialog": {
 		"title": "Chèn nguồn",
