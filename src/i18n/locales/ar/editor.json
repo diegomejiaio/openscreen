@@ -318,7 +318,9 @@
 		"reset": "إعادة التعيين",
 		"apply": "تطبيق",
 		"pickClipTitle": "اختر مقطعًا لتعديله",
-		"clipLabel": "المقطع {{index}}"
+		"clipLabel": "المقطع {{index}}",
+		"volume": "مستوى الصوت",
+		"mute": "كتم"
 	},
 	"insertSourceDialog": {
 		"title": "إدراج المصدر",

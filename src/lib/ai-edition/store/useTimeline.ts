@@ -31,9 +31,10 @@ import {
 	setClipSourceRange,
 	withClipsChanged,
 } from "../document/timeline";
-import type { AxcutAudioTrack, AxcutClipCropRegion, AxcutDocument } from "../schema";
+import type { AxcutAudioTrack, AxcutClip, AxcutClipCropRegion, AxcutDocument } from "../schema";
 import { appendAutoZoomSuggestions } from "../timeline/apply-auto-zooms";
 import { hasAnyClipWithCamera } from "../timeline/camera";
+import { withClipAudio } from "../timeline/clipAudio";
 import { probeAudioDuration, probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
 	anchorRegionsWithDerivedMs,
@@ -1067,6 +1068,9 @@ export function useTimeline() {
 	// section was never touched (leave the stored value alone); `null` clears it back to
 	// "no crop" (full frame) rather than storing the identity region explicitly.
 	//
+	// `audio` follows the same rule: `undefined` leaves the clip's volume/mute alone, and
+	// 0 dB / unmuted is stored as absent fields so untouched clips stay lean.
+	//
 	// The document is read from the store, not off the render closure, so this composes
 	// with `useSequentialTimelineOps`: queued behind another timeline write, it still sees
 	// what that write committed. Same reason as `setTrimEntries` / `insertClipAt`.
@@ -1076,20 +1080,29 @@ export function useTimeline() {
 			sourceStartSec: number,
 			sourceEndSec: number,
 			cropRegion?: AxcutClipCropRegion | null,
+			audio?: { gainDb: number; muted: boolean },
 		) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			const ranged = setClipSourceRange(doc, clipId, sourceStartSec, sourceEndSec);
 			const next: AxcutDocument =
-				cropRegion === undefined
+				cropRegion === undefined && audio === undefined
 					? ranged
 					: {
 							...ranged,
 							timeline: {
 								...ranged.timeline,
-								clips: ranged.timeline.clips.map((c) =>
-									c.id === clipId ? { ...c, cropRegion: cropRegion ?? undefined } : c,
-								),
+								clips: ranged.timeline.clips.map((c) => {
+									if (c.id !== clipId) return c;
+									let edited: AxcutClip = c;
+									if (cropRegion !== undefined) {
+										edited = { ...edited, cropRegion: cropRegion ?? undefined };
+									}
+									if (audio !== undefined) {
+										edited = withClipAudio(edited, audio);
+									}
+									return edited;
+								}),
 							},
 						};
 			await saveDocument(next, { history: true });

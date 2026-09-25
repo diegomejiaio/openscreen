@@ -318,7 +318,9 @@
 		"reset": "재설정",
 		"apply": "적용",
 		"pickClipTitle": "편집할 클립 선택",
-		"clipLabel": "클립 {{index}}"
+		"clipLabel": "클립 {{index}}",
+		"volume": "볼륨",
+		"mute": "음소거"
 	},
 	"insertSourceDialog": {
 		"title": "소스 삽입",

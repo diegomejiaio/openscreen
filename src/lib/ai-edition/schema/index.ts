@@ -220,6 +220,10 @@ export const clipSchema = z
 		// that as the identity region {x:0,y:0,width:1,height:1} rather than
 		// storing the identity explicitly, so untouched clips stay lean.
 		cropRegion: clipCropRegionSchema.optional(),
+		// The clip's own recorded audio, same range as audio tracks. Absent means
+		// 0 dB / not muted, so untouched clips stay lean.
+		audioGainDb: z.number().min(-60).max(12).optional(),
+		audioMuted: z.boolean().optional(),
 	})
 	.refine((data) => data.timelineEndSec >= data.timelineStartSec, {
 		message: "timelineEndSec must be greater than or equal to timelineStartSec",

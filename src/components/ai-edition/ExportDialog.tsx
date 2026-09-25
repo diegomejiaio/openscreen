@@ -22,6 +22,7 @@ import {
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
+import { clipAudioExportFields } from "@/lib/ai-edition/timeline/clipAudio";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import {
 	type ExportFormat,
@@ -103,7 +104,7 @@ function buildNativeClipList(document: AxcutDocument): CompositorClipInput[] {
 				sourceStartSec: clip.sourceStartSec,
 				sourceEndSec,
 				webcamOffsetSec: camera.offsetSec,
-				hasAudio: true,
+				...clipAudioExportFields(clip),
 			},
 		];
 	});

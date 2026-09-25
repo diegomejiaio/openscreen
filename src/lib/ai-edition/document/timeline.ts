@@ -14,6 +14,7 @@ import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "
  */
 export type PlaybackSegment = AxcutClip;
 
+import { sameClipAudio } from "../timeline/clipAudio";
 import { type Interval, subtractInterval } from "../timeline/intervals";
 import { keptRawSpans } from "../timeline/programme-time";
 import {
@@ -1178,15 +1179,16 @@ function joinContiguous(clips: AxcutClip[]): {
 	return { clips: out, absorbed };
 }
 
-/** Same media, media timecodes that meet, same framing. Crop is the only property a clip
- *  carries that two otherwise-identical neighbours could legitimately disagree on, so it is
- *  the whole of the guard. */
+/** Same media, media timecodes that meet, same framing and audio level. Crop and the
+ *  clip's own volume/mute are the properties two otherwise-identical neighbours could
+ *  legitimately disagree on, so they are the whole of the guard. */
 function joinable(left: AxcutClip, right: AxcutClip): boolean {
 	return (
 		left.assetId === right.assetId &&
 		left.sourceEndSec !== undefined &&
 		Math.abs(left.sourceEndSec - right.sourceStartSec) < 1e-6 &&
-		JSON.stringify(left.cropRegion ?? null) === JSON.stringify(right.cropRegion ?? null)
+		JSON.stringify(left.cropRegion ?? null) === JSON.stringify(right.cropRegion ?? null) &&
+		sameClipAudio(left, right)
 	);
 }
 

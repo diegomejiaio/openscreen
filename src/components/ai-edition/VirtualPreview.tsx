@@ -21,6 +21,7 @@ import type {
 } from "@/lib/ai-edition/schema";
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import { clipAudioScalar } from "@/lib/ai-edition/timeline/clipAudio";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
@@ -187,6 +188,16 @@ export function applyPreviewAudioSettings(
 	graph.gain.gain.value = outputGain;
 }
 
+/** The playing clip's own audio level. `activeClipId` can name a trim segment
+ *  (`<clip>_segN`) of a clip, which carries the same audio fields. */
+function clipAudioScalarFor(clips: AxcutClip[], activeClipId: string | null): number {
+	if (!activeClipId) return 1;
+	const clip =
+		clips.find((candidate) => candidate.id === activeClipId) ??
+		clips.find((candidate) => candidate.id === activeClipId.replace(/_seg\d+$/, ""));
+	return clip ? clipAudioScalar(clip) : 1;
+}
+
 /** First clip (by timeline order) starting strictly after `afterTimelineStartSec` —
  *  independent of the `clips` array's own order, which is never guaranteed to match
  *  timeline order (a clip can be inserted/reordered at any array index; only
@@ -309,6 +320,10 @@ export function VirtualPreview({
 	// same reason the primary/supplemental sum through a gain node). The graph effect owns
 	// their lifecycle; the map is cleared and rebuilt whenever the routing is torn down.
 	const audioTrackGainNodesRef = useRef<Map<string, GainNode>>(new Map());
+	// The active clip's own volume/mute (Edit clip dialog) sits between the recording's
+	// elements and the output gain — the same order the export applies them in
+	// (apply_clip_gains before finish_audio). The rAF sets it from the playing clip.
+	const clipAudioGainNodeRef = useRef<GainNode | null>(null);
 	const audioGraphRef = useRef<PreviewAudioGraph | null>(null);
 	const videoFrameRef = useRef<HTMLDivElement | null>(null);
 
@@ -419,6 +434,9 @@ export function VirtualPreview({
 		}
 
 		const connectedSources: MediaElementAudioSourceNode[] = [];
+		const clipGain = graph.context.createGain();
+		clipGain.connect(graph.gain);
+		clipAudioGainNodeRef.current = clipGain;
 		for (const element of elements) {
 			try {
 				let source = audioSourceNodesRef.current.get(element);
@@ -427,7 +445,7 @@ export function VirtualPreview({
 					audioSourceNodesRef.current.set(element, source);
 				}
 				source.disconnect();
-				source.connect(graph.gain);
+				source.connect(clipGain);
 				connectedSources.push(source);
 			} catch {
 				// Routing THIS element failed; leave the others alone. Once
@@ -466,6 +484,8 @@ export function VirtualPreview({
 		applyPreviewAudioSettings(graph, elements, audioGainDbRef.current);
 		return () => {
 			audioGraphRef.current = null;
+			clipAudioGainNodeRef.current = null;
+			clipGain.disconnect();
 			for (const source of connectedSources) source.disconnect();
 			for (const trackGain of trackGainNodes) trackGain.disconnect();
 			audioTrackGainNodesRef.current = new Map();
@@ -639,8 +659,19 @@ export function VirtualPreview({
 			if (!v || !Number.isFinite(v.currentTime)) {
 				return;
 			}
+			const clipScalar = clipAudioScalarFor(clipsRef.current, activeClipIdRef.current);
+			const clipGainNode = clipAudioGainNodeRef.current;
+			if (clipGainNode) {
+				if (clipGainNode.gain.value !== clipScalar) clipGainNode.gain.value = clipScalar;
+			}
 			for (const audio of [primaryAudioRef.current, supplementalAudioRef.current]) {
 				if (!audio) continue;
+				// With the graph up the gain nodes carry the level; without it `volume` carries
+				// output × clip level, capped at 0 dB.
+				const volume = clipGainNode
+					? 1
+					: Math.min(1, audioGainScalar(audioGainDbRef.current) * clipScalar);
+				if (audio.volume !== volume) audio.volume = volume;
 				const target = resolveAudioTrackPlayback(v.currentTime, audio.duration);
 				if (audio.playbackRate !== v.playbackRate) audio.playbackRate = v.playbackRate;
 				if (Math.abs(audio.currentTime - target.targetTimeSec) > 0.025) {

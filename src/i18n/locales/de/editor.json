@@ -318,7 +318,9 @@
 		"reset": "Zurücksetzen",
 		"apply": "Anwenden",
 		"pickClipTitle": "Wähle einen Clip zum Bearbeiten",
-		"clipLabel": "Clip {{index}}"
+		"clipLabel": "Clip {{index}}",
+		"volume": "Lautstärke",
+		"mute": "Stumm"
 	},
 	"insertSourceDialog": {
 		"title": "Quelle einfügen",

@@ -318,7 +318,9 @@
 		"reset": "リセット",
 		"apply": "適用",
 		"pickClipTitle": "編集するクリップを選択",
-		"clipLabel": "クリップ {{index}}"
+		"clipLabel": "クリップ {{index}}",
+		"volume": "音量",
+		"mute": "ミュート"
 	},
 	"insertSourceDialog": {
 		"title": "ソースを挿入",

@@ -172,6 +172,8 @@ export interface CompositorClipInput {
 	 *  convention). Populated by `buildSceneDescription` and `buildNativeClipList`;
 	 *  see the comment on the producer side for the exact rule. */
 	hasAudio: boolean;
+	/** The clip's own audio volume in dB (Edit clip dialog). Absent = 0 dB. */
+	gainDb?: number;
 }
 
 /** Bilan d'un export natif (mesure enveloppante §10 : frames, durée, fps). */

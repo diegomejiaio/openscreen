@@ -318,7 +318,9 @@
 		"reset": "Réinitialiser",
 		"apply": "Appliquer",
 		"pickClipTitle": "Choisissez un clip à modifier",
-		"clipLabel": "Clip {{index}}"
+		"clipLabel": "Clip {{index}}",
+		"volume": "Volume",
+		"mute": "Muet"
 	},
 	"insertSourceDialog": {
 		"title": "Insérer la source",

@@ -516,6 +516,34 @@ describe("buildSceneDescription.clips", () => {
 		expect(clips).toHaveLength(2);
 		expect(clips.every((c) => c.hasAudio === true)).toBe(true);
 	});
+
+	it("carries each clip's own volume and exports a muted clip as silence", () => {
+		const asset = makeAsset({ id: "a", originalPath: "/screen.mp4" });
+		const loud = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 4,
+			timelineStartSec: 0,
+			timelineEndSec: 4,
+			audioGainDb: 6,
+		});
+		const muted = makeClip({
+			id: "c2",
+			assetId: "a",
+			sourceStartSec: 4,
+			sourceEndSec: 8,
+			timelineStartSec: 4,
+			timelineEndSec: 8,
+			audioMuted: true,
+		});
+		const doc = makeDoc({ assets: [asset], clips: [loud, muted] });
+		const { clips } = buildSceneDescription(doc);
+		expect(clips.map((c) => [c.hasAudio, c.gainDb])).toEqual([
+			[true, 6],
+			[false, 0],
+		]);
+	});
 });
 
 // --- zoomRegions -----------------------------------------------------------

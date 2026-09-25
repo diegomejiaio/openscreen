@@ -24,6 +24,7 @@ import { applyProbedDuration } from "@/lib/ai-edition/document/timeline";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
+import { clipAudioExportFields } from "@/lib/ai-edition/timeline/clipAudio";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { DEFAULT_ZOOM_DEPTH, ZOOM_DEPTH_SCALES } from "@/lib/ai-edition/timeline/zoom-scale";
 import { buildAutoZoomSuggestions } from "@/lib/ai-edition/timeline/zoom-suggestions";
@@ -94,7 +95,7 @@ function buildNativeClipList(axcutDocument: AxcutDocument): CompositorClipInput[
 				sourceStartSec: clip.sourceStartSec,
 				sourceEndSec,
 				webcamOffsetSec: camera.offsetSec,
-				hasAudio: true,
+				...clipAudioExportFields(clip),
 			},
 		];
 	});
