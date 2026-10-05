@@ -2,7 +2,13 @@
 // preview, the native export and the CLI export all read the same two fields the same way.
 
 import type { AxcutClip } from "../schema";
-import { audioGainScalar } from "../store/editorSettings";
+
+// Same as `audioGainScalar` in the editor settings store, kept here on purpose: the
+// document operations import this module from the Electron main process, which has no
+// `@/` alias, and the store pulls `@/components/video-editor/types` into that build.
+function decibelsToScalar(gainDb: number): number {
+	return 10 ** (gainDb / 20);
+}
 
 export const CLIP_AUDIO_GAIN_MIN_DB = -60;
 export const CLIP_AUDIO_GAIN_MAX_DB = 12;
@@ -16,7 +22,7 @@ export function clipAudioGainDb(clip: ClipAudioFields): number {
 
 /** Linear multiplier for the preview: 0 when muted. */
 export function clipAudioScalar(clip: ClipAudioFields): number {
-	return clip.audioMuted ? 0 : audioGainScalar(clipAudioGainDb(clip));
+	return clip.audioMuted ? 0 : decibelsToScalar(clipAudioGainDb(clip));
 }
 
 /** A muted clip reaches native as `hasAudio: false` — the export already renders that as
