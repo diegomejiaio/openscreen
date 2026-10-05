@@ -7,9 +7,9 @@
  * v4 computes its layout in JavaScript from a measured stage. The same
  * arithmetic is done here in `calc`, which removes the measurement, the resize
  * handler and the re-render that came with it: a nav band, a 336px inspector, a
- * 116px caption block, and the composite contained in what is left, centred in
- * the space between the nav and the floor. The panel's height is locked to the
- * composite's, which is the alignment the design is built on.
+ * caption block, and the composite in what is left between the nav and the
+ * floor. Its background can be taller than the left column, and extends to
+ * that column's height when needed. The recorded content keeps its proportions.
  *
  * Lengths here are `vw`/`vh`/px and never `%`. That is not style: a custom
  * property is substituted as text, so a `%` inside `--video-w` would resolve
@@ -84,6 +84,16 @@
 	--ost-speed-border: #b45309;
 	--ost-playhead: #6c55ff;
 	--ost-playhead-glow: rgba(108, 85, 255, 0.68);
+	/* The timeline's candy (design/tokens/v4.css): solid cards in the object's
+	   colour with dark ink on them. The clip wears the brand's green, zooms a
+	   blue so the two never read as one. Fills, not text, so they keep the app's
+	   own values in both themes; only the glow under them changes. */
+	--ost-clip: #10b981;
+	--ost-zoom: #3b82f6;
+	--ost-trim: #f87171;
+	--ost-ramp: #fb923c;
+	--ost-ink: #0b1220;
+	--ost-candy-glow: 35%;
 	--ost-elev-pop: 0 24px 70px -28px rgba(0, 0, 0, 0.75);
 	--ost-font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
 	--ease: cubic-bezier(0.2, 0, 0, 1);
@@ -161,6 +171,9 @@
 	   declared once, in the light root, and the dark theme keeps it. */
 	--ost-playhead: #6c55ff;
 	--ost-playhead-glow: rgba(108, 85, 255, 0.3);
+	--ost-trim: #ef4444;
+	--ost-ramp: #f97316;
+	--ost-candy-glow: 12%;
 	--ost-elev-pop: 0 24px 70px -28px rgba(15, 23, 42, 0.28);
 	--ost-groove: #dfe4ea;
 	--ost-thumb: #ffffff;
@@ -171,14 +184,25 @@
 }
 
 /* ═══ THE BAND ═════════════════════════════════════════════════════════════
-   Nine viewports. The ride is paced against whatever this turns out to be, plus
+   Nine viewports, plus the opening dock. The ride is paced against this, plus
    one more viewport of overflow, so changing it re-paces the scene and breaks
    nothing. */
 .band {
-	height: 900vh;
+	position: relative;
+	height: calc(900vh + var(--dock-height) - var(--hero-offset, 0px));
+}
+
+.editorStart {
+	position: absolute;
+	top: calc(var(--dock-height) - var(--hero-offset, 0px) + 78px);
+	width: 1px;
+	height: 1px;
 }
 
 .stage {
+	--dock: 1;
+	--card-scale: 1;
+	--editor-reveal: clamp(0, (var(--dock) - 0.85) * 6.66667, 1);
 	/* THE RESTING STATE — the closing frame, not a half-built one. */
 	--t: 26;
 	--tf: 28.4;
@@ -190,8 +214,8 @@
 	--fit: 0.88;
 	--pad-pct: 30;
 	--frame-scale: 1;
-	--size-pct: 66;
-	--cur-size: 63.2;
+	--size-pct: 77.78;
+	--cur-size: 5;
 	--size-u: 1;
 	--zoom: 1;
 	--zoom-origin: 52% 58%;
@@ -200,20 +224,22 @@
 	   index.tsx, not here. Webpack inlines a small url() referenced from a
 	   stylesheet as a data URI, and these two sprites came to 9,139 gzipped
 	   bytes — a quarter of the site's only render-blocking resource, carried
-	   by every docs page, none of which has a .stage on it. The driver writes
-	   both properties to this same element's inline style anyway. */
+	   by every docs page, none of which has a .stage on it. The driver rewrites
+	   --ui-cursor there per frame; --shot-cursor keeps the default arrow. */
 	--shot-x: 48;
 	--shot-y: 56;
 	--shot-bounce: 1;
-	--shot-hx: 4.69;
-	--shot-hy: 4.69;
+	/* The default arrow's hotspot, CURSORS.themes[0] as a percentage: the
+	   recorded pointer wears no other pack. */
+	--shot-hx: 12.05;
+	--shot-hy: 8.81;
 	--page-y: -8;
 	--ui-x: 20;
 	--ui-y: 45;
 	--ui-bounce: 1;
 	--ui-on: 0;
-	--ui-hx: 11.9;
-	--ui-hy: 8.74;
+	--ui-hx: 12.05;
+	--ui-hy: 8.81;
 	--zooms-placed: 3;
 	--speed-placed: 1;
 	--panel: 1;
@@ -229,8 +255,11 @@
 	--trims-shown: 1;
 
 	/* ── the grid, once ── */
-	--c2x: calc(4.5vw + var(--pnl-w) + 26px);
-	--c2w: calc(96vw - var(--c2x));
+	/* Centre the inspector and footage as one bounded group on wide screens. */
+	--editor-w: min(91vw, 1600px);
+	--editor-l: calc((100vw - var(--editor-w)) / 2);
+	--c2x: calc(var(--editor-l) + var(--pnl-w) + 26px);
+	--c2w: calc(var(--editor-w) - var(--pnl-w) - 26px);
 
 	/* ── ONE BOX, BOTH LAYOUTS ──
 	   The floor is the only thing that separates the two-part layout from the
@@ -243,16 +272,32 @@
 	   caption band the width of the screen for a caption that only ever occupies
 	   the left column. */
 	--box-top: calc(var(--nav) + var(--gut));
-	--box-bot: calc(100vh - var(--gut) - var(--tl) * var(--tl-h));
+	/* Measured once per resize, so the inset never follows pane transitions. */
+	--timeline-content-h: 0px;
+	--timeline-bottom: clamp(
+		0px,
+		calc((100vh - var(--nav) - 2 * var(--gut) - var(--tl-h) - var(--timeline-content-h)) / 2),
+		min(4.5vh, 48px)
+	);
+	--box-bot: calc(
+		100vh - var(--gut) - var(--tl) * var(--tl-h) - var(--tl) * var(--timeline-bottom)
+	);
 	--box-h: calc(var(--box-bot) - var(--box-top));
 	/* What the column has left for a pane once the caption has taken its share. */
 	--pane-h: calc(var(--box-h) - var(--cap-h));
 
-	/* The picture is 16:9, as wide as the box allows, and centred in it. */
-	--v-w: min(var(--c2w), var(--box-h) * 1.77778);
-	--v-h: calc(var(--v-w) * 0.5625);
-	--v-l: calc(var(--c2x) + (var(--c2w) - var(--v-w)) / 2);
-	--v-t: calc(var(--box-top) + (var(--box-h) - var(--v-h)) / 2);
+	/* Keep the largest 16:9 picture that fits, with the left group as its
+	   minimum height. Extra height becomes background padding. */
+	--dock-w: min(var(--c2w), calc(var(--box-h) * 1.77777778));
+	--dock-h: max(calc(var(--dock-w) * 0.5625), var(--column-h, var(--box-h)));
+	--dock-l: calc(var(--c2x) + (var(--c2w) - var(--dock-w)) / 2);
+	--dock-t: calc(var(--box-top) + (var(--box-h) - var(--dock-h)) / 2);
+	--hero-w: 91vw;
+	--hero-l: 4.5vw;
+	--v-w: calc(var(--hero-w) * (1 - var(--dock)) + var(--dock-w) * var(--dock));
+	--v-h: calc(var(--hero-w) * 0.5625 * (1 - var(--dock)) + var(--dock-h) * var(--dock));
+	--v-l: calc(var(--hero-l) * (1 - var(--dock)) + var(--dock-l) * var(--dock));
+	--v-t: calc(var(--dock-t) * var(--dock));
 
 	position: sticky;
 	top: 0;
@@ -262,24 +307,94 @@
 	isolation: isolate;
 }
 
+/* The first scroll pixels move the picture on one smoothed clock. A fixed
+   stage avoids compositor scroll moving it before the next animation frame.
+   It hands back to sticky only when both origins are exactly at the top. */
+.band[data-driven] .stage[data-floating="true"] {
+	position: fixed;
+	left: 0;
+	width: 100%;
+	transform: translateY(calc(var(--stage-y, 0) * 1px));
+}
+
 .scene {
 	position: absolute;
 	inset: 0;
 }
 
+/* These controls operate the real preview, outside the decorative editor. */
+.previewControls {
+	display: none;
+	position: absolute;
+	left: calc(var(--v-l) + 16px);
+	top: calc(var(--v-t) + 16px);
+	z-index: 12;
+	align-items: center;
+	gap: 10px;
+}
+
+.band[data-driven] .stage[data-phase="preview"] .previewControls {
+	display: flex;
+}
+
+.pause,
+.scrollCue {
+	background: var(--os-bg);
+	color: var(--os-fg-emphasis);
+	border: 1px solid var(--os-border-soft);
+	box-shadow: var(--os-elev-pop);
+}
+
+.pause {
+	display: grid;
+	place-items: center;
+	width: 36px;
+	height: 36px;
+	padding: 0;
+	border-radius: 50%;
+	cursor: pointer;
+}
+
+.pause:focus-visible,
+.scrollCue:focus-visible {
+	outline: 2px solid var(--os-accent);
+	outline-offset: 3px;
+}
+
+.pause [data-icon="play"],
+.pause[data-paused="true"] [data-icon="pause"] {
+	display: none;
+}
+
+.pause[data-paused="true"] [data-icon="play"] {
+	display: block;
+}
+
+.scrollCue {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 12px;
+	border-radius: 999px;
+	font-size: 12px;
+	line-height: 20px;
+	text-decoration: none;
+}
+
+.scrollCue:hover {
+	color: var(--os-accent);
+	text-decoration: none;
+}
+
 /* ═══ THE CAPTIONS ═════════════════════════════════════════════════════════ */
 
-/* The left column: the caption and the inspector, balanced against the picture
-   as one thing. They were two absolutely positioned boxes with no relationship,
-   so the pair could only ever be aligned by accident — the caption sat at the
-   picture's top and the panel hung below it, and on a laptop the pair finished
-   120px past the picture's bottom. In one flow the group has a height, and a
-   height is all it takes to centre it on the same line the picture is centred
-   on. */
+/* The left group sets a minimum height for the picture. Overlapping the panes
+   while fading keeps their combined transition height out of that minimum. */
 .column {
 	position: absolute;
-	left: 4.5vw;
+	left: var(--editor-l);
 	width: var(--pnl-w);
+	height: var(--column-h, var(--box-h));
 	top: calc(var(--v-t) + var(--v-h) / 2);
 	transform: translateY(-50%);
 	z-index: 11;
@@ -289,13 +404,12 @@
 .captions {
 	position: relative;
 	width: calc(var(--pnl-w) - 8px);
-	/* Its children are absolute and take turns, so the box has no height of its
-	   own — and the flow above needs one. */
+	/* Its absolute children take turns within one reserved caption height. */
 	height: var(--cap-h);
 	/* Gated with the inspector, on the inspector's own threshold and the
 	   inspector's own timing, so the title does not announce a panel that is not
 	   there yet. The per-beat cross-fade inside carries on independently. */
-	opacity: var(--intro);
+	opacity: calc(var(--intro) * var(--editor-reveal));
 	transition: opacity 0.45s var(--ease);
 }
 
@@ -363,32 +477,25 @@
 	transition: none !important;
 }
 
+.stage[data-measuring] .panel {
+	height: auto;
+}
+
 /* ═══ THE INSPECTOR ════════════════════════════════════════════════════════ */
 
 .panel {
-	/* Under the caption, in the column's flow, free to be shorter than its slot.
-	   
-	   The ceiling is the room the column has between the gutters once the
-	   caption has taken its share — and NOT the footage's height, which is what
-	   was originally asked for and which turns out to clip. On a 1289x904 laptop
-	   the picture is 460px tall and the cursor pane needs 470, so that ceiling
-	   cut the Smoothing slider off the bottom of the demo. A panel ten pixels
-	   taller than the picture is a smaller price than a control missing from it,
-	   and now that the pair is centred on the picture rather than hanging past
-	   it, the difference reads as symmetry instead of overflow. */
-	position: relative;
+	/* Below the caption, following the same settled height as the picture. The
+	   measurement pass releases this height to read each pane's natural size. */
+	position: absolute;
+	top: var(--cap-h);
+	left: 0;
 	box-sizing: border-box;
 	display: flex;
 	flex-direction: column;
 	width: 100%;
-	height: auto;
-	/* Multiplied by --panel, so the pane collapses out of the column's flow as
-	   it fades rather than holding its height while invisible. It used to keep
-	   it: during the timeline beat, where the palette owns the column and is
-	   absolute, the column was sized for a panel nobody could see and the
-	   visible group — caption plus palette — sat 124px above the picture it is
-	   supposed to be balanced against. The transition matches the opacity's, so
-	   the two swap in one movement. */
+	height: calc(var(--column-h, var(--box-h)) - var(--cap-h));
+	/* Clip the outgoing pane as it fades without contributing a second height
+	   to the column while the tool palette is arriving. */
 	max-height: calc(var(--panel) * var(--pane-h));
 	transition:
 		opacity 0.45s var(--ease),
@@ -401,7 +508,7 @@
 	background: color-mix(in srgb, var(--ost-surface) 92%, transparent);
 	box-shadow: var(--ost-elev-pop), inset 0 1px 0 var(--ost-lip);
 	pointer-events: none;
-	opacity: var(--panel);
+	opacity: calc(var(--panel) * var(--editor-reveal));
 	transform: translateY(calc((1 - var(--panel)) * 12px));
 }
 
@@ -465,11 +572,11 @@
 
 .tabs {
 	display: flex;
-	gap: 4px;
-	padding: 4px;
-	margin-bottom: 12px;
-	border-radius: 10px;
-	background: color-mix(in srgb, var(--ost-surface-2) 60%, transparent);
+	gap: 2px;
+	padding: 3px;
+	margin-bottom: 10px;
+	border-radius: 12px;
+	background: color-mix(in srgb, var(--ost-fg) 6%, transparent);
 }
 
 .tab,
@@ -477,42 +584,54 @@
 	flex: 1;
 	text-align: center;
 	padding: 6px 0;
-	border-radius: 7px;
+	border-radius: 9px;
 	font-size: 12px;
 	font-weight: 500;
 	color: var(--ost-muted);
 }
 
 .tabOn {
-	background: var(--ost-accent);
-	/* The page's ground, not a literal near-black: the accent under it changes
-	   with the theme, and a fixed foreground would sit on two different greens.
-	   Same fix as the site's own primary button. */
-	color: var(--ost-bg);
+	/* Raised above its track, as the app draws it: the choice is a surface, and
+	   green stays for what is picked in the grid below. */
+	background: var(--ost-surface-2);
+	color: var(--ost-fg);
 	font-weight: 600;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
-.upload {
-	display: inline-flex;
-	padding: 8px 14px;
-	margin-bottom: 12px;
-	border: 1.5px dashed var(--ost-border-hi);
-	border-radius: 10px;
-	font-size: 12px;
+.section {
+	display: block;
+	margin: 2px 0 8px;
+	font-size: 13px;
 	font-weight: 600;
-	color: var(--ost-fg);
+	color: var(--ost-fg-2);
+}
+
+.section ~ .section {
+	margin-top: 12px;
 }
 
 .swatches {
 	display: grid;
-	grid-template-columns: repeat(4, 1fr);
-	gap: 8px;
+	grid-template-columns: repeat(6, 1fr);
+	gap: 6px;
+	margin-bottom: 4px;
+}
+
+.swatchAdd {
+	display: grid;
+	place-items: center;
+	aspect-ratio: 1;
+	border: 1px dashed var(--ost-border-hi);
+	border-radius: 8px;
+	font-size: 16px;
+	color: var(--ost-muted);
 }
 
 .swatch {
 	position: relative;
 	aspect-ratio: 1;
-	border-radius: 10px;
+	border-radius: 8px;
 	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 	transition:
 		box-shadow 0.25s var(--ease),
@@ -524,7 +643,7 @@
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
-	border-radius: 10px;
+	border-radius: 8px;
 }
 
 /* Selection is a `data-bg` on the stage matched against the swatch's own index.
@@ -536,7 +655,7 @@
 	content: "";
 	position: absolute;
 	inset: -3px;
-	border-radius: 13px;
+	border-radius: 11px;
 	border: 2px solid var(--ost-accent);
 	opacity: 0;
 	transition: opacity 0.25s var(--ease);
@@ -552,12 +671,46 @@
 /* ── shared controls ── */
 
 .control {
+	/* Free rows, the way the app sets its settings now: label, value and track on
+	   the pane itself, grouped by section labels and space, no card around each. */
 	display: block;
-	margin-bottom: 9px;
-	padding: 10px 13px 14px;
-	border: 1px solid var(--ost-border);
-	border-radius: 11px;
-	background: color-mix(in srgb, var(--ost-surface-2) 40%, transparent);
+	padding: 9px 0 11px;
+}
+
+/* A row of named choices: the app's ChoiceRow. */
+.field {
+	display: block;
+	padding: 6px 0 8px;
+	font-size: 12.5px;
+}
+
+.choices {
+	display: grid;
+	grid-auto-columns: minmax(0, 1fr);
+	grid-auto-flow: column;
+	gap: 4px;
+	margin-top: 7px;
+}
+
+.choice,
+.choiceOn {
+	display: grid;
+	place-items: center;
+	min-height: 28px;
+	overflow: hidden;
+	border: 1px solid transparent;
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--ost-fg) 6%, transparent);
+	color: var(--ost-muted);
+	font-size: 11.5px;
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+.choiceOn {
+	border-color: var(--ost-accent);
+	background: var(--ost-accent-soft);
+	color: var(--ost-fg);
 }
 
 .controlRow {
@@ -565,12 +718,13 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
-	padding: 11px 13px;
+	padding: 8px 0;
+	font-size: 12.5px;
 }
 
 .controlLive {
-	border-color: var(--ost-accent);
-	border-width: 1.5px;
+	/* The slider being dragged: its knob carries the ring (.knobPad, .knobSize),
+	   the row itself stays a free row like the others. */
 }
 
 .controlHead {
@@ -585,9 +739,8 @@
 }
 
 .controlValue {
-	font-family: var(--ost-font-mono);
-	font-weight: 600;
-	color: var(--ost-accent);
+	font-weight: 500;
+	color: var(--ost-muted);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -667,43 +820,6 @@
 	left: auto;
 	right: 2px;
 	background: var(--ost-thumb-on);
-}
-
-/* ── cursor pane ── */
-
-.cursorStyles {
-	display: grid;
-	grid-template-columns: repeat(5, 1fr);
-	gap: 7px;
-	margin: 8px 0 11px;
-}
-
-/* The real packs, drawn from their own sprites. */
-.cursorStyle {
-	position: relative;
-	aspect-ratio: 1;
-	border-radius: 9px;
-	background-color: color-mix(in srgb, var(--ost-surface-2) 55%, transparent);
-	background-repeat: no-repeat;
-	background-position: center;
-	background-size: auto 56%;
-	box-shadow: inset 0 0 0 1px var(--ost-border-soft);
-}
-
-.cursorStyle::after {
-	content: "";
-	position: absolute;
-	inset: -2.5px;
-	border-radius: 11px;
-	border: 2px solid var(--ost-accent);
-	opacity: 0;
-	transition: opacity 0.25s var(--ease);
-}
-
-.stage[data-cur-sel="0"] .cursorStyle[data-i="0"]::after,
-.stage[data-cur-sel="1"] .cursorStyle[data-i="1"]::after,
-.stage[data-cur-sel="2"] .cursorStyle[data-i="2"]::after {
-	opacity: 1;
 }
 
 /* ── transcript pane ── */
@@ -799,43 +915,41 @@
    Centred in the left column, between the caption and the floor. */
 
 .palette {
-	/* In the column's flow, like the inspector, and collapsing the same way: the
-	   two are alternatives, so whichever is hidden must give its height back or
-	   the column is sized for something nobody sees. Absolute, it never counted
-	   at all and the visible pair sat 79px below the picture; in flow with the
-	   panel holding its height, 124px above it. In flow with both collapsing,
-	   the column is exactly the caption plus whichever pane is up. */
-	position: relative;
-	margin: 0 auto;
+	--tool-size: 72px;
+	--palette-padding: 14px;
+	/* Shares the inspector's slot; the driver's settled measurement includes
+	   this palette's own padding and the gap below the caption. */
+	position: absolute;
+	top: var(--cap-h);
+	left: 50%;
+	margin: calc(var(--palette) * 12px) auto 0;
 	width: max-content;
 	z-index: 12;
 	display: grid;
-	grid-template-columns: repeat(3, 66px);
-	gap: 8px;
+	grid-template-columns: repeat(3, var(--tool-size));
+	gap: 12px;
 	border-radius: 22px;
 	background: color-mix(in srgb, var(--ost-surface) 90%, transparent);
 	box-shadow: var(--ost-elev-pop), inset 0 1px 0 var(--ost-lip);
-	/* The padding and the border collapse with the box, not just its content:
-	   max-height alone left 20px of column standing for a palette that is not
-	   there, and that is half a caption's worth of drift on the four beats where
-	   the inspector is the one showing. 220px clears two rows of 66 plus gaps. */
+	/* 220px clears both rows, including gaps and outer padding. */
 	box-sizing: border-box;
-	padding: calc(var(--palette) * 9px);
+	padding: calc(var(--palette) * var(--palette-padding));
 	border: calc(var(--palette) * 1px) solid var(--ost-border);
 	max-height: calc(var(--palette) * 220px);
 	overflow: hidden;
-	transform: translateY(calc((1 - var(--palette)) * -16px));
-	opacity: var(--palette);
+	transform: translateX(-50%) translateY(calc((1 - var(--palette)) * -16px));
+	opacity: calc(var(--palette) * var(--editor-reveal));
 	pointer-events: none;
 	transition:
 		opacity 0.45s var(--ease),
+		margin-top 0.45s var(--ease),
 		max-height 0.45s var(--ease),
 		transform 0.45s var(--ease);
 }
 
 .tool {
-	width: 66px;
-	height: 66px;
+	width: var(--tool-size);
+	height: var(--tool-size);
 	display: grid;
 	place-items: center;
 	color: var(--ost-muted);
@@ -862,10 +976,13 @@
 
 .card {
 	position: absolute;
-	left: var(--v-l);
-	top: var(--v-t);
-	width: var(--v-w);
-	aspect-ratio: 16 / 9;
+	left: 0;
+	top: 0;
+	width: var(--dock-w);
+	height: var(--card-height, var(--dock-h));
+	transform: translate(var(--v-l), var(--v-t)) scale(var(--card-scale));
+	transform-origin: top left;
+	will-change: transform;
 	/* 18px, matching .cardClip, which is inset:0 on this same box — so the
 	   1px ring below and the clipped content follow one arc. The design has
 	   16px here against an 18px clip, and the two arcs part company across the
@@ -874,7 +991,6 @@
 	border-radius: 18px;
 	box-shadow:
 		0 0 0 1px rgba(16, 185, 129, 0.5),
-		0 0 44px -8px rgba(16, 185, 129, 0.3),
 		0 34px 70px -30px rgba(0, 0, 0, 0.65);
 	z-index: 5;
 }
@@ -887,6 +1003,18 @@
 	background: #0d1014;
 }
 
+/* Extra room belongs to the background. The recorded page and its pointer
+   share one unchanged 16:9 canvas, uniformly fitted rather than stretched. */
+.footage {
+	position: absolute;
+	z-index: 2;
+	left: 50%;
+	top: 50%;
+	width: 100%;
+	aspect-ratio: 16 / 9;
+	transform: translate(-50%, -50%) scale(var(--footage-fit, 1));
+}
+
 .zoomer {
 	position: absolute;
 	inset: 0;
@@ -897,31 +1025,25 @@
 	transition: transform 0.7s var(--ease);
 }
 
-/* Four wallpapers, cross-fading on `data-bg`. Only the one whose index matches
-   is opaque, so the picker's selection and the canvas cannot disagree. The
-   attribute is always present — the markup renders the closing frame's pick and
-   the driver overwrites it per frame — so this needs no undriven fallback. */
+/* The outgoing picture stays painted until the incoming responsive image is
+   decoded. Only two layers are retained, including the next prepared swatch. */
 .bg {
 	position: absolute;
 	inset: 0;
 	width: 100%;
 	height: 100%;
-	object-fit: cover;
 	opacity: 0;
+}
+
+.bg[data-visible="true"] {
+	opacity: 1;
 	transition: opacity 0.55s var(--ease);
 }
 
-/* The first one is the floor of the stack, so something is always painted while
-   the others cross-fade over it. It is first in the markup as well as here: a
-   floor drawn later would paint over the picture it is meant to sit under. */
-.bg[data-i="0"] {
-	opacity: 1;
-}
-
-.stage[data-bg="1"] .bg[data-i="1"],
-.stage[data-bg="2"] .bg[data-i="2"],
-.stage[data-bg="3"] .bg[data-i="3"] {
-	opacity: 1;
+.bg img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
 }
 
 /* The recorded window. Scaled, not inset — the page inside must not reflow
@@ -1493,8 +1615,8 @@
 	   8.27:1 over a mid-tone wallpaper. Literals, and deliberately not tokens —
 	   a HUD over footage does not follow the reader's theme. */
 	background: rgba(8, 10, 13, 0.78);
-	border: 1px solid rgba(16, 185, 129, 0.75);
-	color: #34d399;
+	border: 1px solid rgba(59, 130, 246, 0.75);
+	color: #60a5fa;
 	font-family: var(--ost-font-mono);
 	font-size: 10px;
 	font-weight: 600;
@@ -1545,7 +1667,7 @@
 	position: absolute;
 	left: 0;
 	right: 0;
-	bottom: 0;
+	bottom: var(--timeline-bottom);
 	height: var(--tl-h);
 	z-index: 8;
 	background: color-mix(in srgb, var(--ost-surface) 97%, transparent);
@@ -1554,7 +1676,7 @@
 	/* No transition: `--tl` is eased in the score, and easing a scroll-driven
 	   value twice makes the floor chase a target it reaches late — which is how
 	   it came to sit 16px below its own `bottom: 0`. */
-	transform: translateY(calc((1 - var(--tl)) * (var(--tl-h) + 20px)));
+	transform: translateY(calc((1 - var(--tl)) * (var(--tl-h) + var(--timeline-bottom) + 20px)));
 }
 
 .floorClip {
@@ -1605,21 +1727,34 @@
 	position: absolute;
 	top: 150px;
 	height: 50px;
-	border-radius: 10px;
-	background: color-mix(in srgb, var(--ost-surface-2) 72%, transparent);
-	border: 1px solid var(--ost-border-hi);
-	box-shadow: inset 0 1px 8px rgba(255, 255, 255, 0.07);
+	overflow: hidden;
+	border-radius: 12px;
+	border: 1px solid transparent;
+	/* The app's clip card (.tlClip): a solid candy gradient in the brand's green. */
+	background: linear-gradient(180deg, color-mix(in oklab, var(--ost-clip) 78%, white), var(--ost-clip))
+		border-box;
+	box-shadow: 0 3px 10px color-mix(in oklab, var(--ost-clip) var(--ost-candy-glow), transparent);
 	box-sizing: border-box;
 }
 
 .clipWave {
 	position: absolute;
-	left: 13px;
-	right: 13px;
-	top: 28px;
-	height: 9px;
-	background: repeating-linear-gradient(90deg, var(--ost-accent) 0 2px, transparent 2px 7px);
-	opacity: 0.75;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	width: 100%;
+	height: 70%;
+}
+
+.clipWaveArea {
+	fill: rgb(11 18 32 / 0.16);
+}
+
+.clipWaveLine {
+	fill: none;
+	stroke: rgb(11 18 32 / 0.5);
+	stroke-width: 1.25;
+	vector-effect: non-scaling-stroke;
 }
 
 .pillZoom,
@@ -1632,10 +1767,15 @@
 	align-items: center;
 	gap: 5px;
 	padding: 0 8px;
-	border-radius: 7px;
+	/* Candy, as .lanePill draws it: a gradient in the lane's colour (--_c), a glow
+	   under it, dark ink on every colour. */
+	border-radius: 8px;
+	border: 1px solid transparent;
+	background: linear-gradient(180deg, color-mix(in oklab, var(--_c) 72%, white), var(--_c)) border-box;
+	box-shadow: 0 2px 6px color-mix(in oklab, var(--_c) var(--ost-candy-glow), transparent);
+	color: var(--ost-ink);
 	overflow: hidden;
-	font-family: var(--ost-font-mono);
-	font-size: 10.5px;
+	font-size: 11.5px;
 	font-weight: 600;
 	white-space: nowrap;
 	transition:
@@ -1645,9 +1785,7 @@
 
 .pillZoom {
 	top: 118px;
-	background: var(--ost-accent-soft);
-	border: 1.5px solid var(--ost-accent);
-	color: var(--ost-accent);
+	--_c: var(--ost-zoom);
 	--on: clamp(0, calc(var(--zooms-placed) - var(--i)), 1);
 	opacity: var(--on);
 	transform: translateY(calc((1 - var(--on)) * -8px));
@@ -1655,18 +1793,14 @@
 
 .pillSpeed {
 	top: 66px;
-	background: var(--ost-speed-soft);
-	border: 1.5px solid var(--ost-speed-border);
-	color: var(--ost-speed);
+	--_c: var(--ost-ramp);
 	opacity: var(--speed-placed);
 	transform: translateY(calc((1 - var(--speed-placed)) * -8px));
 }
 
 .pillTrim {
 	top: 92px;
-	background: var(--ost-danger-soft);
-	border: 1px solid var(--ost-danger);
-	color: var(--ost-danger);
+	--_c: var(--ost-trim);
 }
 
 /* Each trim's opacity is written straight onto the element by the driver, over
@@ -1727,6 +1861,16 @@
 
 /* ═══ FALLBACKS ════════════════════════════════════════════════════════════ */
 
+/* Keep the timeline clear when a desktop window has little vertical room. */
+@media (min-width: 901px) and (max-height: 599px) {
+	.palette {
+		--tool-size: 66px;
+		--palette-padding: 12px;
+		gap: 10px;
+		margin-top: calc(var(--palette) * 8px);
+	}
+}
+
 /* ═══ PORTRAIT ═════════════════════════════════════════════════════════════
    The same scene, stacked instead of side by side.
 
@@ -1755,14 +1899,17 @@
 		--cap-h: 96px;
 		--pnl-w: calc(100vw - 2 * var(--gut-h));
 		/* What the pane below the picture needs at its smallest: the palette is
-		   160 tall and the transcript wants a few lines under its header. A
+		   168 tall and the transcript wants a few lines under its header. A
 		   formula and not a constant, for the same reason as --gut: on a 667-tall
 		   phone the floor takes 210 of the box and 190 held here left the picture
 		   57px of height — a sliver — for the two beats the floor is up. It gives
-		   way before the picture does, and stops at the palette's own 160 plus a
+		   way before the picture does, and stops at the palette's own 168 plus a
 		   little air on each side — a toolbar touching the picture above it and
 		   the floor below it reads as a mistake. */
-		--pane-min: clamp(176px, 24vh, 190px);
+		--pane-min: clamp(184px, 24vh, 198px);
+		--timeline-content-h: calc(
+			var(--cap-h) + (100vw - 2 * var(--gut-h)) * 0.5625 + var(--pane-min)
+		);
 
 		/* Full width, but never more height than the box has left once the
 		   caption, the pane and the floor have taken theirs. Taking the width
@@ -1770,13 +1917,15 @@
 		   tall in a box with 512, the pane was left 114 for a palette of 160 —
 		   so it lay over the picture — and the transcript's mask came out at
 		   -20px, which is why that panel was empty. */
-		--v-w: min(
+		--dock-w: min(
 			calc(100vw - 2 * var(--gut-h)),
 			calc((var(--box-h) - var(--cap-h) - var(--pane-min)) * 1.77778)
 		);
-		--v-h: calc(var(--v-w) * 0.5625);
-		--v-l: calc((100vw - var(--v-w)) / 2);
-		--v-t: calc(var(--box-top) + var(--cap-h));
+		--dock-l: calc((100vw - var(--dock-w)) / 2);
+		--dock-h: calc(var(--dock-w) * 0.5625);
+		--dock-t: calc(var(--box-top) + var(--cap-h));
+		--hero-w: calc(100vw - 2 * var(--gut-h));
+		--hero-l: var(--gut-h);
 	}
 
 	/* The pair is not a pair here — the picture sits between them — so the
@@ -1806,6 +1955,7 @@
 		left: var(--gut-h);
 		top: calc(var(--v-t) + var(--v-h) + 14px);
 		width: calc(100vw - 2 * var(--gut-h));
+		height: auto;
 		max-height: calc(var(--box-bot) - var(--v-t) - var(--v-h) - 14px);
 		transform: translateY(calc((1 - var(--panel)) * 12px));
 	}
@@ -1814,6 +1964,9 @@
 	   instead of a column to hang from — so it takes back the vertical -50% the
 	   desktop rule drops in order to anchor under the caption. */
 	.palette {
+		--tool-size: 66px;
+		--palette-padding: 12px;
+		gap: 10px;
 		position: absolute;
 		left: 50%;
 		top: calc((var(--v-t) + var(--v-h) + var(--box-bot)) / 2);
@@ -1856,6 +2009,7 @@
 	.column {
 		position: static;
 		width: auto;
+		height: auto;
 		max-width: 60ch;
 		margin: 0 auto;
 		transform: none;
@@ -1878,6 +2032,9 @@
 
 	.panel {
 		max-height: none;
+		position: relative;
+		top: auto;
+		height: auto;
 		margin: 26px 24px 0;
 	}
 
@@ -1966,4 +2123,71 @@
 		position: relative;
 		height: 100vh;
 	}
+}
+
+/* A static, full-width picture and all five captions when the driver cannot
+   run (including no JavaScript). The hero still shows the result first. */
+.band:not([data-driven]) {
+	height: auto;
+}
+
+.band:not([data-driven]) .editorStart {
+	top: 0;
+}
+
+.band:not([data-driven]) .stage {
+	--timeline-bottom: 0px;
+	display: flex;
+	flex-direction: column;
+	position: static;
+	height: auto;
+	overflow: visible;
+	transform: none;
+}
+
+.band:not([data-driven]) .scene {
+	order: -1;
+	position: relative;
+	height: calc(var(--hero-w) * 0.5625 + var(--tl-h) + 40px);
+}
+
+.band:not([data-driven]) .card {
+	left: var(--hero-l);
+	top: 0;
+	width: var(--hero-w);
+	height: auto;
+	aspect-ratio: 16 / 9;
+	transform: none;
+	will-change: auto;
+}
+
+.band:not([data-driven]) .column {
+	display: block;
+	position: static;
+	width: auto;
+	height: auto;
+	max-width: 60ch;
+	margin: 36px auto;
+	transform: none;
+}
+
+.band:not([data-driven]) .captions {
+	display: grid;
+	position: static;
+	width: auto;
+	height: auto;
+	padding: 0 24px;
+	gap: 26px;
+}
+
+.band:not([data-driven]) .cap {
+	position: static;
+	opacity: 1;
+	transform: none;
+	transition: none;
+}
+
+.band:not([data-driven]) .panel,
+.band:not([data-driven]) .palette {
+	display: none;
 }

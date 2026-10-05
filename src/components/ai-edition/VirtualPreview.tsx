@@ -22,7 +22,6 @@ import type {
 import { audioGainScalar } from "@/lib/ai-edition/store/editorSettings";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { clipAudioScalar } from "@/lib/ai-edition/timeline/clipAudio";
-import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
@@ -60,6 +59,154 @@ export interface VideoSource {
 	/** Original filesystem path, used by the main process to expose the second audio track. */
 	filePath?: string;
 	label: string;
+}
+
+/** Drift tolerated before an audio element that is NOT free-running gets placed
+ *  exactly. Nothing sustains a parked element's position, and placing it costs
+ *  nothing because it is not playing. */
+const AUDIO_PARKED_LEASH_SEC = 0.025;
+
+/** How a PLAYING audio element that rides the video's clock (the recording's own sound) is held
+ *  to the picture: by its `playbackRate`, not by seeks.
+ *
+ *  It used to be held by seeks, at `AUDIO_PARKED_LEASH_SEC`, on the grounds that the element
+ *  syncs to the `<video>`'s own authoritative clock and so could be kept that tight. Measured
+ *  in the shipped editor on a Snapdragon X Elite, during ordinary playback, it could not:
+ *  157 `seeking` events in 20 s against a single `seeked`, and 87 `currentTime` writes in
+ *  15 s — six a second, each stepping forward by ~0.1 s, which is exactly the time that had
+ *  passed. The element was being sent to where it was already heading, and every write
+ *  flushed its pipeline: the stutter.
+ *
+ *  The tight leash assumed the rAF tick runs close behind the video clock. It does not when
+ *  the renderer main thread is loaded (measured ~44 % blocked during playback): ticks land
+ *  100+ ms apart, the element has free-run past 25 ms by then, and gets yanked back. The
+ *  yank stalls it, so it falls behind again — which is why the drift sat at a steady ~100 ms
+ *  instead of decaying.
+ *
+ *  Widening the leash ends the storm and keeps the offset instead: a seek lands the audio
+ *  BEHIND the picture by its own latency (that ~100 ms), and both elements then run at the
+ *  same rate, so nothing ever closes it. Audio is noticed from about 45 ms when it leads and
+ *  about 125 ms when it lags (ITU-R BT.1359), so an offset that stays is a defect, not a
+ *  tolerance.
+ *
+ *  So the element is nudged. Once it drifts more than `AUDIO_NUDGE_START_SEC` its rate is
+ *  trimmed by `AUDIO_NUDGE_FRACTION` toward the picture, and it goes back to the video's own
+ *  rate within `AUDIO_NUDGE_STOP_SEC`; the gap between the two keeps an element at the edge
+ *  from flipping its rate every frame. A rate change flushes nothing, and with
+ *  `preservesPitch` (the default) it does not move the pitch. It closes ~50 ms a second, so a
+ *  seek's 100 ms is gone in ~2 s and a free-running clock skew never builds up. */
+export const AUDIO_NUDGE_START_SEC = 0.02;
+export const AUDIO_NUDGE_STOP_SEC = 0.005;
+export const AUDIO_NUDGE_FRACTION = 0.05;
+
+/** Past this a nudge would take seconds and something else is wrong (a stalled or starved
+ *  element): only then is a seek worth its flush. Kept above the ~100 ms a seek itself
+ *  leaves, or the seek would be the thing that triggers the next one. */
+export const AUDIO_SEEK_LEASH_SEC = 0.3;
+
+/** Drift tolerated on an imported track (issue #350) while it plays. It syncs to
+ *  `virtualTimeSec`, which is DERIVED from the video clock each frame and so is noisier than
+ *  the recording's own audio, and it carries BGM or voiceover rather than lip sync, so it is
+ *  left to free-run inside a wide leash. */
+export const IMPORTED_AUDIO_PLAYING_LEASH_SEC = 0.3;
+
+/** What the rAF tick should do to one of the recording's audio elements this frame. */
+export interface AudioSteer {
+	/** Write `currentTime`. */
+	seek: boolean;
+	/** `playbackRate` as a multiple of the video's own: 1 on target, nudged while catching up. */
+	rateFactor: number;
+}
+
+/** Decide how to hold an audio element that rides the video's clock to the picture.
+ *
+ *  `driftSec` is the element's position minus where the picture is: positive means the audio
+ *  is AHEAD. `freeRunning` means it is playing and is meant to be. `seeking` means a write is
+ *  already in flight: another one restarts that seek instead of finishing it, so the element
+ *  never arrives and the drift that triggered it never closes (issue #395, which the video
+ *  path took and the audio path had not). `jumped` means the picture was MOVED, on purpose,
+ *  since this element was last placed: a scrub, a skipped cut, a clip junction. That is
+ *  indistinguishable from clock drift by size, since a cut can be 50 ms, so the caller says
+ *  so, and the audio follows whatever the drift once it is not seeking. `nudged` is whether
+ *  its rate is off the video's now, which is what makes the stop threshold apply. */
+export function steerAudio(
+	driftSec: number,
+	freeRunning: boolean,
+	seeking: boolean,
+	jumped: boolean,
+	nudged: boolean,
+): AudioSteer {
+	if (seeking) {
+		return { seek: false, rateFactor: 1 };
+	}
+	if (jumped) {
+		return { seek: true, rateFactor: 1 };
+	}
+	if (!freeRunning) {
+		// Nothing sustains a parked element's position, and placing it costs nothing.
+		return { seek: Math.abs(driftSec) > AUDIO_PARKED_LEASH_SEC, rateFactor: 1 };
+	}
+	const off = Math.abs(driftSec);
+	if (off > AUDIO_SEEK_LEASH_SEC) {
+		return { seek: true, rateFactor: 1 };
+	}
+	if (off > (nudged ? AUDIO_NUDGE_STOP_SEC : AUDIO_NUDGE_START_SEC)) {
+		return { seek: false, rateFactor: 1 - Math.sign(driftSec) * AUDIO_NUDGE_FRACTION };
+	}
+	return { seek: false, rateFactor: 1 };
+}
+
+/** Whether an imported track's drift warrants a `currentTime` write.
+ *
+ *  `freeRunning` means the element is playing and is supposed to be: it holds its own
+ *  position, so only a real discontinuity — a scrub, a trim jump, a first play — is worth
+ *  the cost of a seek. See issue #395 and `VirtualPreview.seekStorm.test.tsx` for what
+ *  happens when writes are issued per frame instead.
+ *
+ *  `seeking` is the other half of that lesson: a write onto an element that is still
+ *  seeking restarts the seek rather than finishing it, so the element never arrives and
+ *  the drift that triggered the write never closes. */
+export function shouldResyncAudio(
+	driftSec: number,
+	freeRunning: boolean,
+	playingLeashSec: number,
+	seeking = false,
+): boolean {
+	if (seeking) {
+		return false;
+	}
+	return Math.abs(driftSec) > (freeRunning ? playingLeashSec : AUDIO_PARKED_LEASH_SEC);
+}
+
+/** The track lists Chromium exposes on a media element under the `AudioVideoTracks` Blink
+ *  feature, which the editor window turns on (`createEditorWindow`). Absent elsewhere. */
+interface MediaTrackLists {
+	audioTracks?: { length: number };
+	videoTracks?: { length: number; [index: number]: { selected: boolean } };
+}
+
+/**
+ * Stops Chromium decoding the picture of a media element that is only here for its clock or
+ * its sound: the native compositor draws every pixel of the preview. Measured on a 1080p60
+ * recording: a hidden `<video>` that plays keeps ~6.7 % of an RTX 4070 Ti's decode engine
+ * busy, and an `<audio>` on the same mp4 decodes its picture just as much — a second and a
+ * third decode of the recording next to the compositor's own. With the video track
+ * deselected the element decodes no frame, and its clock, `playbackRate` and seeks behave
+ * the same.
+ *
+ * Only when the element has a sound track: with neither track selected it has no stream
+ * left to keep time with, and races to its end. A recording without sound keeps decoding,
+ * as before. Returns whether the track was dropped.
+ */
+export function dropVideoTrack(element: HTMLMediaElement): boolean {
+	const { audioTracks, videoTracks } = element as HTMLMediaElement & MediaTrackLists;
+	if (!videoTracks?.length || !audioTracks?.length) {
+		return false;
+	}
+	for (let index = 0; index < videoTracks.length; index++) {
+		videoTracks[index].selected = false;
+	}
+	return true;
 }
 
 /**
@@ -157,35 +304,118 @@ export function timelineAudioFadeAt(
 	return v;
 }
 
+/**
+ * The export's music ducking (`duck_curve` in audio.rs), mirrored for the preview: the same
+ * depth, speech threshold, hold and release. One difference is structural: the export holds
+ * the whole voice and looks ahead, so its dip is already complete when a word starts, while
+ * the preview only hears the voice once it plays, so here the same ramp ends `attackSec`
+ * into the word.
+ */
+export const MUSIC_DUCK = {
+	depthDb: -10,
+	thresholdDbfs: -35,
+	holdSec: 0.5,
+	attackSec: 0.25,
+	releaseSec: 0.6,
+} as const;
+
+/** A music bed's ducking gain in dB, one preview frame of `frameSec` later, when the voice
+ *  was last heard `sinceVoiceSec` ago. Straight ramps in dB, like the export's. */
+export function nextMusicDuckDb(
+	currentDb: number,
+	sinceVoiceSec: number,
+	frameSec: number,
+): number {
+	const { depthDb, holdSec, attackSec, releaseSec } = MUSIC_DUCK;
+	return sinceVoiceSec <= holdSec
+		? Math.max(depthDb, currentDb + (depthDb / attackSec) * frameSec)
+		: Math.min(0, currentDb - (depthDb / releaseSec) * frameSec);
+}
+
 export interface PreviewAudioGraph {
 	context: AudioContext;
+	/** Output trim: everything the preview plays goes through it. */
 	gain: GainNode;
+	/** The recording's own audio (primary + supplemental elements), on its way to `gain`. */
+	voice: GainNode;
+	/** Listens to the voice — the recording and every voiceover — to duck the music. */
+	analyser: AnalyserNode;
+	/** Between `gain` and the speakers: `headroom` scales the mix into `ceiling`'s input range,
+	 *  and `ceiling` keeps it under full scale (see `previewCeilingCurve`). */
+	headroom: GainNode;
+	ceiling: WaveShaperNode;
+}
+
+/** The export limiter's ceiling, `LIMITER_CEILING` in audio.rs: −1.5 dBFS. */
+export const PREVIEW_AUDIO_CEILING = 0.841_395_1;
+/** Loudest mix the ceiling stage reads, as a multiple of full scale: +24 dB, a full-scale file
+ *  under the largest loudness boost and the largest output trim. Louder lands on the curve's
+ *  flat end, which the curve has reached long before. */
+export const PREVIEW_AUDIO_HEADROOM = 16;
+
+/**
+ * The curve of the WaveShaperNode in front of the preview's speakers. Without it, the loudness
+ * boost (up to +12 dB) and the output trim push a loud take's peaks past full scale, and the
+ * audio device clips them: the preview saturates where the export, whose limiter holds them
+ * at −1.5 dBFS, does not (measured on a real take: a −7.1 dBFS peak raised 8.9 dB, 92 samples
+ * over).
+ *
+ * It is the identity up to the export's ceiling, then a tanh knee that leaves the identity
+ * with the same slope and rises towards full scale without reaching it. A curve, not a
+ * limiter, because a curve has no state (see `applyPreviewAudioSettings`): everything under
+ * the ceiling plays exactly as the export writes it, and only the peaks the export limits
+ * are shaped, here by their own level rather than by a gain riding over 5 ms. A WaveShaper
+ * reads its input on [−1, 1], so `headroom` divides the mix by `PREVIEW_AUDIO_HEADROOM` on
+ * the way in and the curve's values are real levels. The point count is odd so that silence
+ * is a point of its own.
+ */
+export function previewCeilingCurve(points = 8193): Float32Array<ArrayBuffer> {
+	const knee = PREVIEW_AUDIO_CEILING;
+	const curve = new Float32Array(points);
+	for (let index = 0; index < points; index += 1) {
+		const level = ((index / (points - 1)) * 2 - 1) * PREVIEW_AUDIO_HEADROOM;
+		const magnitude = Math.abs(level);
+		curve[index] =
+			Math.sign(level) *
+			(magnitude <= knee
+				? magnitude
+				: knee + (1 - knee) * Math.tanh((magnitude - knee) / (1 - knee)));
+	}
+	return curve;
 }
 
 /**
- * The preview's ONLY audio processing is the output trim, and that is deliberate: it is
- * the same `10 ** (dB / 20)` scalar `finish_audio` applies natively, so what the editor
- * plays is what the export writes.
+ * The preview's gains are static, and that is deliberate: each is the same
+ * `10 ** (dB / 20)` scalar the export applies natively, so what the editor plays is what
+ * the export writes.
+ *
+ * - `gainDb` is the output trim, `finish_audio`'s gain.
+ * - `voiceGainDb` is the loudness normalisation of the recording being played. The
+ *   compositor measures it over the whole file and applies it to every clip cut from that
+ *   file at export (`loudness_gain_db`); the preview asks for the same number.
  *
  * Nothing with state belongs here. The export runs on the assembled timeline (trimmed,
- * speed-adjusted, concatenated); the preview runs on the untouched source file, seeked.
- * A filter or a compressor would see a different signal on each side and drift — and an
- * offline stage measured over the whole programme (a loudness normaliser) cannot exist
- * here at all, because the preview never holds that programme.
+ * speed-adjusted, concatenated); the preview runs on the untouched source file, seeked. A
+ * filter or a compressor would see a different signal on each side and drift. That is why
+ * the export's peak limiter has a stateless stand-in here, `previewCeilingCurve`, rather
+ * than a compressor.
  */
 export function applyPreviewAudioSettings(
 	graph: PreviewAudioGraph | null,
 	elements: Array<HTMLAudioElement | null>,
 	gainDb: number,
+	voiceGainDb = 0,
 ): void {
 	const outputGain = audioGainScalar(gainDb);
+	const voiceGain = audioGainScalar(voiceGainDb);
 	if (!graph) {
 		for (const element of elements) {
-			if (element) element.volume = Math.min(1, outputGain);
+			if (element) element.volume = Math.min(1, outputGain * voiceGain);
 		}
 		return;
 	}
 	graph.gain.gain.value = outputGain;
+	graph.voice.gain.value = voiceGain;
 }
 
 /** The playing clip's own audio level. `activeClipId` can name a trim segment
@@ -253,12 +483,6 @@ interface VirtualPreviewProps {
 	 * identity ({x:0,y:0,width:1,height:1}) renders the full frame, unchanged
 	 * from before crop support existed. */
 	cropRegion?: CropRegion | null;
-	/**
-	 * Written every rAF tick with this video's live position/rate so other
-	 * media elements (the webcam overlay) can read it directly instead of
-	 * waiting for a React state round trip. See playback-clock.ts.
-	 */
-	clockRef?: PlaybackClockRef;
 }
 
 export function VirtualPreview({
@@ -278,7 +502,6 @@ export function VirtualPreview({
 	onVideoRecovered,
 	retryToken,
 	cropRegion,
-	clockRef,
 }: VirtualPreviewProps) {
 	const { settings } = useEditorSettings();
 	// ponytail: an oversized, offset video inside .videoFrame's overflow:hidden
@@ -304,6 +527,9 @@ export function VirtualPreview({
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const primaryAudioRef = useRef<HTMLAudioElement | null>(null);
 	const supplementalAudioRef = useRef<HTMLAudioElement | null>(null);
+	// The audio elements that have not yet followed the last explicit move of the picture (see
+	// `applySourceTime` and `steerAudio`).
+	const audioJumpedRef = useRef(new WeakSet<HTMLAudioElement>());
 	const [primaryAudioEl, setPrimaryAudioEl] = useState<HTMLAudioElement | null>(null);
 	const [supplementalAudioEl, setSupplementalAudioEl] = useState<HTMLAudioElement | null>(null);
 	const [supplementalAudioSrc, setSupplementalAudioSrc] = useState<string | null>(null);
@@ -390,6 +616,63 @@ export function VirtualPreview({
 		};
 	}, [activeSource?.filePath]);
 
+	// Loudness normalisation of every voice file the preview plays: the recording mounted now
+	// and each voiceover take. The export levels them to −16 LUFS with a gain the compositor
+	// measures over the whole file (`loudness_gain_db`), so asking it for that gain is what
+	// makes the preview play the voice at the exported level. Keyed by path: the gain belongs
+	// to the file, and the compositor caches it for the export that follows. Until it arrives
+	// the file plays as recorded — the first second or two after a recording is opened.
+	const [loudnessGainDbByPath, setLoudnessGainDbByPath] = useState<ReadonlyMap<string, number>>(
+		() => new Map(),
+	);
+	const loudnessGainDbByPathRef = useRef(loudnessGainDbByPath);
+	loudnessGainDbByPathRef.current = loudnessGainDbByPath;
+	const requestedLoudnessRef = useRef(new Set<string>());
+	const voicePathsKey = [
+		activeSource?.filePath,
+		...audioTracks
+			.filter((track) => track.kind === "voiceover")
+			.map((track) => audioSources.find((source) => source.id === track.assetId)?.filePath),
+	]
+		.filter((path): path is string => Boolean(path))
+		.join("\n");
+	const activeVoicePath = activeSource?.filePath;
+	const measuredForRetryRef = useRef(retryToken);
+	useEffect(() => {
+		const getLoudnessGain = window.electronAPI?.getLoudnessGain;
+		if (!getLoudnessGain) return;
+		// Retry reloads the file after it was unavailable, and its first measurement may have
+		// failed with it. Forget that answer and ask again; it plays at 0 dB until the new one.
+		if (retryToken !== measuredForRetryRef.current) {
+			measuredForRetryRef.current = retryToken;
+			if (activeVoicePath) {
+				requestedLoudnessRef.current.delete(activeVoicePath);
+				setLoudnessGainDbByPath((previous) => {
+					if (!previous.has(activeVoicePath)) return previous;
+					const next = new Map(previous);
+					next.delete(activeVoicePath);
+					return next;
+				});
+			}
+		}
+		for (const path of voicePathsKey.split("\n")) {
+			if (!path || requestedLoudnessRef.current.has(path)) continue;
+			requestedLoudnessRef.current.add(path);
+			void getLoudnessGain(path).then(
+				(result) =>
+					setLoudnessGainDbByPath((previous) =>
+						new Map(previous).set(path, result.success ? result.gainDb : 0),
+					),
+				() => undefined,
+			);
+		}
+	}, [voicePathsKey, retryToken, activeVoicePath]);
+	const voiceGainDb = activeSource?.filePath
+		? (loudnessGainDbByPath.get(activeSource.filePath) ?? 0)
+		: 0;
+	const voiceGainDbRef = useRef(voiceGainDb);
+	voiceGainDbRef.current = voiceGainDb;
+
 	// Which imported-track elements are actually mounted (a track is rendered only once its
 	// asset URL resolves — see the JSX). Re-routing the graph is keyed on this set, NOT on the
 	// tracks' gains: a level change is applied live on the existing node by the rAF, so it must
@@ -419,9 +702,21 @@ export function VirtualPreview({
 					audioContextRef.current = context;
 					audioSourceNodesRef.current = new WeakMap();
 				}
+				const ceiling = context.createWaveShaper();
+				ceiling.curve = previewCeilingCurve();
+				ceiling.connect(context.destination);
+				const headroom = context.createGain();
+				headroom.gain.value = 1 / PREVIEW_AUDIO_HEADROOM;
+				headroom.connect(ceiling);
 				const gain = context.createGain();
-				gain.connect(context.destination);
-				return { context, gain };
+				gain.connect(headroom);
+				const voice = context.createGain();
+				voice.connect(gain);
+				// 1024 samples: about 21 ms of voice per reading, one reading per frame.
+				const analyser = context.createAnalyser();
+				analyser.fftSize = 1024;
+				voice.connect(analyser);
+				return { context, gain, voice, analyser, headroom, ceiling };
 			} catch {
 				return null;
 			}
@@ -429,13 +724,14 @@ export function VirtualPreview({
 		if (!graph) {
 			// WebAudio can be unavailable in unit tests or under a denied audio policy. No source
 			// node was created, so `volume` still reaches the output — capped at 0 dB.
-			applyPreviewAudioSettings(null, elements, audioGainDbRef.current);
+			applyPreviewAudioSettings(null, elements, audioGainDbRef.current, voiceGainDbRef.current);
 			return;
 		}
 
 		const connectedSources: MediaElementAudioSourceNode[] = [];
+		// Per-clip volume sits before the voice stage, so the voice gain and its meter see it.
 		const clipGain = graph.context.createGain();
-		clipGain.connect(graph.gain);
+		clipGain.connect(graph.voice);
 		clipAudioGainNodeRef.current = clipGain;
 		for (const element of elements) {
 			try {
@@ -471,6 +767,10 @@ export function VirtualPreview({
 				const trackGain = graph.context.createGain();
 				source.connect(trackGain);
 				trackGain.connect(graph.gain);
+				// A voiceover is voice: the music ducks under it as under the recording.
+				if (audioTracksRef.current.find((track) => track.id === trackId)?.kind === "voiceover") {
+					trackGain.connect(graph.analyser);
+				}
 				audioTrackGainNodesRef.current.set(trackId, trackGain);
 				connectedSources.push(source);
 				trackGainNodes.push(trackGain);
@@ -481,7 +781,7 @@ export function VirtualPreview({
 			}
 		}
 		audioGraphRef.current = graph;
-		applyPreviewAudioSettings(graph, elements, audioGainDbRef.current);
+		applyPreviewAudioSettings(graph, elements, audioGainDbRef.current, voiceGainDbRef.current);
 		return () => {
 			audioGraphRef.current = null;
 			clipAudioGainNodeRef.current = null;
@@ -489,7 +789,11 @@ export function VirtualPreview({
 			for (const source of connectedSources) source.disconnect();
 			for (const trackGain of trackGainNodes) trackGain.disconnect();
 			audioTrackGainNodesRef.current = new Map();
+			graph.voice.disconnect();
+			graph.analyser.disconnect();
 			graph.gain.disconnect();
+			graph.headroom.disconnect();
+			graph.ceiling.disconnect();
 		};
 	}, [
 		primaryAudioEl,
@@ -531,8 +835,9 @@ export function VirtualPreview({
 			audioGraphRef.current,
 			[primaryAudioRef.current, supplementalAudioRef.current],
 			settings.audioGainDb,
+			voiceGainDb,
 		);
-	}, [settings.audioGainDb]);
+	}, [settings.audioGainDb, voiceGainDb]);
 
 	const setPrimaryAudioElement = useCallback((element: HTMLAudioElement | null) => {
 		primaryAudioRef.current = element;
@@ -630,6 +935,16 @@ export function VirtualPreview({
 	// <audio> element (registered by the ref callback on render).
 	const audioTracksRef = useRef(audioTracks);
 	audioTracksRef.current = audioTracks;
+	const audioSourcesRef = useRef(audioSources);
+	audioSourcesRef.current = audioSources;
+	// Live state of the music ducking (see MUSIC_DUCK): the gain, when the voice was last
+	// heard, and the analyser's reading buffer, reused every frame.
+	const musicDuckRef = useRef({
+		db: 0,
+		voiceAt: Number.NEGATIVE_INFINITY,
+		tickAt: 0,
+		reading: new Float32Array(1024),
+	});
 	const audioTrackElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
 	const registerAudioTrackEl = useCallback((trackId: string, element: HTMLAudioElement | null) => {
 		if (element) audioTrackElsRef.current.set(trackId, element);
@@ -673,10 +988,23 @@ export function VirtualPreview({
 					: Math.min(1, audioGainScalar(audioGainDbRef.current) * clipScalar);
 				if (audio.volume !== volume) audio.volume = volume;
 				const target = resolveAudioTrackPlayback(v.currentTime, audio.duration);
-				if (audio.playbackRate !== v.playbackRate) audio.playbackRate = v.playbackRate;
-				if (Math.abs(audio.currentTime - target.targetTimeSec) > 0.025) {
+				// A paused video is not a clock to free-run against: the audio is about to be
+				// paused with it, and is placed exactly where the picture stopped.
+				const steer = steerAudio(
+					audio.currentTime - target.targetTimeSec,
+					!v.paused && !audio.paused && target.shouldPlay,
+					audio.seeking,
+					audioJumpedRef.current.has(audio),
+					audio.playbackRate !== v.playbackRate,
+				);
+				// Capped where the browser stops accepting it (it throws above 16, and that
+				// would end this frame): a video already at the cap has nothing left to nudge.
+				const rate = Math.min(v.playbackRate * steer.rateFactor, MAX_NATIVE_PLAYBACK_RATE);
+				if (audio.playbackRate !== rate) audio.playbackRate = rate;
+				if (steer.seek) {
 					try {
 						audio.currentTime = target.targetTimeSec;
+						audioJumpedRef.current.delete(audio);
 					} catch {
 						// media metadata not ready yet
 					}
@@ -712,6 +1040,21 @@ export function VirtualPreview({
 				virtualTimeSecRef.current,
 				speedRegionsRef.current,
 			);
+			// Music ducking, heard live: one reading of the voice per frame (see MUSIC_DUCK).
+			const duck = musicDuckRef.current;
+			const now = performance.now();
+			const frameSec = Math.min(0.1, Math.max(0, (now - duck.tickAt) / 1000));
+			duck.tickAt = now;
+			const analyser = audioGraphRef.current?.analyser;
+			if (analyser && !v.paused) {
+				analyser.getFloatTimeDomainData(duck.reading);
+				let energy = 0;
+				for (const sample of duck.reading) energy += sample * sample;
+				if (10 * Math.log10(energy / duck.reading.length) > MUSIC_DUCK.thresholdDbfs) {
+					duck.voiceAt = now;
+				}
+			}
+			duck.db = nextMusicDuckDb(duck.db, (now - duck.voiceAt) / 1000, frameSec);
 			for (const track of audioTracksRef.current) {
 				const el = audioTrackElsRef.current.get(track.id);
 				if (!el) continue;
@@ -776,24 +1119,39 @@ export function VirtualPreview({
 				// never the imported track — so following `v.playbackRate` would pitch a
 				// voiceover up under a 2× region and finish it early, diverging from export.
 				if (el.playbackRate !== 1) el.playbackRate = 1;
+				// A voiceover is voice: levelled like the recording, its own gain trimming from
+				// there — the sum `mix_external_tracks` applies. A music bed is not levelled; it
+				// ducks under the voice instead.
+				let trackGainDb = track.gainDb;
+				if (track.kind === "voiceover") {
+					const path = audioSourcesRef.current.find(
+						(source) => source.id === track.assetId,
+					)?.filePath;
+					trackGainDb += path ? (loudnessGainDbByPathRef.current.get(path) ?? 0) : 0;
+				} else {
+					trackGainDb += duck.db;
+				}
 				const trackGainNode = audioTrackGainNodesRef.current.get(track.id);
 				if (trackGainNode) {
-					trackGainNode.gain.value = audioGainScalar(track.gainDb) * fade;
+					trackGainNode.gain.value = audioGainScalar(trackGainDb) * fade;
 					if (el.volume !== 1) el.volume = 1;
 				} else {
-					el.volume = Math.min(1, audioGainScalar(track.gainDb) * globalGain * fade);
+					el.volume = Math.min(1, audioGainScalar(trackGainDb) * globalGain * fade);
 				}
-				// Only re-seek on a real discontinuity (a scrub, a trim jump, a first
-				// play), NOT on the sub-frame drift of normal playback. The primary audio
-				// can afford a 25 ms leash because it syncs to the <video>'s own
-				// authoritative clock; an imported track syncs to `virtualTimeSec`, which is
-				// DERIVED from that clock each frame and so is slightly noisy — at a 25 ms
-				// leash it re-seeks most frames, and each seek briefly stalls the element:
-				// the jitter. A started element already plays at the right rate from the
-				// right offset, so it free-runs in sync; this wide leash just catches the
-				// jumps. BGM/voiceover tolerates it; frame-tight sync is the video's job.
-				const leashSec = !el.paused && trackTarget.shouldPlay ? 0.3 : 0.025;
-				if (Math.abs(el.currentTime - trackTarget.targetTimeSec) > leashSec) {
+				// Only re-seek on a real discontinuity (a scrub, a trim jump, a first play),
+				// NOT on the sub-frame drift of normal playback: at a tight leash this
+				// re-seeks most frames, and each seek briefly stalls the element — the
+				// jitter. A started element already plays at the right rate from the right
+				// offset, so it free-runs in sync; the wide leash just catches the jumps.
+				// BGM/voiceover tolerates it; frame-tight sync is the video's job.
+				if (
+					shouldResyncAudio(
+						el.currentTime - trackTarget.targetTimeSec,
+						!el.paused && trackTarget.shouldPlay,
+						IMPORTED_AUDIO_PLAYING_LEASH_SEC,
+						el.seeking,
+					)
+				) {
 					try {
 						el.currentTime = trackTarget.targetTimeSec;
 					} catch {
@@ -813,15 +1171,6 @@ export function VirtualPreview({
 				} else if ((v.paused || !trackTarget.shouldPlay) && !el.paused) {
 					el.pause();
 				}
-			}
-			// Publish this frame's live position/rate for other media elements
-			// (webcam) to read directly — see playback-clock.ts for why this
-			// bypasses React state entirely.
-			if (clockRef) {
-				clockRef.current.sourceTimeSec = v.currentTime;
-				clockRef.current.isPlaying = !v.paused;
-				clockRef.current.playbackRate = v.playbackRate;
-				clockRef.current.virtualTimeSec = virtualTimeSecRef.current;
 			}
 			// A reload is in flight: the decoder is dead and `currentTime` is
 			// frozen (or already reset to 0), so every decision below — trim
@@ -907,9 +1256,9 @@ export function VirtualPreview({
 			// `seekToVirtualTimeRef(nextClip.timelineStartSec)` plus bas renvoyait la tête au
 			// DÉBUT du clip voisin — le tressaillement observé au passage d'un clip à l'autre.
 			//
-			// `clockRef` et `setSourceTimeSec` ci-dessus continuent d'être publiés : la webcam
-			// et le calque curseur ont besoin du temps source même à l'arrêt. Seule la
-			// position de la TIMELINE cesse d'être dictée par le média.
+			// `setSourceTimeSec` ci-dessus continue d'être publié : le calque curseur a besoin du
+			// temps source même à l'arrêt. Seule la position de la TIMELINE cesse d'être
+			// dictée par le média.
 			if (v.paused) {
 				return;
 			}
@@ -1015,7 +1364,16 @@ export function VirtualPreview({
 				// Clamp to the browser's 16× playbackRate ceiling; >16× is rendered at
 				// its true speed only on the offline export path, not the live preview.
 				const rate = Math.min(activeRegion?.speed ?? 1, MAX_NATIVE_PLAYBACK_RATE);
-				if (v.playbackRate !== rate) v.playbackRate = rate;
+				if (v.playbackRate !== rate) {
+					v.playbackRate = rate;
+					// The recording's audio rides this clock, so it takes the new rate in the same
+					// breath. Left to the next tick it plays one whole frame gap at the old one,
+					// 150 ms under load: the audio that far behind entering a 2x region, and
+					// that far ahead leaving it.
+					for (const audio of [primaryAudioRef.current, supplementalAudioRef.current]) {
+						if (audio) audio.playbackRate = rate;
+					}
+				}
 			}
 		},
 		[onTimeChange],
@@ -1027,19 +1385,17 @@ export function VirtualPreview({
 	useEffect(() => {
 		const frame = videoFrameRef.current;
 		if (!frame) return;
-		// ponytail: scale the zoom-in/out transition windows by the current
-		// playback rate so the transition stays wall-clock constant inside
-		// speed regions. The cursor still flies through (ruler + playhead
-		// read source-time), only the easing duration is decoupled.
-		const activeSpeedRegion = findActiveSpeedRegion(
-			speedRegionsRef.current,
-			Math.round(virtualTimeSec * 1000),
-		);
-		const playbackRate = activeSpeedRegion?.speed ?? 1;
+		// Speed regions speed the footage up, not the zoom transitions: they are timed on
+		// screen time, like the compositor that draws the picture this box stands in for.
 		const transform =
 			zoomRegions.length === 0
 				? IDENTITY_ZOOM_TRANSFORM
-				: computeZoomPreviewTransform(zoomRegions, virtualTimeSec * 1000, undefined, playbackRate);
+				: computeZoomPreviewTransform(
+						zoomRegions,
+						virtualTimeSec * 1000,
+						undefined,
+						speedRegionsRef.current,
+					);
 		frame.style.transform = `translate(${transform.translateXPercent}%, ${transform.translateYPercent}%) scale(${transform.scale})`;
 	}, [zoomRegions, virtualTimeSec]);
 
@@ -1074,6 +1430,13 @@ export function VirtualPreview({
 		// have its flag consumed by a frame on which no seek happened.
 		isProgrammaticSeekRef.current = true;
 		video.currentTime = sourceTimeSec;
+		// The audio elements keep their own position, so a scrub, a skipped cut or a clip
+		// junction moves the picture out from under them. The rAF tick cannot tell that from
+		// clock drift by its size (a cut can be 50 ms), so it is told: each element follows
+		// once it is not seeking, whatever the drift.
+		for (const audio of [primaryAudioRef.current, supplementalAudioRef.current]) {
+			if (audio) audioJumpedRef.current.add(audio);
+		}
 	}, []);
 
 	const seekToVirtualTime = useCallback(
@@ -1340,6 +1703,8 @@ export function VirtualPreview({
 									e.currentTarget.videoWidth,
 									e.currentTarget.videoHeight,
 								);
+								// Its size is read: from here on only its clock is needed.
+								dropVideoTrack(e.currentTarget);
 								if (pendingSeekRef.current) {
 									const { sourceTimeSec, play } = pendingSeekRef.current;
 									pendingSeekRef.current = null;
@@ -1478,6 +1843,8 @@ export function VirtualPreview({
 							preload="metadata"
 							aria-hidden="true"
 							data-testid="preview-audio-primary"
+							// The recording's own mp4: without this its picture is decoded too.
+							onLoadedMetadata={(e) => dropVideoTrack(e.currentTarget)}
 						/>
 						{supplementalAudioSrc ? (
 							<audio
@@ -1486,6 +1853,7 @@ export function VirtualPreview({
 								src={supplementalAudioSrc}
 								preload="metadata"
 								aria-hidden="true"
+								onLoadedMetadata={(e) => dropVideoTrack(e.currentTarget)}
 								data-testid="preview-audio-supplemental"
 							/>
 						) : null}

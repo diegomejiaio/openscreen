@@ -6,6 +6,7 @@
 // plain data — `store/transcriptionStore.ts` owns the queue and the side
 // effects, this module owns the vocabulary.
 
+import { STT_MEDIA_UNREADABLE } from "../../../../electron/stt/transcriptionContract";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { voiceoverPlacements } from "../timeline/aggregated-transcript";
 
@@ -14,8 +15,18 @@ export type TranscriptionFailureKind = "no-audio" | "unsupported-audio" | "error
 
 export interface TranscriptionFailure {
 	kind: TranscriptionFailureKind;
-	/** Raw engine/exception message — surfaced as a tooltip / toast description. */
+	/** Raw engine/exception message, IPC wrapper stripped. Surfaced as a tooltip. */
 	message: string;
+	/**
+	 * Audio extraction could not read the media file itself: the OS refused access,
+	 * or ffmpeg hung opening it (macOS parks the read behind a pending "access files
+	 * in your Downloads folder" prompt until the extraction timeout fires, issue
+	 * #968). Set only from the `STT_MEDIA_UNREADABLE` marker `extractAudio.ts` puts
+	 * on its rejection, never inferred from wording.
+	 * Transient, so `kind` stays `"error"`, but the user can fix it: the UI shows a
+	 * hint pointing at file access instead of the raw `message`.
+	 */
+	unreadableMedia?: boolean;
 }
 
 /** Which part of the pipeline a running job is in (mirrors `TranscribeAssetOptions.onStatus`). */
@@ -129,7 +140,17 @@ export type PersistableFailureKind = Exclude<TranscriptionFailureKind, "error">;
  * open, and pops a toast carrying raw ffmpeg stderr (issue #628).
  */
 export function classifyTranscriptionError(error: unknown): TranscriptionFailure {
-	const message = error instanceof Error ? error.message : String(error);
+	const message = stripIpcErrorWrapper(error instanceof Error ? error.message : String(error));
+	// Keyed on the marker only the audio-extraction step sets, not on wording: a
+	// "permission denied" out of model loading is an engine failure, and must keep
+	// the engine-failure handling (raw message, fail the rest of the queue).
+	if (message.includes(STT_MEDIA_UNREADABLE)) {
+		return {
+			kind: "error",
+			message: message.replace(`${STT_MEDIA_UNREADABLE}: `, ""),
+			unreadableMedia: true,
+		};
+	}
 	if (/no audio track|zero audio frames|no decodable audio/i.test(message)) {
 		return { kind: "no-audio", message };
 	}
@@ -137,6 +158,24 @@ export function classifyTranscriptionError(error: unknown): TranscriptionFailure
 		return { kind: "unsupported-audio", message };
 	}
 	return { kind: "error", message };
+}
+
+/**
+ * `ipcRenderer.invoke` rejects with `Error invoking remote method '<channel>':
+ * <Name>: <message>`. Only `<message>` means anything to the user.
+ */
+export function stripIpcErrorWrapper(message: string): string {
+	return message.replace(/^Error invoking remote method '[^']*': (?:[A-Za-z]*Error: )?/, "");
+}
+
+/**
+ * The `editor` i18n key of the sentence that explains this failure to the user,
+ * or null when the engine message is the best explanation there is.
+ */
+export function transcriptionFailureHintKey(failure: TranscriptionFailure): string | null {
+	if (failure.kind !== "error") return "mediaStage.noAudioTrackHint";
+	if (failure.unreadableMedia) return "mediaStage.mediaUnreadableHint";
+	return null;
 }
 
 /**

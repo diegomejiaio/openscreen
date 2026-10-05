@@ -2,8 +2,10 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
+import { DEFAULT_TEXT_PLATE } from "../annotations/background";
+import { type RegionKind, readSpeedRegions } from "../document/timeline";
 import type { AxcutDocument } from "../schema";
-import { axcutSchemaVersion } from "../schema";
+import { axcutSchemaVersion, parseDocumentFile } from "../schema";
 import { useProjectStore } from "./projectStore";
 import { clearHistory, redo, undo } from "./undo";
 import { future, past } from "./undoStack";
@@ -742,6 +744,286 @@ describe("useTimeline.addAnnotation", () => {
 			id: (annotations[0] as { id: string }).id,
 		});
 	});
+
+	it("centres the new text box and puts it on a dark plate that reads on any page", async () => {
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addAnnotation();
+		});
+		const [annotation] = useProjectStore.getState().document?.annotations ?? [];
+		const { position, size } = annotation as {
+			position: { x: number; y: number };
+			size: { width: number; height: number };
+		};
+		expect([position.x + size.width / 2, position.y + size.height / 2]).toEqual([50, 50]);
+		expect(annotation.style.backgroundColor).toBe(DEFAULT_TEXT_PLATE);
+	});
+});
+
+// The Clear timeline button. Every edit region on every clip, one write; the content stays.
+describe("useTimeline.clearTimeline", () => {
+	type Timeline = ReturnType<typeof useTimeline>;
+	type EditKind = Exclude<RegionKind, "audio">;
+
+	// A Record rather than a list: a new region kind fails to compile here until this suite
+	// decides whether "Clear timeline" takes it. Each adder goes through the real hook, so
+	// every region is schema-valid by construction.
+	const addOf: Record<EditKind, (tl: Timeline) => Promise<unknown>> = {
+		zoom: (tl) => tl.addZoom(),
+		trim: (tl) => tl.addTrim(),
+		annotation: (tl) => tl.addAnnotation(),
+		speed: (tl) => tl.addSpeed(),
+		cameraFullscreen: (tl) => tl.addCameraFullscreen(),
+	};
+	const editKinds = Object.keys(addOf) as EditKind[];
+
+	const regionCounts = (doc: AxcutDocument | null | undefined): Record<EditKind, number> => {
+		const legacy = (doc?.legacyEditor ?? {}) as { cameraFullscreenRegions?: unknown[] };
+		return {
+			zoom: doc?.zoomRanges.length ?? 0,
+			trim: doc?.timeline.trimRanges.length ?? 0,
+			annotation: doc?.annotations.length ?? 0,
+			speed: doc ? readSpeedRegions(doc).length : 0,
+			cameraFullscreen: legacy.cameraFullscreenRegions?.length ?? 0,
+		};
+	};
+	const noRegions: Record<EditKind, number> = {
+		zoom: 0,
+		trim: 0,
+		annotation: 0,
+		speed: 0,
+		cameraFullscreen: 0,
+	};
+
+	// A project holding everything that is NOT an edit: two clips, a webcam, an imported
+	// audio track, a transcript, captions, a pause, and settings in the legacy envelope.
+	const clipA = sampleDoc.timeline.clips[0];
+	const contentDoc: AxcutDocument = {
+		...sampleDoc,
+		assets: [
+			{
+				...sampleDoc.assets[0],
+				// Dimensions filled in so the hook's backfill probe has nothing to do.
+				cameraTrack: {
+					sourcePath: "/tmp/camera.webm",
+					startMs: 0,
+					offsetMs: 0,
+					visible: true,
+					width: 1280,
+					height: 720,
+				},
+			},
+			{
+				id: "audio_1",
+				kind: "audio",
+				label: "vo.mp3",
+				originalPath: "/tmp/vo.mp3",
+				durationSec: 30,
+				cameraTrack: null,
+			},
+		],
+		transcripts: [{ assetId: "asset_1", language: "en", segments: [], words: [] }],
+		timeline: {
+			...sampleDoc.timeline,
+			clips: [
+				clipA,
+				{
+					...clipA,
+					id: "clip_b",
+					sourceStartSec: 10,
+					sourceEndSec: 20,
+					timelineStartSec: 10,
+					timelineEndSec: 20,
+				},
+			],
+			muteRanges: [{ startSec: 3, endSec: 4, reason: "pause" }],
+			captionRanges: [{ startSec: 1, endSec: 2, reason: "caption" }],
+		},
+		audioTracks: [
+			{
+				id: "trk_1",
+				assetId: "audio_1",
+				kind: "voiceover",
+				startMs: 0,
+				endMs: 5000,
+				durationSec: 30,
+				offsetMs: 0,
+				gainDb: 0,
+				loop: false,
+				fadeInMs: 0,
+				fadeOutMs: 0,
+				muted: false,
+				label: "vo.mp3",
+				origin: "user",
+			},
+		],
+		legacyEditor: { aspectRatio: "16:9" },
+	};
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: contentDoc,
+			currentTimeSec: 1,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	const addEveryKind = async (result: { current: Timeline }) => {
+		for (const kind of editKinds) {
+			await act(async () => {
+				await addOf[kind](result.current);
+			});
+		}
+	};
+
+	it.each(editKinds)("clears a timeline holding only a %s region", async (kind) => {
+		const { result } = renderTimeline();
+		await act(async () => {
+			await addOf[kind](result.current);
+		});
+		expect(regionCounts(useProjectStore.getState().document)).toEqual({
+			...noRegions,
+			[kind]: 1,
+		});
+		// What the button's visibility reads: the stored regions, the same ones it clears.
+		expect(result.current.hasEditRegions).toBe(true);
+
+		await act(async () => {
+			await result.current.clearTimeline();
+		});
+		expect(regionCounts(useProjectStore.getState().document)).toEqual(noRegions);
+		expect(result.current.hasEditRegions).toBe(false);
+	});
+
+	// A trim whose carrying clip is gone is stored but not drawn: `coalescedTrimGroups` drops
+	// it from the lane, and loading accepts it (no schema rule ties `clipId` to a clip). The
+	// button follows the STORED regions, or it would hide while the action still had one to clear.
+	it("counts and clears a stored trim whose clip no longer exists, though no pill shows it", async () => {
+		const orphanDoc: AxcutDocument = {
+			...contentDoc,
+			timeline: {
+				...contentDoc.timeline,
+				trimRanges: [
+					{
+						id: "trim_orphan",
+						assetId: "asset_1",
+						clipId: "clip_gone",
+						startSec: 1,
+						endSec: 3,
+						reason: "",
+						origin: "user",
+					},
+				],
+			},
+		};
+		// Loading keeps it: the schema does not tie a trim's `clipId` to an existing clip.
+		expect(parseDocumentFile(orphanDoc).timeline.trimRanges).toHaveLength(1);
+		useProjectStore.setState({ document: orphanDoc });
+		const { result } = renderTimeline();
+		expect(result.current.hasEditRegions).toBe(true);
+
+		await act(async () => {
+			await result.current.clearTimeline();
+		});
+		expect(useProjectStore.getState().document?.timeline.trimRanges).toEqual([]);
+		expect(result.current.hasEditRegions).toBe(false);
+	});
+
+	it("clears every region kind at once and keeps clips, media, audio, captions and transcript", async () => {
+		const { result } = renderTimeline();
+		await addEveryKind(result);
+		const before = useProjectStore.getState().document;
+		expect(regionCounts(before)).toEqual({
+			zoom: 1,
+			trim: 1,
+			annotation: 1,
+			speed: 1,
+			cameraFullscreen: 1,
+		});
+
+		await act(async () => {
+			await result.current.clearTimeline();
+		});
+		const after = useProjectStore.getState().document;
+		expect(regionCounts(after)).toEqual(noRegions);
+		expect(after?.timeline.clips).toEqual(before?.timeline.clips);
+		expect(after?.timeline.clips).toHaveLength(2);
+		expect(after?.assets).toEqual(before?.assets);
+		expect(after?.audioTracks).toEqual(before?.audioTracks);
+		expect(after?.audioTracks).toHaveLength(1);
+		expect(after?.transcripts).toEqual(before?.transcripts);
+		expect(after?.timeline.captionRanges).toEqual(before?.timeline.captionRanges);
+		expect(after?.timeline.muteRanges).toEqual(before?.timeline.muteRanges);
+		expect((after?.legacyEditor as { aspectRatio?: string }).aspectRatio).toBe("16:9");
+	});
+
+	it("is one undo step: a single Ctrl+Z restores every region, redo clears them again", async () => {
+		const { result } = renderTimeline();
+		await addEveryKind(result);
+		const before = useProjectStore.getState().document;
+		const stepsBefore = past.length;
+
+		await act(async () => {
+			await result.current.clearTimeline();
+		});
+		expect(past).toHaveLength(stepsBefore + 1);
+
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document).toEqual(before);
+		expect(regionCounts(useProjectStore.getState().document)).toEqual({
+			zoom: 1,
+			trim: 1,
+			annotation: 1,
+			speed: 1,
+			cameraFullscreen: 1,
+		});
+
+		act(() => {
+			expect(redo()).toBe(true);
+		});
+		expect(regionCounts(useProjectStore.getState().document)).toEqual(noRegions);
+	});
+
+	it("lets go of a selection that pointed at a region it just removed", async () => {
+		const { result } = renderTimeline();
+		// A fresh annotation is auto-selected.
+		await act(async () => {
+			await result.current.addAnnotation();
+		});
+		expect(result.current.selection?.kind).toBe("annotation");
+
+		await act(async () => {
+			await result.current.clearTimeline();
+		});
+		expect(result.current.selection).toBeNull();
+		expect(result.current.multiSelection).toEqual([]);
+	});
+
+	it("writes nothing when the timeline holds no edit region, whatever else it holds", async () => {
+		const { result } = renderTimeline();
+		// Audio track, captions and clips are all there, and none of them is an edit.
+		expect(result.current.hasEditRegions).toBe(false);
+		await act(async () => {
+			await result.current.clearTimeline();
+		});
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+		expect(past).toHaveLength(0);
+	});
 });
 
 describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
@@ -789,11 +1071,11 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 	it("sets a 3D rotation preset on the region", async () => {
 		const { result } = renderTimeline();
 		await act(async () => {
-			await result.current.updateZoomRotation("zoom_a", "iso");
+			await result.current.updateZoomRotation("zoom_a", "left");
 		});
 		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
 			id: "zoom_a",
-			rotationPreset: "iso",
+			rotationPreset: "left",
 		});
 	});
 
@@ -802,7 +1084,7 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 		// optional and the native side treats anything unrecognised as zero rotation.
 		const { result } = renderTimeline();
 		await act(async () => {
-			await result.current.updateZoomRotation("zoom_a", "iso");
+			await result.current.updateZoomRotation("zoom_a", "left");
 		});
 		await act(async () => {
 			await result.current.updateZoomRotation("zoom_a", undefined);
@@ -828,13 +1110,13 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 		// One control, one field: a moving camera replaces a fixed angle instead of stacking on it.
 		const { result } = renderTimeline();
 		await act(async () => {
-			await result.current.updateZoomRotation("zoom_a", "iso");
+			await result.current.updateZoomRotation("zoom_a", "left");
 		});
 		await act(async () => {
-			await result.current.updateZoomRotation("zoom_a", "follow-cursor");
+			await result.current.updateZoomRotation("zoom_a", "orbit");
 		});
 		const zoom = useProjectStore.getState().document?.zoomRanges[0];
-		expect(zoom?.rotationPreset).toBe("follow-cursor");
+		expect(zoom?.rotationPreset).toBe("orbit");
 		expect(zoom).not.toHaveProperty("cameraMotion");
 	});
 
@@ -849,19 +1131,6 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 			await result.current.updateZoomHideCursor("zoom_a", false);
 		});
 		expect(useProjectStore.getState().document?.zoomRanges[0].hideCursor).toBeUndefined();
-	});
-
-	it("updates clickImpact on a zoom region and drops the key when off", async () => {
-		const { result } = renderTimeline();
-		await act(async () => {
-			await result.current.updateZoomClickImpact("zoom_a", true);
-		});
-		expect(useProjectStore.getState().document?.zoomRanges[0].clickImpact).toBe(true);
-
-		await act(async () => {
-			await result.current.updateZoomClickImpact("zoom_a", false);
-		});
-		expect(useProjectStore.getState().document?.zoomRanges[0].clickImpact).toBeUndefined();
 	});
 
 	it("rolls a live focus edit back when its commit cannot be saved", async () => {
@@ -984,6 +1253,8 @@ describe("useTimeline is not re-rendered by playhead ticks", () => {
 		expect(useProjectStore.getState().document?.zoomRanges.at(-1)).toMatchObject({
 			startMs: 4200,
 			endMs: 6200,
+			// Framing what the pointer does, not the middle of the screen.
+			focusMode: "auto",
 		});
 	});
 
@@ -1087,7 +1358,7 @@ describe("useTimeline save failures", () => {
 		let added: number | undefined;
 		await act(async () => {
 			added = await result.current.addZoomsBulk([
-				{ span: { start: 1000, end: 2000 }, focus: { cx: 0.5, cy: 0.5 } },
+				{ span: { start: 1000, end: 2000 }, focus: { cx: 0.5, cy: 0.5 }, depth: 3 },
 			]);
 		});
 
@@ -1220,6 +1491,447 @@ describe("useTimeline undo history", () => {
 			expect(redo()).toBe(true);
 		});
 		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(2);
+	});
+
+	// Holds the first document save until the test releases it; every later one lands at once.
+	const gateFirstSave = () => {
+		const gate: { release?: () => void } = {};
+		let calls = 0;
+		bridgeMocks.save.mockImplementation(async (doc: AxcutDocument) => {
+			calls += 1;
+			if (calls === 1) {
+				await new Promise<void>((resolve) => {
+					gate.release = resolve;
+				});
+			}
+			return { success: true, document: doc };
+		});
+		return gate;
+	};
+
+	it("lands rapid zoom-level steps in order, one undo step each", async () => {
+		seed(docWithZoom);
+		const gate = gateFirstSave();
+		const { result } = renderTimeline();
+
+		const p4 = result.current.updateZoomDepth("zoom_a", 4);
+		const p5 = result.current.updateZoomDepth("zoom_a", 5);
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		await act(async () => {
+			gate.release?.();
+			await Promise.all([p4, p5]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(5);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(4);
+	});
+
+	// A custom scale overrides the depth, so a preset that left it in place would change a
+	// field the render never reads.
+	it("clamps a custom zoom level to the renderer's range, and a preset clears it", async () => {
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+
+		await act(async () => {
+			await result.current.updateZoomCustomScale("zoom_a", 9);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.customScale).toBe(5);
+
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 4);
+		});
+		const zoom = useProjectStore.getState().document?.zoomRanges[0];
+		expect(zoom?.depth).toBe(4);
+		expect(zoom?.customScale).toBeUndefined();
+	});
+
+	it("keeps a pending zoom level when the 3D tilt is changed before it lands", async () => {
+		seed(docWithZoom);
+		const gate = gateFirstSave();
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		const pRotation = result.current.updateZoomRotation("zoom_a", "left");
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		await act(async () => {
+			gate.release?.();
+			await Promise.all([pDepth, pRotation]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 4,
+			rotationPreset: "left",
+		});
+	});
+
+	// A resize built its save from the render's document, outside the zoom chain: whichever of
+	// the two saves landed last put the other's field back.
+	it("keeps a pending zoom level when the pill is resized before it lands", async () => {
+		seed(docWithZoom);
+		const gate = gateFirstSave();
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		const pSpan = result.current.updateZoomSpan("zoom_a", 1500, 3500);
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		await act(async () => {
+			gate.release?.();
+			await Promise.all([pDepth, pSpan]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 4,
+			startMs: 1500,
+			endMs: 3500,
+		});
+	});
+
+	// The inspector's "Reset focus point" is a live write and its commit in one click, next to
+	// the level buttons. The level landing first also takes the live focus off screen, so the
+	// commit has to put it back on top rather than save what it finds.
+	it("keeps a pending zoom level when a focus is committed before it lands", async () => {
+		seed(docWithZoom);
+		const gate = gateFirstSave();
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+		const pCommit = result.current.commitZoomFocus();
+		await act(async () => {
+			gate.release?.();
+			await Promise.all([pDepth, pCommit]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 4,
+			focus: { cx: 0.8, cy: 0.2 },
+		});
+		// One undo step each, the focus first.
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 4,
+			focus: { cx: 0.5, cy: 0.5 },
+		});
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
+	});
+
+	// The commit's focus is put back only over a write of its own epoch. A drag abandoned
+	// (`ZoomFocusOverlay` unmounts when the focus mode flips to auto) and then undone must stay
+	// undone when a bare commit (`endDrag` with nothing in front of it) comes later.
+	it("does not put an abandoned drag's focus back after an undo", async () => {
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 4);
+		});
+		act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(future).toHaveLength(1);
+
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.focus).toEqual({
+			cx: 0.5,
+			cy: 0.5,
+		});
+		expect(future).toHaveLength(1);
+	});
+
+	// A zoom write that runs while a focus drag is on screen saves the dragged focus too, so the
+	// commit finds nothing left to record. That write's undo step has to reach back to before
+	// the drag, or no Ctrl+Z could ever bring the old focus back.
+	it("undoes a focus drag with the zoom write that saved it", async () => {
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 4);
+		});
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 3,
+			focus: { cx: 0.5, cy: 0.5 },
+		});
+	});
+
+	// Rebase-review finding (queued zoom writes vs. document replacement): a zoom write
+	// queued behind a still-pending one starts AFTER an undo has restored the document,
+	// and must not apply its stale patch to the replacement. The in-flight write itself
+	// is dropped by `saveDocument`'s epoch check; the queued one is the hole.
+	it("drops a queued zoom write that starts after an undo replaces the document", async () => {
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+		// One settled write so the undo has a recorded state to restore.
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 4);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(4);
+
+		const gate = gateFirstSave();
+		const pRotation = result.current.updateZoomRotation("zoom_a", "left");
+		const pCursor = result.current.updateZoomHideCursor("zoom_a", true);
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		let undid = false;
+		act(() => {
+			undid = undo();
+		});
+		expect(undid).toBe(true);
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
+
+		await act(async () => {
+			gate.release?.();
+			await Promise.allSettled([pRotation, pCursor]);
+		});
+
+		// The undo's result stands; neither queued write landed on the restored document.
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({ depth: 3 });
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.rotationPreset).toBeUndefined();
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.hideCursor).toBeUndefined();
+	});
+
+	// Same finding through the project-switch path: `loadProject` replaces projectId and
+	// document without superseding the queue, and project B deliberately contains the same
+	// region id, so a stale patch must not escape detection by id coincidence.
+	it("drops queued zoom writes when a project switch replaces the document", async () => {
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+		const projectB: AxcutDocument = {
+			...docWithZoom,
+			project: { ...docWithZoom.project, id: "proj_b", title: "Project B" },
+			zoomRanges: [{ ...docWithZoom.zoomRanges[0]!, depth: 2 }],
+		};
+
+		const gate = gateFirstSave();
+		const pRotation = result.current.updateZoomRotation("zoom_a", "left");
+		const pCursor = result.current.updateZoomHideCursor("zoom_a", true);
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		bridgeMocks.get.mockResolvedValue({ success: true, document: projectB });
+		await act(async () => {
+			await useProjectStore.getState().loadProject("proj_b");
+		});
+		expect(useProjectStore.getState().projectId).toBe("proj_b");
+
+		await act(async () => {
+			gate.release?.();
+			await Promise.allSettled([pRotation, pCursor]);
+		});
+
+		// Project B's own zoom_a is untouched by the stale project-A queue.
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			id: "zoom_a",
+			depth: 2,
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.rotationPreset).toBeUndefined();
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.hideCursor).toBeUndefined();
+	});
+
+	// Rebase-review finding (stalled save blocks the zoom queue): while one zoom save's
+	// answer is unknown (bridge never settles), later zoom-pane writes must not queue
+	// behind it forever — they are refused until the unknown save settles, then work
+	// again. The refusal is the safe half: the unknown save may still land, so racing
+	// it would recreate the stale-document overwrite this chain exists to prevent.
+	it("refuses zoom writes while a save is unknown and recovers when it settles", async () => {
+		seed(docWithZoom);
+		vi.useFakeTimers();
+		try {
+			let hungDoc: AxcutDocument | undefined;
+			let releaseHungSave: (result: { success: boolean; document: AxcutDocument }) => void;
+			bridgeMocks.save.mockImplementation((doc: AxcutDocument) => {
+				hungDoc = doc;
+				return new Promise((resolve) => {
+					releaseHungSave = (result) => {
+						// Settle this one call only; later saves answer immediately.
+						bridgeMocks.save.mockImplementation(async (next: AxcutDocument) => ({
+							success: true,
+							document: next,
+						}));
+						resolve(result);
+					};
+				});
+			});
+			const { result } = renderTimeline();
+
+			let depthOk: boolean | undefined;
+			act(() => {
+				void result.current.updateZoomDepth("zoom_a", 4).then((ok) => {
+					depthOk = ok;
+				});
+			});
+			// Deadline passes with the bridge still silent: the write's result is unknown,
+			// reported to the caller as not-taken, and the document is left alone.
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(10_000);
+			});
+			expect(depthOk).toBe(false);
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
+
+			// A later zoom write is refused while that save is still unknown.
+			let rotationOk: boolean | undefined;
+			await act(async () => {
+				rotationOk = await result.current.updateZoomRotation("zoom_a", "left");
+			});
+			expect(rotationOk).toBe(false);
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.rotationPreset).toBeUndefined();
+
+			// The unknown save settles late — it may land — and the refusal clears.
+			await act(async () => {
+				releaseHungSave({ success: true, document: hungDoc! });
+				for (let i = 0; i < 20; i++) await Promise.resolve();
+			});
+			await act(async () => {
+				await result.current.updateZoomDepth("zoom_a", 5);
+			});
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(5);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// A focus commit out of time leaves the zoom chain, but its save can still fail. The drag
+	// must come off screen then, as for any failed commit, or a later save persists it.
+	it("rolls a focus drag back when its commit fails after the deadline", async () => {
+		seed(docWithZoom);
+		vi.useFakeTimers();
+		try {
+			let failHungSave: () => void;
+			bridgeMocks.save.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						failHungSave = () => resolve({ success: false, error: "disk full" });
+					}),
+			);
+			const { result } = renderTimeline();
+
+			act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+			act(() => {
+				void result.current.commitZoomFocus();
+			});
+			// No answer by the deadline: the save may still land, so the drag stays.
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(10_000);
+			});
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.focus).toEqual({
+				cx: 0.8,
+				cy: 0.2,
+			});
+
+			await act(async () => {
+				failHungSave();
+				for (let i = 0; i < 20; i++) await Promise.resolve();
+			});
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.focus).toEqual({
+				cx: 0.5,
+				cy: 0.5,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// Rebase-review follow-up (unknown save × replacement): the refusal must not outlive
+	// its reason. Once an undo bumps the epoch, the stuck save can no longer install
+	// anything (`saveDocument` drops it), so it must stop blocking zoom writes — even if
+	// the bridge never answers. A project switch does NOT bump the epoch, so there the
+	// stuck save can still land and the refusal correctly stays.
+	it("stops refusing zoom writes once a replacement makes the unknown save unable to land", async () => {
+		seed(docWithZoom);
+		vi.useFakeTimers();
+		try {
+			let hungDoc: AxcutDocument | undefined;
+			let releaseHungSave: (result: { success: boolean; document: AxcutDocument }) => void = () => {
+				// replaced once the hung save registers
+			};
+			let saveCalls = 0;
+			bridgeMocks.save.mockImplementation((doc: AxcutDocument) => {
+				saveCalls += 1;
+				if (saveCalls === 2) {
+					// The write whose answer never comes; the test never releases it until
+					// the very end, and then only to prove the epoch guard drops it.
+					hungDoc = doc;
+					return new Promise((resolve) => {
+						releaseHungSave = resolve;
+					});
+				}
+				return Promise.resolve({ success: true, document: doc });
+			});
+			const { result } = renderTimeline();
+
+			// One settled write so the undo has a recorded state to restore.
+			await act(async () => {
+				await result.current.updateZoomDepth("zoom_a", 4);
+			});
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(4);
+
+			let depthOk: boolean | undefined;
+			act(() => {
+				void result.current.updateZoomDepth("zoom_a", 5).then((ok) => {
+					depthOk = ok;
+				});
+			});
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(10_000);
+			});
+			expect(depthOk).toBe(false);
+
+			// The undo replaces the document; the stuck save can no longer install it.
+			let undid = false;
+			act(() => {
+				undid = undo();
+			});
+			expect(undid).toBe(true);
+
+			// Zoom writes must work again on the restored document.
+			await act(async () => {
+				const ok = await result.current.updateZoomDepth("zoom_a", 5);
+				expect(ok).toBe(true);
+			});
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(5);
+
+			// When the stuck save finally settles, the epoch guard drops it — the restored
+			// (and since re-edited) document stands.
+			await act(async () => {
+				releaseHungSave({ success: true, document: hungDoc! });
+				for (let i = 0; i < 20; i++) await Promise.resolve();
+			});
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(5);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("resolves a zoom-level write with whether the save took effect", async () => {
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+		bridgeMocks.save.mockResolvedValueOnce({ success: false, error: "read-only" });
+
+		let ok: boolean | undefined;
+		await act(async () => {
+			ok = await result.current.updateZoomDepth("zoom_a", 4);
+		});
+
+		expect(ok).toBe(false);
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
 	});
 
 	it("leaves no undo step behind a focus drag whose commit failed", async () => {
@@ -1580,7 +2292,8 @@ describe("useTimeline audio tracks", () => {
 		act(() => {
 			expect(undo()).toBe(true);
 		});
-		expect(useProjectStore.getState().document?.audioTracks[0]?.gainDb).toBe(0);
+		// Back to the level a new music bed is placed at.
+		expect(useProjectStore.getState().document?.audioTracks[0]?.gainDb).toBe(-18);
 	});
 
 	it("clamps a track to the content under it, like every other anchored region", async () => {
@@ -1831,7 +2544,7 @@ describe("useTimeline.addZoomsBulk reads the document at write time", () => {
 		let added: number | undefined;
 		await act(async () => {
 			added = await addZoomsBulk([
-				{ span: { start: 1000, end: 2000 }, focus: { cx: 0.5, cy: 0.5 } },
+				{ span: { start: 1000, end: 2000 }, focus: { cx: 0.5, cy: 0.5 }, depth: 3 },
 			]);
 		});
 
@@ -1865,7 +2578,7 @@ describe("useTimeline.addZoomsBulk reads the document at write time", () => {
 		let added: number | undefined;
 		await act(async () => {
 			added = await addZoomsBulk([
-				{ span: { start: 1000, end: 2000 }, focus: { cx: 0.5, cy: 0.5 } },
+				{ span: { start: 1000, end: 2000 }, focus: { cx: 0.5, cy: 0.5 }, depth: 3 },
 			]);
 		});
 

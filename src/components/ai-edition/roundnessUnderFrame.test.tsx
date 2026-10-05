@@ -57,11 +57,52 @@ describe("Roundness under a frame", () => {
 		expect(within(cellOf(slider)).getByText("50%")).toBeInTheDocument();
 		expect(slider).toHaveAttribute(
 			"title",
-			"The range adapts to the frame: 100% is its roundest good look.",
+			"The range depends on the frame. 100% is the roundest that still looks good.",
 		);
 
 		fireEvent.change(slider, { target: { value: "100" } });
 		fireEvent.mouseUp(slider);
 		await waitFor(() => expect(storedRadius()).toBe(64));
+	});
+});
+
+describe("Roundness at zero padding", () => {
+	const padding = () => screen.getByRole("slider", { name: "Padding" });
+	const roundness = () => screen.queryByRole("slider", { name: "Roundness" });
+
+	it("keeps its row through a drag to 0 and leaves on release", () => {
+		// Dropped mid-drag, the row shrank a pane scrolled to its end, whose scroll then
+		// clamped and slid the padding slider away from the pointer dragging it.
+		mount({ padding: 30, borderRadius: 20 });
+		fireEvent.change(padding(), { target: { value: "0" } });
+		expect(roundness()).toBeInTheDocument();
+		fireEvent.mouseUp(padding());
+		expect(roundness()).not.toBeInTheDocument();
+	});
+
+	it("stays under a frame, whose footage keeps its corners at 0%", () => {
+		mount({ padding: 0, borderRadius: 20, frame: "laptop" });
+		expect(roundness()).toBeInTheDocument();
+	});
+
+	it("leaves on a cancelled touch as on a release", () => {
+		mount({ padding: 30, borderRadius: 20 });
+		fireEvent.change(padding(), { target: { value: "0" } });
+		fireEvent.touchCancel(padding());
+		expect(roundness()).not.toBeInTheDocument();
+	});
+
+	it("comes back with its value, on the release of a drag up from 0", () => {
+		// Added mid-drag, the row could tip the pane into overflow, and the scrollbar that came
+		// with it narrowed the pane and moved the slider under the pointer.
+		mount({ padding: 30, borderRadius: 20 });
+		fireEvent.change(padding(), { target: { value: "0" } });
+		fireEvent.mouseUp(padding());
+		expect(storedRadius()).toBe(20);
+
+		fireEvent.change(padding(), { target: { value: "10" } });
+		expect(roundness()).not.toBeInTheDocument();
+		fireEvent.mouseUp(padding());
+		expect(roundness()).toHaveValue("20");
 	});
 });

@@ -21,6 +21,8 @@ type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
 
 interface PreviewProps {
 	hasProject: boolean;
+	/** Handed to the empty state, whose first action becomes "Record your screen". */
+	onRecord?: () => void;
 	hasAsset: boolean;
 	videoSources: VideoSource[];
 	/** `document.project.primaryAssetId`, when the project has one. Read only while
@@ -44,8 +46,7 @@ interface PreviewProps {
 	annotationRegions?: AxcutAnnotationRegion[];
 	selectedAnnotationId?: string | null;
 	onSelectAnnotation?: (id: string) => void;
-	onAnnotationPositionChange?: (id: string, position: { x: number; y: number }) => void;
-	onAnnotationSizeChange?: (id: string, size: { width: number; height: number }) => void;
+	onAnnotationChange?: (id: string, patch: Partial<AxcutAnnotationRegion>) => void;
 	onAnnotationBlurDataChange?: (id: string, blurData: BlurData) => void;
 	onAnnotationCommit?: () => void;
 	seekTarget: { timeSec: number; requestId: number } | null;
@@ -62,6 +63,7 @@ interface PreviewProps {
 
 export function Preview({
 	hasProject,
+	onRecord,
 	hasAsset,
 	videoSources,
 	primaryAssetId,
@@ -79,8 +81,7 @@ export function Preview({
 	annotationRegions,
 	selectedAnnotationId,
 	onSelectAnnotation,
-	onAnnotationPositionChange,
-	onAnnotationSizeChange,
+	onAnnotationChange,
 	onAnnotationBlurDataChange,
 	onAnnotationCommit,
 	seekTarget,
@@ -223,8 +224,7 @@ export function Preview({
 						annotationRegions={annotationRegions}
 						selectedAnnotationId={selectedAnnotationId}
 						onSelectAnnotation={onSelectAnnotation}
-						onAnnotationPositionChange={onAnnotationPositionChange}
-						onAnnotationSizeChange={onAnnotationSizeChange}
+						onAnnotationChange={onAnnotationChange}
 						onAnnotationBlurDataChange={onAnnotationBlurDataChange}
 						onAnnotationCommit={onAnnotationCommit}
 						seekTarget={seekTarget}
@@ -244,7 +244,7 @@ export function Preview({
 					{failure ? <PreviewErrorCard detail={failure.detail} onRetry={handleRetry} /> : null}
 				</>
 			) : (
-				<EditorEmptyState hasProject={hasProject} />
+				<EditorEmptyState hasProject={hasProject} onRecord={onRecord} />
 			)}
 		</section>
 	);

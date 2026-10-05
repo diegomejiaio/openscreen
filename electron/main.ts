@@ -5,14 +5,12 @@ import {
 	app,
 	BrowserWindow,
 	clipboard,
-	dialog,
 	ipcMain,
 	Menu,
 	nativeImage,
 	net,
 	session,
 	shell,
-	systemPreferences,
 	Tray,
 } from "electron";
 import { ShortcutBinding } from "../src/lib/shortcuts";
@@ -23,6 +21,7 @@ import {
 	PRODUCT_NAME,
 	usesNativeAboutPanel,
 } from "./about";
+import { AppSettingsStore } from "./app-settings";
 import {
 	blockedFromInstalling,
 	checkForSelfUpdate,
@@ -59,7 +58,16 @@ import {
 	getSelectedDesktopSource,
 	registerIpcHandlers,
 } from "./ipc/handlers";
+import { isOnlyLingeringOverlay } from "./lingeringOverlay";
 import { installMainProcessErrorGuards } from "./main-process-errors";
+import { showMessageBoxOver } from "./messageBox";
+import {
+	registerPermissionsIpc,
+	showPermissionsWindow,
+	showPermissionsWindowIfNeeded,
+} from "./permissions";
+import { setDisplaySleepBlocked } from "./recording/displaySleepBlocker";
+import { offersStarPrompt, REPO_URL, storeReviewUrl } from "./star-prompt";
 import { registerSttIpc, shutdownStt } from "./stt";
 import { checkLatestRelease } from "./update-checker";
 import { loadUpdateMode, saveUpdateMode } from "./update-settings";
@@ -231,10 +239,21 @@ function setupApplicationMenu() {
 					role: "about",
 					label: mainT("common", "actions.about") || "About OpenScreen",
 				},
+				{
+					label: mainT("common", "actions.permissions") || "Permissions…",
+					click: showPermissionsWindow,
+				},
 				{ type: "separator" as const },
 				{
 					label: mainT("common", "actions.saveDiagnostics") || "Save Diagnostics",
 					click: runSaveDiagnostics,
+				},
+				// Permanent and unconditional, unlike the update check below: a link to the repo
+				// is the one thing every channel may show, the Store included. Not in the tray,
+				// which is the recording surface — nothing asks for a favour mid-take.
+				{
+					label: mainT("common", "actions.starOnGithub") || "Star on GitHub",
+					click: runStarOnGithub,
 				},
 				// Omitted entirely — here, in the Help menu and in the tray — where a package
 				// manager owns the update. See `canOfferUpdateCheck`.
@@ -399,6 +418,10 @@ function setupApplicationMenu() {
 					label: mainT("common", "actions.saveDiagnostics") || "Save Diagnostics",
 					click: runSaveDiagnostics,
 				},
+				{
+					label: mainT("common", "actions.starOnGithub") || "Star on GitHub",
+					click: runStarOnGithub,
+				},
 			],
 		});
 	}
@@ -457,14 +480,15 @@ function channelAllowsUpdateCheck(): boolean {
 /** Message boxes must be owned by a window. The HUD is `alwaysOnTop` and `skipTaskbar`
  *  (electron/windows.ts), so an unowned dialog opens *behind* it on Windows and most Linux
  *  WMs, with no taskbar entry to recover it — the user sees a button flash and nothing else.
- *  Mirrors what ipc/handlers.ts already does for its own dialogs. */
+ *  Mirrors what ipc/handlers.ts already does for its own dialogs. On macOS the HUD is
+ *  skipped as an owner (see messageBox.ts). */
 function showMessageBox(options: Electron.MessageBoxOptions) {
 	const visible = (win: BrowserWindow | null) =>
 		win && !win.isDestroyed() && win.isVisible() ? win : null;
 	// A modal owned by a hidden window may never be drawn, so an unowned dialog is the safer
 	// fallback when the HUD has been closed to the tray.
 	const parent = visible(BrowserWindow.getFocusedWindow()) ?? visible(mainWindow);
-	return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+	return showMessageBoxOver(parent, options);
 }
 
 function aboutFacts(): AboutFacts {
@@ -539,6 +563,13 @@ async function presentAboutDialog() {
 function runAboutDialog() {
 	showAboutDialog().catch((error) => {
 		console.error("[about] dialog failed", error);
+	});
+}
+
+/** Menu, tray and renderer all end up here, so the link cannot drift between them. */
+function runStarOnGithub() {
+	shell.openExternal(REPO_URL).catch((error) => {
+		console.error("[star] could not open the repo page", error);
 	});
 }
 
@@ -923,6 +954,14 @@ function updateTrayMenu(recording: boolean = false) {
 					label: mainT("common", "actions.saveDiagnostics") || "Save Diagnostics",
 					click: runSaveDiagnostics,
 				},
+				...(isMac
+					? [
+							{
+								label: mainT("common", "actions.permissions") || "Permissions…",
+								click: showPermissionsWindow,
+							},
+						]
+					: []),
 				{ type: "separator" as const },
 				{
 					label: mainT("common", "actions.quit") || "Quit",
@@ -1050,6 +1089,17 @@ function createCountdownOverlayWindowWrapper() {
 if (!cliCommand) {
 	app.on("window-all-closed", () => {
 		app.quit();
+	});
+	// The countdown overlay hides between takes instead of closing, so it would keep
+	// `window-all-closed` from ever firing (#961). Close it with the last other window. Every
+	// HUD/editor switch opens the next window before the previous one's `closed` arrives, so
+	// this only fires when the user really closed the last one.
+	app.on("browser-window-created", (_, win) => {
+		win.once("closed", () => {
+			if (isOnlyLingeringOverlay(BrowserWindow.getAllWindows(), countdownOverlayWindow)) {
+				countdownOverlayWindow?.close();
+			}
+		});
 	});
 }
 
@@ -1182,25 +1232,11 @@ appReady?.then(async () => {
 		});
 	}
 
-	// Request mic permission now. Screen Recording is requested lazily from the
-	// source-picker action so its prompt isn't hidden behind the selector window.
-	//
-	// NOT awaited, on purpose. `askForMediaAccess` resolves only once the user
-	// answers the modal TCC prompt, and `createWindow()` is 70 lines below this in
-	// the same async block — so on a Mac where the microphone is still
-	// `not-determined` (every first run, and every fresh dev machine) the app
-	// showed a permission dialog with NO window behind it and created the HUD only
-	// after it was dismissed. Nothing between here and `createWindow()` needs the
-	// answer: the recorder re-checks the status when the user actually arms the mic.
-	if (process.platform === "darwin") {
-		const micStatus = systemPreferences.getMediaAccessStatus("microphone");
-		if (micStatus !== "granted") {
-			systemPreferences
-				.askForMediaAccess("microphone")
-				.then((granted) => console.info(`[permissions] microphone granted=${granted}`))
-				.catch((error) => console.warn("[permissions] microphone request failed:", error));
-		}
-	}
+	// No permission is requested at launch. Screen Recording, Accessibility, the microphone
+	// and the camera are all gathered in the permissions window (electron/permissions),
+	// opened below when recording cannot work yet; the microphone and camera are also
+	// requested at the moment a take first uses them.
+	registerPermissionsIpc();
 
 	ipcMain.on("hud-overlay-close", () => {
 		app.quit();
@@ -1233,6 +1269,55 @@ appReady?.then(async () => {
 	// Without this, that menu would keep offering a check mid-recording that the handler below
 	// then silently refuses.
 	ipcMain.handle("can-check-for-updates-now", () => canOfferUpdateCheck());
+
+	// The one-time star ask. Decided here, not in the renderer, for the same reason the update
+	// check is: the take flag and the install channel live in this file, and a rule enforced in
+	// two places is a rule that gets asked two different ways. The renderer learns yes or no —
+	// never the counters behind it, which stay on disk and are reported nowhere.
+	//
+	// Its own store instance: `AppSettingsStore` is a stateless wrapper around one JSON file, so
+	// this costs a path string, and the alternative is threading ipc/handlers.ts' instance out
+	// through a module that has no other reason to export it.
+	const starPromptSettings = new AppSettingsStore(app.getPath("userData"));
+
+	ipcMain.handle("star-prompt:export-finished", () => {
+		const { successfulExports, dismissed } = starPromptSettings.recordSuccessfulExport();
+		return {
+			offer: offersStarPrompt({
+				successfulExports,
+				dismissed,
+				recording: isRecording,
+				// Every handler in this file is registered inside `appReady`, which the CLI boot
+				// path never reaches, so this is the second lock on a shut door — see the note on
+				// `headless` in star-prompt.ts.
+				headless: cliCommand !== null,
+			}),
+			// Drives which links the prompt shows. A Store copy must not be pointed at Releases
+			// or at an .exe, so it is offered the repo root and the Store's own review page.
+			store: getInstallChannel() === "store",
+		};
+	});
+
+	// Opening the repo goes through main like the Store link does, so the renderer holds no URL
+	// at all and every surface that offers a star opens the same one.
+	ipcMain.handle("star-prompt:open-repo", () => {
+		runStarOnGithub();
+	});
+
+	// Starring and declining are the same answer to this handler: the ask is over either way.
+	ipcMain.handle("star-prompt:dismiss", () => {
+		starPromptSettings.dismissStarPrompt();
+	});
+
+	// The deep link is built in the main process and never crosses the IPC boundary as a string.
+	// `open-external-url` allows http/https/mailto only — deliberately, because handing the OS a
+	// custom scheme from a renderer that runs with `webSecurity:false` is a launch primitive —
+	// and one fixed URL is not a reason to widen that.
+	ipcMain.handle("star-prompt:open-store-review", async () => {
+		if (getInstallChannel() !== "store") return { success: false };
+		await shell.openExternal(storeReviewUrl());
+		return { success: true };
+	});
 
 	// The editor's app menu opens the SAME About box the native menu and the tray do, rather
 	// than rendering its own panel: the version block exists to be pasted into a bug report,
@@ -1288,7 +1373,7 @@ appReady?.then(async () => {
 		showMainWindow();
 	}
 
-	registerIpcHandlers(
+	const { mcpController } = registerIpcHandlers(
 		createEditorWindowWrapper,
 		createSourceSelectorWindowWrapper,
 		createCountdownOverlayWindowWrapper,
@@ -1300,6 +1385,7 @@ appReady?.then(async () => {
 		(recording: boolean, sourceName: string) => {
 			selectedSourceName = sourceName;
 			isRecording = recording;
+			setDisplaySleepBlocked(recording);
 			if (!tray) createTray();
 			updateTrayMenu(recording);
 			// `canOfferUpdateCheck()` now answers "not mid-take" too, and the app/Help menus are
@@ -1332,4 +1418,10 @@ appReady?.then(async () => {
 	}
 
 	createWindow();
+	// Off unless the user turned it on in Settings → AI. Started here rather than
+	// in registerIpcHandlers so neither the headless CLI nor a bench run binds it.
+	void mcpController.startIfEnabled();
+	void showPermissionsWindowIfNeeded().catch((error) =>
+		console.warn("[permissions] could not read the permissions at launch:", error),
+	);
 });

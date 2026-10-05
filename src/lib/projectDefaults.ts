@@ -1,3 +1,5 @@
+import type { CursorKind } from "./cursor/cursorThemes";
+
 /**
  * The frame drawn around the recording, a project setting like the wallpaper. "none" draws
  * nothing and renders exactly as before the setting existed.
@@ -64,26 +66,151 @@ export function readRecordingFrame(
 	return isRecordingFrame(value) ? { frame: value } : null;
 }
 
+/**
+ * Where the picture-in-picture camera sits: a corner or the middle of an edge, always the
+ * same distance from the border of the frame. Never a free position: a camera dropped
+ * anywhere else ended up against an edge or over the middle of the screen.
+ */
+export const WEBCAM_ANCHORS = [
+	"top-left",
+	"top",
+	"top-right",
+	"left",
+	"right",
+	"bottom-left",
+	"bottom",
+	"bottom-right",
+] as const;
+
+export type WebcamAnchor = (typeof WEBCAM_ANCHORS)[number];
+
+export function isWebcamAnchor(value: unknown): value is WebcamAnchor {
+	return (WEBCAM_ANCHORS as readonly unknown[]).includes(value);
+}
+
+/** The anchor grid, row by row. The middle cell is no place for a camera. */
+export const WEBCAM_ANCHOR_GRID = [
+	["top-left", "top", "top-right"],
+	["left", null, "right"],
+	["bottom-left", "bottom", "bottom-right"],
+] as const satisfies readonly (readonly (WebcamAnchor | null)[])[];
+
+/**
+ * The anchor nearest a point of the frame, in fractions of it: the cell of a 3x3 grid, and
+ * from the middle cell the nearer edge. What the camera snaps to when it is dragged, and what
+ * a free position stored by an older build reads as.
+ */
+export function webcamAnchorAt(cx: number, cy: number): WebcamAnchor {
+	const cell = (v: number) => (v < 1 / 3 ? 0 : v > 2 / 3 ? 2 : 1);
+	let col = cell(cx);
+	let row = cell(cy);
+	if (col === 1 && row === 1) {
+		if (Math.abs(cy - 0.5) >= Math.abs(cx - 0.5)) row = cy < 0.5 ? 0 : 2;
+		else col = cx < 0.5 ? 0 : 2;
+	}
+	return WEBCAM_ANCHOR_GRID[row][col] ?? "bottom-right";
+}
+
+/** An anchor as the share of the free room the camera leaves it, per axis: 0, 0.5 or 1. */
+export function webcamAnchorFractions(anchor: WebcamAnchor): [number, number] {
+	const fx = anchor.endsWith("left") ? 0 : anchor.endsWith("right") ? 1 : 0.5;
+	const fy = anchor.startsWith("top") ? 0 : anchor.startsWith("bottom") ? 1 : 0.5;
+	return [fx, fy];
+}
+
+/** Reads a stored anchor, falling back to the free `{ cx, cy }` position older builds stored. */
+export function readWebcamAnchor(anchor: unknown, legacyPosition: unknown): WebcamAnchor {
+	if (isWebcamAnchor(anchor)) return anchor;
+	const p = legacyPosition as { cx?: unknown; cy?: unknown } | null | undefined;
+	if (p && typeof p.cx === "number" && typeof p.cy === "number") {
+		return webcamAnchorAt(p.cx, p.cy);
+	}
+	return "bottom-right";
+}
+
+/**
+ * The camera's proportions: a square crop, or the camera's own ("rectangle", shown as
+ * "Original": a portrait camera stays portrait). Its roundness is a setting of its own,
+ * `webcamRoundness`.
+ */
+export type WebcamMask = "rectangle" | "square";
+
+/**
+ * The camera's corner rounding, 0 square to 1 fully round, as a fraction of half the camera's
+ * short side. A fraction, so the same value draws the same shape at any size and resolution;
+ * at 1 a square camera is a circle. Each proportion starts at its own: a square takes more
+ * rounding than a wide camera before it reads as a blob.
+ */
+export const DEFAULT_WEBCAM_ROUNDNESS: Record<WebcamMask, number> = { square: 0.7, rectangle: 0.4 };
+
+/** What a stored `rectangle` or `square` drew before the roundness was a setting. */
+const LEGACY_WEBCAM_ROUNDNESS = 0.3;
+
+/**
+ * The picture-in-picture camera's size, in percent of the frame's short side: the camera's
+ * long side, so a 16:9 camera at 60 is 34% of a 1080p frame's height. Below 15 a face no
+ * longer reads, and less still once a zoom shrinks it; older builds allowed 10, read back as 15.
+ */
+export const WEBCAM_SIZE_MIN = 15;
+export const WEBCAM_SIZE_MAX = 60;
+
+/**
+ * Reads a stored camera shape and roundness. `circle` and `rounded` were a proportion and a
+ * rounding folded into one value; they split here into the two settings, the way
+ * `readRecordingFrame` splits the old window themes. A stored roundness wins; with no shape
+ * stored at all, both are the factory default.
+ */
+export function readWebcamMask(
+	shape: unknown,
+	roundness: unknown,
+): { shape: WebcamMask; roundness: number } {
+	const proportion: WebcamMask =
+		shape === "square" || shape === "circle"
+			? "square"
+			: shape === "rectangle" || shape === "rounded"
+				? "rectangle"
+				: DEFAULT_PROJECT_APPEARANCE.webcamMaskShape;
+	const fromShape =
+		shape === "circle"
+			? 1
+			: shape === "rounded"
+				? 0.6
+				: shape === "rectangle" || shape === "square"
+					? LEGACY_WEBCAM_ROUNDNESS
+					: DEFAULT_WEBCAM_ROUNDNESS[proportion];
+	return {
+		shape: proportion,
+		roundness:
+			typeof roundness === "number" && Number.isFinite(roundness)
+				? Math.min(1, Math.max(0, roundness))
+				: fromShape,
+	};
+}
+
 export interface ProjectAppearanceDefaults {
 	wallpaper: string;
 	wallpaperMotion: "none" | "drift" | "aurora" | "waves";
 	frame: RecordingFrame;
 	/** Light or dark, for whichever frame is on. Inert with `frame: "none"`. */
 	frameTheme: FrameTheme;
-	aspectRatio: `${number}:${number}` | "native";
+	aspectRatio: `${number}:${number}` | "auto" | "native";
 	shadowIntensity: number;
-	showBlur: boolean;
+	/** 0 sharp to 1, how much the wallpaper behind the recording is blurred. */
+	backgroundBlur: number;
 	motionBlurAmount: number;
 	/** Defocus a 3D-tilted screen by its depth; inert on flat zooms. */
 	depthOfField: boolean;
 	borderRadius: number;
 	padding: number;
 	webcamLayoutPreset: "picture-in-picture" | "vertical-stack" | "dual-frame" | "no-webcam";
-	webcamMaskShape: "rectangle" | "circle" | "square" | "rounded";
+	/** The camera's proportions: cropped square or its own ("rectangle"). See `readWebcamMask`. */
+	webcamMaskShape: WebcamMask;
+	/** 0 square corners to 1 fully round. See `DEFAULT_WEBCAM_ROUNDNESS`. */
+	webcamRoundness: number;
 	webcamMirrored: boolean;
 	webcamReactiveZoom: boolean;
 	webcamSizePreset: number;
-	webcamPosition: { cx: number; cy: number } | null;
+	webcamAnchor: WebcamAnchor;
 	webcamBackgroundMode: "none" | "transparent" | "blur" | "custom";
 	webcamWallpaper: string;
 	webcamBlurIntensity: number;
@@ -93,7 +220,8 @@ export interface ProjectAppearanceDefaults {
 		motionBlur: number;
 		clickBounce: number;
 		model3d: boolean;
-		clipToBounds: boolean;
+		asArrow: CursorKind[];
+		clickImpact: boolean;
 		autoHide: boolean;
 	};
 	cursorShow: boolean;
@@ -104,34 +232,45 @@ export interface ProjectAppearanceDefaults {
 
 /** The factory appearance every new project starts from. */
 export const DEFAULT_PROJECT_APPEARANCE: ProjectAppearanceDefaults = {
-	wallpaper: "/wallpapers/wallpaper1.jpg",
+	wallpaper: "/wallpapers/wallpaper11.jpg",
 	wallpaperMotion: "none",
 	frame: "none",
 	frameTheme: "light",
-	aspectRatio: "16:9",
-	shadowIntensity: 0.2,
-	showBlur: false,
+	// Auto: the frame follows the recording, its crop, the camera layout and the padding.
+	// Documents from before it stored no ratio and read 16:9; the v8 upgrader pins that.
+	aspectRatio: "auto",
+	// 0.2 peaked at 9% opacity: a shadow nobody could see. 0.6 is 27%, the card lifts off the
+	// wallpaper without a halo.
+	shadowIntensity: 0.6,
+	backgroundBlur: 0,
 	motionBlurAmount: 0.2,
 	// On: it only acts on tilted zooms, where the blur already scales with the real angle.
 	depthOfField: true,
 	borderRadius: 40,
 	padding: 50,
 	webcamLayoutPreset: "picture-in-picture",
-	webcamMaskShape: "rectangle",
+	webcamMaskShape: "square",
+	webcamRoundness: DEFAULT_WEBCAM_ROUNDNESS.square,
 	webcamMirrored: false,
 	webcamReactiveZoom: true,
-	webcamSizePreset: 25,
-	webcamPosition: null,
+	webcamSizePreset: 40,
+	webcamAnchor: "bottom-right",
 	webcamBackgroundMode: "none",
-	webcamWallpaper: "/wallpapers/wallpaper1.jpg",
+	webcamWallpaper: "/wallpapers/wallpaper11.jpg",
 	webcamBlurIntensity: 0.5,
 	cursor: {
-		size: 3,
+		// 3.6 draws a 98 px arrow in a 1080p export, about five times the system one: the cursor
+		// effects are part of the product, and a smaller arrow plays them down. 6 reaches 164 px.
+		size: 3.6,
 		smoothing: 0.67,
 		motionBlur: 0.35,
-		clickBounce: 2.5,
+		// A light tap: 2.5 squashed the arrow to 40% and threw it to 140% in 260 ms on every click.
+		clickBounce: 1,
 		model3d: false,
-		clipToBounds: false,
+		// The arrow and the hand, the two cursors a viewer follows; every other one is drawn as the
+		// arrow until picked (`CURSOR_KINDS`). A test holds this to every kind but the hand.
+		asArrow: ["text", "grab", "resize", "busy", "crosshair", "not-allowed", "help", "up-arrow"],
+		clickImpact: false,
 		autoHide: false,
 	},
 	cursorShow: true,
@@ -139,3 +278,68 @@ export const DEFAULT_PROJECT_APPEARANCE: ProjectAppearanceDefaults = {
 	cursorTheme: "default",
 	autoFocusAll: false,
 };
+
+/**
+ * The range of every number a project stores for its look and its speed regions, in stored
+ * units. One table, and everything that takes such a value in reads it: `getEditorSettings`
+ * clamps a stored value into it, a style preset is clamped by it, the AI agent is held to it, and
+ * the sliders offer exactly these ranges. A bound that lived only in a slider was one the agent,
+ * a preset or a hand-edited project went straight past.
+ *
+ * Import-free on purpose, like the rest of this module: the main process reads it too.
+ */
+export const SETTING_BOUNDS = {
+	shadowIntensity: [0, 1],
+	backgroundBlur: [0, 1],
+	motionBlurAmount: [0, 1],
+	// `ROUNDNESS_SLIDER_MAX_PX` (src/native/paramUnits.ts); a test holds the two together.
+	borderRadius: [0, 64],
+	padding: [0, 100],
+	webcamSizePreset: [WEBCAM_SIZE_MIN, WEBCAM_SIZE_MAX],
+	webcamRoundness: [0, 1],
+	webcamBlurIntensity: [0, 1],
+	// 1.5 is the floor: nothing smaller reads in a demo. At 6 the arrow is 164 px tall in a
+	// 1080p export, eight times the system one.
+	cursorSize: [1.5, 6],
+	cursorSmoothing: [0, 1],
+	cursorMotionBlur: [0, 1],
+	// Past about 4.2 the arrow shrank to nothing on every click.
+	cursorClickBounce: [0, 2],
+	// 16 is Chromium's `playbackRate` ceiling: past it the preview could not show what the
+	// export rendered.
+	playbackSpeed: [0.25, 16],
+	// Text annotations, in pixels at 1080 (see annotationScale.ts).
+	annotationFontSize: [8, 200],
+} as const satisfies Record<string, readonly [number, number]>;
+
+export type SettingBound = keyof typeof SETTING_BOUNDS;
+
+/** A value clamped into its bound. */
+export function clampToBound(value: number, bound: SettingBound): number {
+	const [min, max] = SETTING_BOUNDS[bound];
+	return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * The background blur was an on/off switch (`showBlur`) before it was an amount. On reads as the
+ * one amount it had: the compositor draws exactly the old blur at this value.
+ */
+export const LEGACY_BACKGROUND_BLUR_ON = 0.5;
+
+/** `backgroundBlur`, or the old `showBlur` switch it replaced when only that one is stored. */
+export function readBackgroundBlur(
+	stored: { backgroundBlur?: unknown; showBlur?: unknown } | null | undefined,
+	fallback: number,
+): number {
+	if (stored?.backgroundBlur === undefined && typeof stored?.showBlur === "boolean") {
+		return stored.showBlur ? LEGACY_BACKGROUND_BLUR_ON : 0;
+	}
+	return readBounded(stored?.backgroundBlur, "backgroundBlur", fallback);
+}
+
+/** A stored value read into its bound: anything but a finite number reads as `fallback`. */
+export function readBounded(value: unknown, bound: SettingBound, fallback: number): number {
+	return typeof value === "number" && Number.isFinite(value)
+		? clampToBound(value, bound)
+		: fallback;
+}

@@ -5,6 +5,9 @@ import {
 	DEFAULT_WEBCAM_LAYOUT_PRESET,
 	DEFAULT_WEBCAM_MASK_SHAPE,
 } from "@/components/video-editor/types";
+import { DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
+import { SETTING_BOUNDS } from "@/lib/projectDefaults";
+import { ROUNDNESS_SLIDER_MAX_PX } from "@/native/paramUnits";
 import type { AxcutDocument } from "../schema";
 import { axcutSchemaVersion } from "../schema";
 import { DEFAULT_EDITOR_SETTINGS, getEditorSettings, patchEditorSettings } from "./editorSettings";
@@ -39,12 +42,35 @@ describe("getEditorSettings", () => {
 	it("returns the defaults when the document has no legacyEditor", () => {
 		const snap = getEditorSettings(baseDoc);
 		expect(snap.wallpaper).toBe(DEFAULT_EDITOR_SETTINGS.wallpaper);
-		expect(snap.aspectRatio).toBe("16:9");
+		// A new project stores no ratio and reads Auto; older documents had 16:9 pinned by v8.
+		expect(snap.aspectRatio).toBe("auto");
 		expect(snap.shadowIntensity).toBe(DEFAULT_EDITOR_SETTINGS.shadowIntensity);
-		expect(snap.showBlur).toBe(false);
+		expect(snap.backgroundBlur).toBe(0);
 		expect(snap.webcamLayoutPreset).toBe(DEFAULT_WEBCAM_LAYOUT_PRESET);
 		expect(snap.webcamMaskShape).toBe(DEFAULT_WEBCAM_MASK_SHAPE);
 		expect(snap.cursor.size).toBe(DEFAULT_CURSOR_SIZE);
+	});
+
+	it("reads every appearance number into its bound, whatever wrote it", () => {
+		const snap = getEditorSettings({
+			...baseDoc,
+			legacyEditor: {
+				cursorSize: 10,
+				cursorClickBounce: 5,
+				cursorSmoothing: -1,
+				shadowIntensity: 5,
+				padding: -3,
+				borderRadius: 999,
+				motionBlurAmount: "a lot",
+			},
+		});
+		expect([snap.cursor.size, snap.cursor.clickBounce, snap.cursor.smoothing]).toEqual([6, 2, 0]);
+		expect([snap.shadowIntensity, snap.padding, snap.borderRadius]).toEqual([1, 0, 64]);
+		expect(snap.motionBlurAmount).toBe(DEFAULT_EDITOR_SETTINGS.motionBlurAmount);
+	});
+
+	it("keeps the roundness bound on the slider's own maximum", () => {
+		expect(SETTING_BOUNDS.borderRadius[1]).toBe(ROUNDNESS_SLIDER_MAX_PX);
 	});
 
 	it("returns the defaults when the document is null", () => {
@@ -59,10 +85,10 @@ describe("getEditorSettings", () => {
 				wallpaper: "linear-gradient(red, blue)",
 				aspectRatio: "9:16",
 				shadowIntensity: 0.5,
-				showBlur: true,
+				backgroundBlur: 0.5,
 				webcamLayoutPreset: "side-by-side",
 				webcamMaskShape: "circle",
-				cursorSize: 5,
+				cursorSize: 2.5,
 				cursorSmoothing: 0.8,
 			},
 		};
@@ -70,20 +96,34 @@ describe("getEditorSettings", () => {
 		expect(snap.wallpaper).toBe("linear-gradient(red, blue)");
 		expect(snap.aspectRatio).toBe("9:16");
 		expect(snap.shadowIntensity).toBe(0.5);
-		expect(snap.showBlur).toBe(true);
+		expect(snap.backgroundBlur).toBe(0.5);
 		expect(snap.webcamLayoutPreset).toBe("side-by-side");
-		expect(snap.webcamMaskShape).toBe("circle");
-		expect(snap.cursor.size).toBe(5);
+		// An old circle: a square camera, fully round.
+		expect(snap.webcamMaskShape).toBe("square");
+		expect(snap.webcamRoundness).toBe(1);
+		expect(snap.cursor.size).toBe(2.5);
 		expect(snap.cursor.smoothing).toBe(0.8);
 	});
 
 	it("falls back to defaults for unknown or wrong-type values", () => {
 		const doc: AxcutDocument = {
 			...baseDoc,
-			legacyEditor: { showBlur: "not-a-bool" as unknown as boolean },
+			legacyEditor: { backgroundBlur: "not-a-number" as unknown as number },
 		};
 		const snap = getEditorSettings(doc);
-		expect(snap.showBlur).toBe(false);
+		expect(snap.backgroundBlur).toBe(0);
+	});
+
+	it("reads the old background blur switch as the amount it drew", () => {
+		const legacy = (showBlur: boolean): AxcutDocument => ({
+			...baseDoc,
+			legacyEditor: { showBlur },
+		});
+		expect(getEditorSettings(legacy(true)).backgroundBlur).toBe(0.5);
+		expect(getEditorSettings(legacy(false)).backgroundBlur).toBe(0);
+		// Once the amount is written, the stale switch no longer speaks.
+		const moved = patchEditorSettings(legacy(true), { backgroundBlur: 0.2 });
+		expect(getEditorSettings(moved).backgroundBlur).toBe(0.2);
 	});
 
 	it("keeps depth of field on unless the project stored a boolean off", () => {
@@ -96,48 +136,76 @@ describe("getEditorSettings", () => {
 		const off = patchEditorSettings(baseDoc, { depthOfField: false });
 		expect(getEditorSettings(off).depthOfField).toBe(false);
 	});
+
+	it("reads a cursor pack the app no longer ships as the default art", () => {
+		const doc: AxcutDocument = {
+			...baseDoc,
+			legacyEditor: { cursorTheme: "hello-kitty-watermelon" },
+		};
+		expect(getEditorSettings(doc).cursorTheme).toBe(DEFAULT_CURSOR_THEME_ID);
+	});
 });
 
 describe("patchEditorSettings", () => {
 	it("writes a single field and leaves others intact", () => {
-		const next = patchEditorSettings(baseDoc, { showBlur: true });
+		const next = patchEditorSettings(baseDoc, { backgroundBlur: 0.5 });
 		const snap = getEditorSettings(next);
-		expect(snap.showBlur).toBe(true);
+		expect(snap.backgroundBlur).toBe(0.5);
 		expect(snap.shadowIntensity).toBe(DEFAULT_EDITOR_SETTINGS.shadowIntensity);
 		expect(snap.cropRegion).toEqual(DEFAULT_CROP_REGION);
 	});
 
 	it("merges into an existing legacyEditor envelope", () => {
-		const seed = patchEditorSettings(baseDoc, { showBlur: true });
+		const seed = patchEditorSettings(baseDoc, { backgroundBlur: 0.5 });
 		const next = patchEditorSettings(seed, { shadowIntensity: 0.7 });
 		const snap = getEditorSettings(next);
-		expect(snap.showBlur).toBe(true);
+		expect(snap.backgroundBlur).toBe(0.5);
 		expect(snap.shadowIntensity).toBe(0.7);
 	});
 
 	it("treats an explicitly undefined key as absent, not as a clear", () => {
-		const seed = patchEditorSettings(baseDoc, { showBlur: true, shadowIntensity: 0.7 });
-		const next = patchEditorSettings(seed, { showBlur: undefined, padding: 12 });
+		const seed = patchEditorSettings(baseDoc, { backgroundBlur: 0.5, shadowIntensity: 0.7 });
+		const next = patchEditorSettings(seed, { backgroundBlur: undefined, padding: 12 });
 		const snap = getEditorSettings(next);
-		expect(snap.showBlur).toBe(true);
+		expect(snap.backgroundBlur).toBe(0.5);
 		expect(snap.shadowIntensity).toBe(0.7);
 		expect(snap.padding).toBe(12);
 	});
 
 	it("patches nested cursor settings without clobbering siblings", () => {
-		const seed = patchEditorSettings(baseDoc, { cursor: { size: 4 } });
+		const seed = patchEditorSettings(baseDoc, { cursor: { size: 2 } });
 		const next = patchEditorSettings(seed, { cursor: { smoothing: 0.9 } });
 		const snap = getEditorSettings(next);
-		expect(snap.cursor.size).toBe(4);
+		expect(snap.cursor.size).toBe(2);
 		expect(snap.cursor.smoothing).toBe(0.9);
 	});
 
 	it("switches the 3D cursor without clobbering its siblings, off by default", () => {
 		expect(getEditorSettings(baseDoc).cursor.model3d).toBe(false);
-		const seed = patchEditorSettings(baseDoc, { cursor: { size: 4 } });
+		const seed = patchEditorSettings(baseDoc, { cursor: { size: 2 } });
 		const on = getEditorSettings(patchEditorSettings(seed, { cursor: { model3d: true } }));
 		expect(on.cursor.model3d).toBe(true);
-		expect(on.cursor.size).toBe(4);
+		expect(on.cursor.size).toBe(2);
+	});
+
+	it("switches the click impact without clobbering its siblings, off by default", () => {
+		expect(getEditorSettings(baseDoc).cursor.clickImpact).toBe(false);
+		const seed = patchEditorSettings(baseDoc, { cursor: { size: 2 } });
+		const next = patchEditorSettings(seed, { cursor: { clickImpact: true } });
+		expect(next.legacyEditor).toMatchObject({ cursorClickImpact: true, cursorSize: 2 });
+		expect(getEditorSettings(next).cursor.clickImpact).toBe(true);
+	});
+
+	it("stores the cursor kinds drawn as the arrow, and drops the switch they replace", () => {
+		expect(getEditorSettings(baseDoc).cursor.asArrow).toEqual(
+			DEFAULT_EDITOR_SETTINGS.cursor.asArrow,
+		);
+		const old = patchEditorSettings(baseDoc, {});
+		old.legacyEditor = { ...old.legacyEditor, cursorAlwaysArrow: true };
+		expect(getEditorSettings(old).cursor.asArrow).toHaveLength(9);
+		const picked = patchEditorSettings(old, { cursor: { asArrow: ["text"] } });
+		expect(getEditorSettings(picked).cursor.asArrow).toEqual(["text"]);
+		expect(picked.legacyEditor).not.toHaveProperty("cursorAlwaysArrow");
 	});
 
 	it("toggles cursorAutoHide on and off via patch", () => {
@@ -157,26 +225,51 @@ describe("patchEditorSettings", () => {
 
 	it("does not mutate the source document", () => {
 		const before = getEditorSettings(baseDoc);
-		patchEditorSettings(baseDoc, { showBlur: true });
+		patchEditorSettings(baseDoc, { backgroundBlur: 0.5 });
 		const after = getEditorSettings(baseDoc);
 		expect(after).toEqual(before);
 	});
 
-	it("round-trips webcamPosition through legacyEditor", () => {
-		const dragged = patchEditorSettings(baseDoc, {
-			webcamPosition: { cx: 0.32, cy: 0.71 },
-		});
-		const snap = getEditorSettings(dragged);
-		expect(snap.webcamPosition).toEqual({ cx: 0.32, cy: 0.71 });
+	it("round-trips webcamAnchor through legacyEditor", () => {
+		const dragged = patchEditorSettings(baseDoc, { webcamAnchor: "top-left" });
+		expect(getEditorSettings(dragged).webcamAnchor).toBe("top-left");
 	});
 
-	it("clamps out-of-range webcamPosition when reading", () => {
-		const doc: AxcutDocument = {
-			...baseDoc,
-			legacyEditor: { webcamPosition: { cx: 1.7, cy: -0.4 } },
+	// Older builds let the camera be dropped anywhere and stored its centre.
+	it("reads a free position stored by an older build as the nearest anchor", () => {
+		const anchorOf = (cx: number, cy: number) =>
+			getEditorSettings({ ...baseDoc, legacyEditor: { webcamPosition: { cx, cy } } }).webcamAnchor;
+		expect(anchorOf(0.1, 0.9)).toBe("bottom-left");
+		expect(anchorOf(0.5, 0.1)).toBe("top");
+		expect(anchorOf(1.7, -0.4)).toBe("top-right");
+		// From the middle of the frame, the nearer edge.
+		expect(anchorOf(0.52, 0.6)).toBe("bottom");
+		expect(anchorOf(0.4, 0.48)).toBe("left");
+		expect(getEditorSettings(baseDoc).webcamAnchor).toBe("bottom-right");
+	});
+
+	it("splits the old circle and rounded shapes into a proportion and a roundness", () => {
+		const read = (legacyEditor: Record<string, unknown>) => {
+			const snap = getEditorSettings({ ...baseDoc, legacyEditor });
+			return [snap.webcamMaskShape, snap.webcamRoundness];
 		};
-		const snap = getEditorSettings(doc);
-		expect(snap.webcamPosition).toEqual({ cx: 1, cy: 0 });
+		expect(read({ webcamMaskShape: "circle" })).toEqual(["square", 1]);
+		expect(read({ webcamMaskShape: "rounded" })).toEqual(["rectangle", 0.6]);
+		expect(read({ webcamMaskShape: "square" })).toEqual(["square", 0.3]);
+		// A stored roundness wins over the one the shape implied, and stays in 0..1.
+		expect(read({ webcamMaskShape: "circle", webcamRoundness: 0.2 })).toEqual(["square", 0.2]);
+		expect(read({ webcamRoundness: 4 })).toEqual(["square", 1]);
+		// A stored rectangle keeps the rounding it drew; nothing stored is the factory square.
+		expect(read({ webcamMaskShape: "rectangle" })).toEqual(["rectangle", 0.3]);
+		expect(read({})).toEqual(["square", 0.7]);
+	});
+
+	it("reads a camera size outside the slider's 15–60% into it", () => {
+		const read = (webcamSizePreset: number) =>
+			getEditorSettings({ ...baseDoc, legacyEditor: { webcamSizePreset } }).webcamSizePreset;
+		// An older build allowed 10%.
+		expect(read(10)).toBe(15);
+		expect(read(80)).toBe(60);
 	});
 
 	it("preserves a non-zero crop at the bottom-right edge", () => {

@@ -9,11 +9,16 @@ keywords:
   - legendas automáticas gravação de tela
 ---
 
+import DemoLoop from "@site/src/components/DemoLoop";
+import DemoLoopPair from "@site/src/components/DemoLoop/Pair";
+
 # Um gravador de tela com legendas feitas na sua máquina
 
 O OpenScreen é um gravador de tela gratuito, com licença MIT, com legendas para Windows, macOS e Linux. Ele transcreve sua gravação no seu próprio computador com o Whisper, depois de um download único de modelo de cerca de 264 MB, e embute legendas estilizadas no vídeo exportado. Se você precisa de arquivos de legenda SRT ou VTT separados para uma plataforma de curso ou um requisito de acessibilidade, o Cap ou o Camtasia é a melhor escolha.
 
 Esta página é publicada pelo projeto OpenScreen. Os dados sobre Cap, Camtasia e Screen Studio vêm de cap.so, techsmith.com e screen.studio e foram verificados em setembro de 2026. As fontes estão listadas no final.
+
+<DemoLoop name="automatic-subtitles" />
 
 ## Resumo rápido {#at-a-glance}
 
@@ -52,11 +57,18 @@ As legendas são uma visualização ao vivo da transcrição, não uma cópia de
 
 A pré-visualização e a exportação usam o mesmo layout, então as legendas que você vê são as que ficam embutidas no vídeo. **Mostrar legendas** as desativa para uma exportação sem elas. Referência completa em [Legendas e transcrição](/docs/captions/).
 
+<DemoLoop name="caption-styles" />
+
 ### Corte ao apagar palavras {#cutting-by-deleting-words}
 
 O painel **Transcrição** mostra as palavras de cada clipe na linha do tempo. Selecione uma palavra ou um trecho e pressione Delete: esse intervalo é cortado da reprodução e da exportação, como um recorte na linha do tempo. As palavras cortadas aparecem riscadas, e você pode restaurá-las. Os silêncios são marcados no texto e podem ser cortados ou restaurados da mesma forma.
 
 O Whisper informa os tempos das palavras com um pequeno atraso. O OpenScreen puxa cada limite de palavra de volta para o áudio, então um corte começa onde a palavra falada começa, e não uma sílaba depois. Veja [Edição da transcrição](/docs/captions/#transcript-editing).
+
+<DemoLoopPair>
+  <DemoLoop name="edit-by-transcript" />
+  <DemoLoop name="tighten-pauses" />
+</DemoLoopPair>
 
 ### Tradução com sua própria chave {#translation-with-your-own-key}
 

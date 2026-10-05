@@ -9,11 +9,16 @@ keywords:
   - subtítulos automáticos al grabar pantalla
 ---
 
+import DemoLoop from "@site/src/components/DemoLoop";
+import DemoLoopPair from "@site/src/components/DemoLoop/Pair";
+
 # Un grabador de pantalla con subtítulos hechos en tu equipo
 
 OpenScreen es un grabador de pantalla con subtítulos para Windows, macOS y Linux, gratis y con licencia MIT. Transcribe tu grabación en tu propio equipo con Whisper, después de una descarga única del modelo de unos 264 MB, e incrusta subtítulos con estilo en el video exportado. Si necesitas archivos de subtítulos SRT o VTT separados para una plataforma de cursos o un requisito de accesibilidad, Cap o Camtasia son mejor opción.
 
 Esta página la publica el proyecto OpenScreen. Los datos sobre Cap, Camtasia y Screen Studio vienen de cap.so, techsmith.com y screen.studio, y se verificaron en septiembre de 2026. Las fuentes están al final.
+
+<DemoLoop name="automatic-subtitles" />
 
 ## De un vistazo {#at-a-glance}
 
@@ -52,11 +57,18 @@ Los subtítulos son una vista en vivo de la transcripción, no una copia de ella
 
 La vista previa y la exportación usan el mismo diseño, así que los subtítulos que ves son los que se incrustan en el video. **Mostrar subtítulos** los desactiva para una exportación sin ellos. Referencia completa en [Subtítulos y transcripción](/docs/captions/).
 
+<DemoLoop name="caption-styles" />
+
 ### Corte eliminando palabras {#cutting-by-deleting-words}
 
 El panel **Transcripción** muestra las palabras de cada clip de la línea de tiempo. Selecciona una palabra o un pasaje y presiona Suprimir: ese tramo se corta de la reproducción y de la exportación, como un recorte en la línea de tiempo. Las palabras cortadas aparecen tachadas, y puedes restaurarlas. Los silencios se marcan en el texto y se pueden cortar o restaurar de la misma forma.
 
 Whisper reporta los tiempos de las palabras un poco tarde. OpenScreen desplaza hacia atrás cada límite de palabra y lo ancla en el propio audio, así que un corte empieza donde realmente empieza la palabra hablada y no una sílaba después. Consulta [Edición de la transcripción](/docs/captions/#transcript-editing).
+
+<DemoLoopPair>
+  <DemoLoop name="edit-by-transcript" />
+  <DemoLoop name="tighten-pauses" />
+</DemoLoopPair>
 
 ### Traducción con tu propia clave {#translation-with-your-own-key}
 

@@ -37,7 +37,7 @@ pub use crate::frame_geometry::{
 use crate::frame_geometry::{parse_hex, FrameGeometryInput, ShadowCaster,
     SCREEN_SHADOW_SPREAD_FRAC, WEBCAM_SHADOW_OFFSET_FRAC, WEBCAM_SHADOW_OPACITY,
     WEBCAM_SHADOW_SPREAD_FRAC};
-use crate::scene::{Scene, SceneBackground};
+use crate::scene::{Scene, SceneBackground, WallpaperMotion};
 use anyhow::{anyhow, Result};
 use metal::foreign_types::ForeignType;
 use std::cell::RefCell;
@@ -261,6 +261,8 @@ pub struct Compositor {
     scene: RefCell<Option<Scene>>,
     cursor: RefCell<Option<crate::cursor::CursorTrack>>,
     cursor_time: RefCell<Option<f32>>,
+    /// Le métrage dans la dernière image composée, que l'éditeur lit avec elle (`live.rs`).
+    footage: std::cell::Cell<Option<crate::frame_geometry::FootageQuad>>,
     timeline_time: RefCell<Option<f32>>,
     /// Temps programme (secondes de sortie) — cf. `FrameGeometryInput::programme_time`.
     programme_time: RefCell<Option<f32>>,
@@ -283,7 +285,7 @@ pub struct Compositor {
     /// appartient au jeu actif et ne peut pas être évincé — voir `cached_image`.
     img_frame_start: std::cell::Cell<u64>,
     /// Champs de distance des sprites de curseur (mode 15), R16F, par chemin, avec leur forme.
-    /// Pas d'éviction : seuls les seize sprites du thème par défaut y passent (~2,6 Mo en tout).
+    /// Pas d'éviction : seuls les sprites du thème en cours y passent (~2,6 Mo pour les seize).
     sdf_cache: RefCell<
         std::collections::HashMap<String, (metal::Texture, crate::frame_geometry::SpriteShape)>,
     >,
@@ -316,10 +318,25 @@ pub struct Compositor {
     pipeline_fs_tex: metal::RenderPipelineState,
     /// `vs_main` + `ps_main` en additif : les échantillons de traînée du curseur.
     pipeline_add: metal::RenderPipelineState,
+    /// `pipeline_main` et `pipeline_add` compilés AVEC les modèles 3D (`LAYER_MODELS`, cf.
+    /// l'en-tête de `shaders.metal`). Les deux autres ne les ont pas ; `draw_layer` bascule sur
+    /// ceux-ci le temps du draw d'un modèle (`LayerCB::needs_models`).
+    pipeline_main_models: metal::RenderPipelineState,
+    pipeline_add_models: metal::RenderPipelineState,
+    /// La passe en cours a été ouverte sur `pipeline_add` (cf. `begin_pass`) : dit à
+    /// `draw_layer` laquelle des deux variantes « modèles » prendre.
+    layer_add: std::cell::Cell<bool>,
+    /// Le dernier fond fixe composé et sa clé (`BackgroundKey`) : recopié dans le RT tant
+    /// que la clé tient, au lieu d'être redessiné.
+    bg_cache: RefCell<Option<BgCache>>,
     /// Buffer d'accumulation ISOLÉ (transparent) pour la traînée. Accumuler directement sur
     /// le RT reviendrait à AJOUTER du blanc à ce qui est déjà dessous : sur un fond clair,
     /// le curseur disparaît. Même raisonnement que côté D3D11.
     accum: metal::Texture,
+    /// Rendu isolé de l'écran cadré (ombre, cadre, métrage, appareil), transparent autour, que le
+    /// mode 18 recompose le long de sa trajectoire (`FrameGeometry::screen_trail`). Distinct
+    /// d'`accum`, que le curseur remplit dans la même frame.
+    trail: metal::Texture,
     /// Pyramide dual-Kawase du flou de fond : demi, quart, huitième de la taille de rendu.
     /// Dérivée de la taille de rendu et non d'une constante — sinon le rayon effectif du
     /// flou changerait avec la résolution de sortie.
@@ -389,6 +406,138 @@ fn make_texture(
     device.new_texture(&desc)
 }
 
+/// Tout ce qui a la taille du rendu, et rien d'autre : ce que `new_sized` alloue et que
+/// `resized` réalloue. Cf. `compositor_windows::Targets`.
+struct Targets {
+    rt: metal::Texture,
+    rt_read: metal::Texture,
+    nv12_y: metal::Texture,
+    nv12_uv: metal::Texture,
+    nv12_read_y: metal::Texture,
+    nv12_read_uv: metal::Texture,
+    accum: metal::Texture,
+    trail: metal::Texture,
+    blur_half: metal::Texture,
+    blur_quarter: metal::Texture,
+    blur_eighth: metal::Texture,
+    ann_copy: metal::Texture,
+}
+
+fn make_targets(device: &metal::Device, rw: u32, rh: u32) -> Targets {
+    let rt_usage = metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead;
+
+    let rt = make_texture(
+        device,
+        metal::MTLPixelFormat::RGBA8Unorm,
+        rw,
+        rh,
+        metal::MTLStorageMode::Private,
+        rt_usage,
+    );
+    let rt_read = make_texture(
+        device,
+        metal::MTLPixelFormat::RGBA8Unorm,
+        rw,
+        rh,
+        metal::MTLStorageMode::Shared,
+        metal::MTLTextureUsage::ShaderRead,
+    );
+    let nv12_y = make_texture(
+        device,
+        metal::MTLPixelFormat::R8Unorm,
+        rw,
+        rh,
+        metal::MTLStorageMode::Private,
+        rt_usage,
+    );
+    // NV12 : le plan chroma est entrelacé ET demi-résolution dans les deux axes.
+    // Le dimensionner comme le plan luma — ce que faisait la première version —
+    // produisait un UV 4x trop grand, donc un `read_nv12_scaled` qui lit au-delà
+    // de ce que la passe a écrit.
+    let nv12_uv = make_texture(
+        device,
+        metal::MTLPixelFormat::RG8Unorm,
+        rw / 2,
+        rh / 2,
+        metal::MTLStorageMode::Private,
+        rt_usage,
+    );
+    let nv12_read_y = make_texture(
+        device,
+        metal::MTLPixelFormat::R8Unorm,
+        rw,
+        rh,
+        metal::MTLStorageMode::Shared,
+        metal::MTLTextureUsage::ShaderRead,
+    );
+    let nv12_read_uv = make_texture(
+        device,
+        metal::MTLPixelFormat::RG8Unorm,
+        rw / 2,
+        rh / 2,
+        metal::MTLStorageMode::Shared,
+        metal::MTLTextureUsage::ShaderRead,
+    );
+    let accum = make_texture(
+        device,
+        metal::MTLPixelFormat::RGBA8Unorm,
+        rw,
+        rh,
+        metal::MTLStorageMode::Private,
+        rt_usage,
+    );
+    let trail = make_texture(
+        device,
+        metal::MTLPixelFormat::RGBA8Unorm,
+        rw,
+        rh,
+        metal::MTLStorageMode::Private,
+        rt_usage,
+    );
+    let mut pyramid = [2u32, 4, 8].map(|d| {
+        make_texture(
+            device,
+            metal::MTLPixelFormat::RGBA8Unorm,
+            (rw / d).max(1),
+            (rh / d).max(1),
+            metal::MTLStorageMode::Private,
+            rt_usage,
+        )
+    });
+    let blur_eighth = pyramid[2].clone();
+    let blur_quarter = pyramid[1].clone();
+    let blur_half = std::mem::replace(&mut pyramid[0], blur_quarter.clone());
+    let ann_copy = {
+        let d = metal::TextureDescriptor::new();
+        d.set_texture_type(metal::MTLTextureType::D2);
+        d.set_pixel_format(metal::MTLPixelFormat::RGBA8Unorm);
+        d.set_width(rw as u64);
+        d.set_height(rh as u64);
+        d.set_storage_mode(metal::MTLStorageMode::Private);
+        d.set_usage(rt_usage);
+        // Assez de niveaux pour que `log2(rayon)` du mode 10 en trouve toujours un.
+        d.set_mipmap_level_count(
+            (32 - rw.max(rh).max(1).leading_zeros()).max(1) as u64,
+        );
+        device.new_texture(&d)
+    };
+
+    Targets {
+        rt,
+        rt_read,
+        nv12_y,
+        nv12_uv,
+        nv12_read_y,
+        nv12_read_uv,
+        accum,
+        trail,
+        blur_half,
+        blur_quarter,
+        blur_eighth,
+        ann_copy,
+    }
+}
+
 /// Comment un draw se mélange à ce qui est déjà dans la cible.
 #[derive(Clone, Copy, PartialEq)]
 enum Blend {
@@ -399,6 +548,18 @@ enum Blend {
     /// Additif pondéré par la couleur de blend : chaque échantillon de traînée entre pour
     /// `1/taps`. C'est `OMSetBlendState(blend_add, [w,w,w,w])` côté D3D11.
     Add,
+}
+
+/// `shaders.metal` avec les modèles 3D : la source dont seuls les pipelines de ces calques sont
+/// tirés (cf. son en-tête).
+fn msl_source_with_models() -> String {
+    format!("#define LAYER_MODELS 1\n{}", include_str!("shaders.metal"))
+}
+
+/// Le fond tel que la passe de fond (et son flou) l'a laissé dans le RT, et la clé qui le décrit.
+struct BgCache {
+    key: crate::frame_geometry::BackgroundKey,
+    tex: metal::Texture,
 }
 
 /// Un pipeline state à une seule pièce jointe couleur.
@@ -464,60 +625,20 @@ impl Compositor {
         let cache = CVMetalTextureCache::new(gpu.device.as_ptr() as *const std::ffi::c_void)?;
 
         let device = &gpu.device;
-        let rt_usage = metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead;
-
-        let rt = make_texture(
-            device,
-            metal::MTLPixelFormat::RGBA8Unorm,
-            rw,
-            rh,
-            metal::MTLStorageMode::Private,
-            rt_usage,
-        );
-        let rt_read = make_texture(
-            device,
-            metal::MTLPixelFormat::RGBA8Unorm,
-            rw,
-            rh,
-            metal::MTLStorageMode::Shared,
-            metal::MTLTextureUsage::ShaderRead,
-        );
-        let nv12_y = make_texture(
-            device,
-            metal::MTLPixelFormat::R8Unorm,
-            rw,
-            rh,
-            metal::MTLStorageMode::Private,
-            rt_usage,
-        );
-        // NV12 : le plan chroma est entrelacé ET demi-résolution dans les deux axes.
-        // Le dimensionner comme le plan luma — ce que faisait la première version —
-        // produisait un UV 4x trop grand, donc un `read_nv12_scaled` qui lit au-delà
-        // de ce que la passe a écrit.
-        let nv12_uv = make_texture(
-            device,
-            metal::MTLPixelFormat::RG8Unorm,
-            rw / 2,
-            rh / 2,
-            metal::MTLStorageMode::Private,
-            rt_usage,
-        );
-        let nv12_read_y = make_texture(
-            device,
-            metal::MTLPixelFormat::R8Unorm,
-            rw,
-            rh,
-            metal::MTLStorageMode::Shared,
-            metal::MTLTextureUsage::ShaderRead,
-        );
-        let nv12_read_uv = make_texture(
-            device,
-            metal::MTLPixelFormat::RG8Unorm,
-            rw / 2,
-            rh / 2,
-            metal::MTLStorageMode::Shared,
-            metal::MTLTextureUsage::ShaderRead,
-        );
+        let Targets {
+            rt,
+            rt_read,
+            nv12_y,
+            nv12_uv,
+            nv12_read_y,
+            nv12_read_uv,
+            accum,
+            trail,
+            blur_half,
+            blur_quarter,
+            blur_eighth,
+            ann_copy,
+        } = make_targets(device, rw, rh);
 
         // --- Compilation MSL ---
         let msl_source = include_str!("shaders.metal");
@@ -565,27 +686,25 @@ impl Compositor {
             metal::MTLPixelFormat::RGBA8Unorm,
             Blend::Add,
         )?;
-        let accum = make_texture(
+        let library_models = device
+            .new_library_with_source(&msl_source_with_models(), &metal::CompileOptions::new())
+            .map_err(|e| anyhow!("MTLDevice::new_library_with_source (modèles) a échoué : {e}"))?;
+        let pipeline_main_models = make_pipeline(
             device,
+            &library_models,
+            "vs_main",
+            "ps_main",
             metal::MTLPixelFormat::RGBA8Unorm,
-            rw,
-            rh,
-            metal::MTLStorageMode::Private,
-            rt_usage,
-        );
-        let mut pyramid = [2u32, 4, 8].map(|d| {
-            make_texture(
-                device,
-                metal::MTLPixelFormat::RGBA8Unorm,
-                (rw / d).max(1),
-                (rh / d).max(1),
-                metal::MTLStorageMode::Private,
-                rt_usage,
-            )
-        });
-        let blur_eighth = pyramid[2].clone();
-        let blur_quarter = pyramid[1].clone();
-        let blur_half = std::mem::replace(&mut pyramid[0], blur_quarter.clone());
+            Blend::Over,
+        )?;
+        let pipeline_add_models = make_pipeline(
+            device,
+            &library_models,
+            "vs_main",
+            "ps_main",
+            metal::MTLPixelFormat::RGBA8Unorm,
+            Blend::Add,
+        )?;
         let pipeline_kdown = make_pipeline(
             device, &library, "vs_fs", "ps_kawase_down",
             metal::MTLPixelFormat::RGBA8Unorm, Blend::Replace,
@@ -594,20 +713,6 @@ impl Compositor {
             device, &library, "vs_fs", "ps_kawase_up",
             metal::MTLPixelFormat::RGBA8Unorm, Blend::Replace,
         )?;
-        let ann_copy = {
-            let d = metal::TextureDescriptor::new();
-            d.set_texture_type(metal::MTLTextureType::D2);
-            d.set_pixel_format(metal::MTLPixelFormat::RGBA8Unorm);
-            d.set_width(rw as u64);
-            d.set_height(rh as u64);
-            d.set_storage_mode(metal::MTLStorageMode::Private);
-            d.set_usage(rt_usage);
-            // Assez de niveaux pour que `log2(rayon)` du mode 10 en trouve toujours un.
-            d.set_mipmap_level_count(
-                (32 - rw.max(rh).max(1).leading_zeros()).max(1) as u64,
-            );
-            device.new_texture(&d)
-        };
 
         Ok(Compositor {
             gpu: Gpu {
@@ -621,6 +726,7 @@ impl Compositor {
             scene: RefCell::new(None),
             cursor: RefCell::new(None),
             cursor_time: RefCell::new(None),
+            footage: std::cell::Cell::new(None),
             timeline_time: RefCell::new(None),
             programme_time: RefCell::new(None),
             live_params: RefCell::new(LiveParams::default()),
@@ -642,7 +748,12 @@ impl Compositor {
             pipeline_fs_uv,
             pipeline_fs_tex,
             pipeline_add,
+            pipeline_main_models,
+            pipeline_add_models,
+            layer_add: std::cell::Cell::new(false),
+            bg_cache: RefCell::new(None),
             accum,
+            trail,
             blur_half,
             blur_quarter,
             blur_eighth,
@@ -662,6 +773,45 @@ impl Compositor {
             seg_rate: RefCell::new(crate::segmentation::RateLimiter::new(SEGMENTATION_HZ)),
             seg_scratch: RefCell::new(Vec::new()),
             seg_failed: RefCell::new(false),
+        })
+    }
+
+    /// Le même compositeur, rastérisant à `w`×`h` : seules les cibles (`Targets`) sont
+    /// réallouées. Cf. `compositor_windows::Compositor::resized`. Ici, reconstruire le
+    /// compositeur entier recompilait en plus `shaders.metal`.
+    pub fn resized(self, w: u32, h: u32) -> Result<Compositor> {
+        let (rw, rh) = Self::normalize_render_size(w, h);
+        let Targets {
+            rt,
+            rt_read,
+            nv12_y,
+            nv12_uv,
+            nv12_read_y,
+            nv12_read_uv,
+            accum,
+            trail,
+            blur_half,
+            blur_quarter,
+            blur_eighth,
+            ann_copy,
+        } = make_targets(&self.gpu.device, rw, rh);
+        Ok(Compositor {
+            render_w: rw,
+            render_h: rh,
+            rt,
+            rt_read,
+            nv12_y,
+            nv12_uv,
+            nv12_read_y,
+            nv12_read_uv,
+            accum,
+            trail,
+            blur_half,
+            blur_quarter,
+            blur_eighth,
+            ann_copy,
+            bg_cache: RefCell::new(None),
+            ..self
         })
     }
 
@@ -809,7 +959,20 @@ impl Compositor {
             enc.set_fragment_texture(0, Some(y));
             enc.set_fragment_texture(1, Some(uv));
         }
-        enc.draw_primitives(metal::MTLPrimitiveType::TriangleStrip, 0, 4);
+        // Un modèle 3D passe, le temps de son draw, par la variante « modèles » du pipeline de la
+        // passe, la seule à le compiler ; le pipeline plat reprend ensuite la main.
+        if cb.needs_models() {
+            let (models, flat) = if self.layer_add.get() {
+                (&self.pipeline_add_models, &self.pipeline_add)
+            } else {
+                (&self.pipeline_main_models, &self.pipeline_main)
+            };
+            enc.set_render_pipeline_state(models);
+            enc.draw_primitives(metal::MTLPrimitiveType::TriangleStrip, 0, 4);
+            enc.set_render_pipeline_state(flat);
+        } else {
+            enc.draw_primitives(metal::MTLPrimitiveType::TriangleStrip, 0, 4);
+        }
     }
 
     /// Quad de couleur pleine / gradient / ombre — tout ce qui n'échantillonne pas la vidéo.
@@ -898,10 +1061,7 @@ impl Compositor {
     /// Champ de distance du sprite `path` (texture(4) du mode 15) et sa forme, calculés au
     /// premier appel. Parité `compositor_windows::cursor_sdf`. R16Float : filtrable sur tous
     /// les GPU Apple, contrairement au R32Float.
-    fn cursor_sdf(
-        &self,
-        path: &str,
-    ) -> Result<(metal::Texture, crate::frame_geometry::SpriteShape)> {
+    fn cursor_sdf(&self, path: &str) -> Result<(metal::Texture, crate::frame_geometry::SpriteShape)> {
         if let Some(hit) = self.sdf_cache.borrow().get(path) {
             return Ok(hit.clone());
         }
@@ -986,13 +1146,17 @@ impl Compositor {
         enc: &metal::RenderCommandEncoderRef,
         path: &str,
         output_aspect: f32,
+        motion: WallpaperMotion,
+        programme_t: f32,
     ) -> Result<()> {
-        self.draw_image_in(enc, path, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0], 0.0, output_aspect)
+        let full = [0.0, 0.0, 1.0, 1.0];
+        self.draw_image_in(enc, path, full, [0.0, 0.0], 0.0, output_aspect, motion, programme_t)
     }
 
     /// `draw_image_bg` pour un rect quelconque — la bulle webcam s'en sert avec ses coins
     /// arrondis. `output_aspect` est le ratio du RECT visé, pas celui de la sortie : le crop
-    /// « cover » se calcule contre la zone qu'on remplit.
+    /// « cover » se calcule contre la zone qu'on remplit. `motion` anime l'image au temps
+    /// programme `programme_t` ; la bulle passe `WallpaperMotion::None`.
     #[allow(clippy::too_many_arguments)]
     unsafe fn draw_image_in(
         &self,
@@ -1002,6 +1166,8 @@ impl Compositor {
         quad_px: [f32; 2],
         radius_px: f32,
         output_aspect: f32,
+        motion: WallpaperMotion,
+        programme_t: f32,
     ) -> Result<()> {
         let (tex, iw, ih) = self.cached_image(path)?;
         let ai = iw as f32 / ih.max(1) as f32;
@@ -1013,6 +1179,7 @@ impl Compositor {
             let vis = ai / ao; // rogne verticalement
             (0.0, (1.0 - vis) * 0.5, 1.0, 1.0 - (1.0 - vis) * 0.5)
         };
+        let (anim, mb) = crate::frame_geometry::wallpaper_motion_slots(motion, programme_t, ao);
         enc.set_fragment_texture(2, Some(&tex));
         self.draw_solid(
             enc,
@@ -1022,6 +1189,8 @@ impl Compositor {
                 quad_px,
                 radius_px,
                 mode: 6.0,
+                fx: [0.0, 0.0, anim[0], anim[1]],
+                mb,
                 ..Default::default()
             },
         );
@@ -1062,30 +1231,28 @@ impl Compositor {
                 self.draw_solid(enc, &solid(parse_hex(color).unwrap_or(BLACK)));
             }
             // Le mouvement ne vaut que pour le fond d'écran : la bulle garde son dégradé immobile.
-            Some(SceneBackground::Gradient { angle_deg, stops, .. }) => {
-                let c0 = stops.first().and_then(|s| parse_hex(s)).unwrap_or(BLACK);
-                let c1 = stops.last().and_then(|s| parse_hex(s)).unwrap_or(c0);
+            Some(SceneBackground::Gradient { angle_deg, stops, offsets, .. }) => {
                 // angle CSS → direction unitaire, même convention que le fond d'écran.
                 let a = angle_deg.to_radians();
                 self.draw_solid(
                     enc,
                     &LayerCB {
                         dst,
-                        src: [c1[0], c1[1], c1[2], c1[3]],
                         quad_px,
                         radius_px,
-                        mode: 5.0,
-                        color: c0,
                         fx: [a.sin(), -a.cos(), 0.0, 0.0],
-                        ..Default::default()
+                        ..crate::frame_geometry::gradient_layer(stops, offsets, BLACK)
                     },
                 );
             }
-            Some(SceneBackground::Image { path }) => {
+            Some(SceneBackground::Image { path, .. }) => {
                 // Même contrat que le fond d'écran : un chemin cassé est loggé puis remplacé par
                 // du noir. Un fallback silencieux redonnerait le bug qu'on corrige.
                 let aspect = if quad_px[1] > 0.0 { quad_px[0] / quad_px[1] } else { 1.0 };
-                if let Err(e) = self.draw_image_in(enc, path, dst, quad_px, radius_px, aspect) {
+                let still = WallpaperMotion::None;
+                if let Err(e) =
+                    self.draw_image_in(enc, path, dst, quad_px, radius_px, aspect, still, 0.0)
+                {
                     eprintln!("[compositor] fond webcam \"{path}\" : {e:#}");
                     self.draw_solid(enc, &solid(BLACK));
                 }
@@ -1124,21 +1291,31 @@ impl Compositor {
         Ok(())
     }
 
-    /// Dual-Kawase sur le contenu courant du RT : trois passes DOWN puis trois UP, la
-    /// dernière réécrivant le RT. Port des six `fs_pass` de `compositor_windows::blur_bg`,
-    /// mêmes tailles et mêmes texels.
-    unsafe fn blur_bg(&self, cmd: &metal::CommandBufferRef) -> Result<()> {
-        let off = 2.2; // spread par passe
+    /// Dual-Kawase sur le contenu courant du RT : `levels` passes DOWN puis autant d'UP, la
+    /// dernière réécrivant le RT. Port de `compositor_windows::blur_bg`, mêmes tailles, mêmes
+    /// texels, même force → niveaux (`background_blur_steps`).
+    unsafe fn blur_bg(&self, cmd: &metal::CommandBufferRef, amount: f32) -> Result<()> {
+        let Some((levels, off)) = crate::frame_geometry::background_blur_steps(amount) else {
+            return Ok(());
+        };
         let (rw, rh) = (self.render_w as f32, self.render_h as f32);
-        let (hw, hh) = (rw * 0.5, rh * 0.5);
-        // DOWN : texel = 1/(dims de la SOURCE échantillonnée)
-        self.fs_pass(cmd, &self.blur_half, &self.rt, &self.pipeline_kdown, [1.0 / rw, 1.0 / rh, off, 0.0])?;
-        self.fs_pass(cmd, &self.blur_quarter, &self.blur_half, &self.pipeline_kdown, [1.0 / hw, 1.0 / hh, off, 0.0])?;
-        self.fs_pass(cmd, &self.blur_eighth, &self.blur_quarter, &self.pipeline_kdown, [2.0 / hw, 2.0 / hh, off, 0.0])?;
-        // UP
-        self.fs_pass(cmd, &self.blur_quarter, &self.blur_eighth, &self.pipeline_kup, [4.0 / hw, 4.0 / hh, off, 0.0])?;
-        self.fs_pass(cmd, &self.blur_half, &self.blur_quarter, &self.pipeline_kup, [2.0 / hw, 2.0 / hh, off, 0.0])?;
-        self.fs_pass(cmd, &self.rt, &self.blur_half, &self.pipeline_kup, [1.0 / hw, 1.0 / hh, off, 0.0])?;
+        let pyramid = [
+            (&self.rt, rw, rh),
+            (&self.blur_half, rw * 0.5, rh * 0.5),
+            (&self.blur_quarter, rw * 0.25, rh * 0.25),
+            (&self.blur_eighth, rw * 0.125, rh * 0.125),
+        ];
+        // texel = 1/(dims de la SOURCE échantillonnée)
+        for i in 0..levels {
+            let (src, sw, sh) = pyramid[i];
+            let (dst, ..) = pyramid[i + 1];
+            self.fs_pass(cmd, dst, src, &self.pipeline_kdown, [1.0 / sw, 1.0 / sh, off, 0.0])?;
+        }
+        for i in (0..levels).rev() {
+            let (src, sw, sh) = pyramid[i + 1];
+            let (dst, ..) = pyramid[i];
+            self.fs_pass(cmd, dst, src, &self.pipeline_kup, [1.0 / sw, 1.0 / sh, off, 0.0])?;
+        }
         Ok(())
     }
 
@@ -1212,6 +1389,8 @@ impl Compositor {
         corners: &[(f32, f32); 4],
         center_px: [f32; 2],
         radius: f32,
+        // Le slot d'un layout en bloc, qui rogne le plan (`shadow_mask_fields`).
+        mask: Option<crate::frame_geometry::ScreenMask>,
         spread: f32,
         offset_px: [f32; 2],
         opacity: f32,
@@ -1229,6 +1408,11 @@ impl Compositor {
         let [tr0, tr1] = local(corners[1]);
         let [br0, br1] = local(corners[2]);
         let [bl0, bl1] = local(corners[3]);
+        let (mask_rect, mask_radius) = crate::frame_geometry::shadow_mask_fields(
+            mask,
+            [center_px[0] + min_x - spread, center_px[1] + min_y - spread],
+            [rw, rh],
+        );
         self.draw_solid(
             enc,
             &LayerCB {
@@ -1244,14 +1428,15 @@ impl Compositor {
                 color: [0.0, 0.0, 0.0, opacity],
                 fx: [tl0, tl1, tr0, tr1],
                 src_prev: [br0, br1, bl0, bl1],
-                mb: [0.0, spread, 1.0, 0.0],
+                dst_prev: mask_rect,
+                mb: [0.0, spread, 1.0, mask_radius],
                 ..Default::default()
             },
         );
     }
 
     /// Écran incliné (mode 8) : le calque partagé (`frame_geometry::tilted_screen_cb`), avec la
-    /// pyramide de profondeur de champ en texture(2).
+    /// pyramide de profondeur de champ en texture(5).
     #[allow(clippy::too_many_arguments)]
     unsafe fn draw_tilted_screen(
         &self,
@@ -1265,14 +1450,18 @@ impl Compositor {
         // Sous le chrome de fenêtre : la remontée de son contour intérieur au-dessus de
         // l'écran (`screen_top_lift_px`), qui carre les coins hauts. 0 ailleurs.
         top_lift: f32,
+        // Le slot d'un layout en bloc, qui rogne le plan (`FrameGeometry::screen_mask`).
+        mask: Option<crate::frame_geometry::ScreenMask>,
+        // Le plan à la frame d'avant, pour son flou de mouvement (`FrameGeometry::tilt_pixel_trail`).
+        trail: Option<crate::frame_geometry::TiltTrail>,
         y: &metal::Texture,
         uv: &metal::Texture,
         dof_pyramid: Option<&metal::Texture>,
     ) {
         let render_px = [self.render_w as f32, self.render_h as f32];
-        // texture(2) EXPLICITE : `draw_video` ne lie que 0/1, et le slot 2 garde sinon ce que
-        // le draw précédent y a laissé. `None` quand l'effet est coupé : `k = 0`, rien n'y est lu.
-        enc.set_fragment_texture(2, dof_pyramid.map(|t| &**t));
+        // La pyramide en texture(5), que `draw_video` ne lie pas. `None` quand l'effet est
+        // coupé : `k = 0`, rien n'y est lu.
+        enc.set_fragment_texture(5, dof_pyramid.map(|t| &**t));
         // La pyramide liée décide seule si la profondeur de champ tourne.
         let cb = crate::frame_geometry::tilted_screen_cb(
             quad,
@@ -1284,10 +1473,43 @@ impl Compositor {
             top_lift,
             dof_pyramid.is_some(),
             render_px,
+            mask,
+            trail,
         );
         self.draw_video(enc, &cb, y, uv);
     }
 
+
+    /// Le fond gardé (`bg_cache`) : copie le RT dans `tex`, ou `tex` dans le RT (`into_rt`).
+    unsafe fn blit_background(&self, cmd: &metal::CommandBufferRef, tex: &metal::Texture, into_rt: bool) {
+        let (src, dst) = if into_rt { (tex, &self.rt) } else { (&self.rt, tex) };
+        let blit = cmd.new_blit_command_encoder();
+        blit.copy_from_texture(
+            src, 0, 0,
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            metal::MTLSize { width: self.render_w as u64, height: self.render_h as u64, depth: 1 },
+            dst, 0, 0,
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+        );
+        blit.end_encoding();
+    }
+
+    /// Fige l'image composée dans `ann_copy` (mip 0), qu'y lisent les flous (mips dérivés,
+    /// `mips`) et le cristal de Prism Glow.
+    unsafe fn snapshot_rt(&self, cmd: &metal::CommandBufferRef, mips: bool) {
+        let blit = cmd.new_blit_command_encoder();
+        blit.copy_from_texture(
+            &self.rt, 0, 0,
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            metal::MTLSize { width: self.render_w as u64, height: self.render_h as u64, depth: 1 },
+            &self.ann_copy, 0, 0,
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+        );
+        if mips {
+            blit.generate_mipmaps(&self.ann_copy);
+        }
+        blit.end_encoding();
+    }
 
     /// Annotations : calque le plus haut, ancré sur `s_ann` — le rect écran SANS ZOOM, le
     /// conteneur que reçoit l'overlay web. Port de `compositor_windows::draw_annotations`.
@@ -1297,6 +1519,9 @@ impl Compositor {
     /// grossir les sous-titres sous un zoom (issue #179, puis #397 sur Linux). L'arithmétique
     /// elle-même vit dans `frame_geometry::annotation_dst_in`, partagée par les trois backends.
     /// Le flou, lui, se place par `g.privacy_mask` : un masque doit rester sur ce qu'il cache.
+    ///
+    /// `privacy` : les flous de confidentialité seuls, dessinés sur le métrage avant le curseur ;
+    /// sinon toutes les autres annotations, le calque le plus haut.
     unsafe fn draw_annotations(
         &self,
         cmd: &metal::CommandBufferRef,
@@ -1304,30 +1529,21 @@ impl Compositor {
         t: f32,
         s_ann: [f32; 4],
         g: &crate::frame_geometry::FrameGeometry,
+        privacy: bool,
     ) -> Result<()> {
         let Some(scene) = scene else { return Ok(()) };
-        if scene.annotations.is_empty() {
-            return Ok(());
-        }
         let (rw, rh) = (self.render_w as f32, self.render_h as f32);
         let visible = |a: &crate::scene::SceneAnnotation| {
-            t >= a.start_sec as f32 && t < a.end_sec as f32
+            t >= a.start_sec as f32 && t < a.end_sec as f32 && (a.kind == "blur") == privacy
         };
+        if !scene.annotations.iter().any(visible) {
+            return Ok(());
+        }
         // UNE seule recopie pour toutes les annotations flou de la frame : leur lecture doit
         // voir l'image composée SANS les flous eux-mêmes, sinon deux zones qui se recouvrent
         // s'échantillonneraient l'une l'autre selon l'ordre de dessin.
-        if scene.annotations.iter().any(|a| a.kind == "blur" && visible(a)) {
-            let blit = cmd.new_blit_command_encoder();
-            blit.copy_from_texture(
-                &self.rt, 0, 0,
-                metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                metal::MTLSize { width: rw as u64, height: rh as u64, depth: 1 },
-                &self.ann_copy, 0, 0,
-                metal::MTLOrigin { x: 0, y: 0, z: 0 },
-            );
-            // Seul le mip 0 est rempli ; le GPU dérive le reste.
-            blit.generate_mipmaps(&self.ann_copy);
-            blit.end_encoding();
+        if privacy {
+            self.snapshot_rt(cmd, true);
         }
 
         let enc = self.begin_pass(cmd, &self.rt, None, &self.pipeline_main)?;
@@ -1493,6 +1709,7 @@ impl Compositor {
                     let anim = crate::text_anim::text_animation_state(
                         text.animation.as_deref(),
                         (t - a.start_sec as f32) * 1000.0,
+                        ((a.end_sec - a.start_sec) * 1000.0) as f32,
                     );
                     let anim_px = rh / crate::text_anim::ANIMATION_REFERENCE_HEIGHT;
                     let (mut ax, mut ay, mut aw, mut ah) = (
@@ -1929,6 +2146,8 @@ impl Compositor {
         ca.set_store_action(metal::MTLStoreAction::Store);
         let enc = cmd.new_render_command_encoder(&desc);
         enc.set_render_pipeline_state(pipeline);
+        // La famille du pipeline de calque de cette passe, pour `draw_layer`.
+        self.layer_add.set(std::ptr::eq(pipeline, &self.pipeline_add));
         Ok(enc)
     }
 
@@ -1937,7 +2156,8 @@ impl Compositor {
     /// `frame_geometry::cursor_sprite_cb`, partagée avec Windows et Linux.
     ///
     /// Avec `model`, le même sprite extrudé (mode 15, `cursor_model_cb`) : le sprite en
-    /// texture(2), son champ de distance en texture(4).
+    /// texture(2), son champ de distance en texture(4), l'enregistrement que l'appelant a lié en
+    /// texture(0) et (1).
     #[allow(clippy::too_many_arguments)]
     unsafe fn draw_cursor_sprite(
         &self,
@@ -1948,24 +2168,22 @@ impl Compositor {
         sprite: &crate::scene::SceneCursorSprite,
         clip: [f32; 4],
         model: Option<crate::frame_geometry::CursorPose>,
-    ) -> Result<()> {
+    ) -> Result<Option<[f32; 4]>> {
         let (tex, iw, ih) = self.cached_image(sprite.path.as_str())?;
         // Sans champ de distance, repli sur le sprite plat plutôt qu'aucun curseur. Parité Linux.
         if let Some(pose) = model {
             match self.cursor_sdf(sprite.path.as_str()) {
                 Ok((sdf, shape)) => {
-                    let shape = crate::frame_geometry::SpriteShape {
-                        hotspot: [sprite.hotspot_x, sprite.hotspot_y],
-                        ..shape
-                    };
-                    if let Some(cb) = crate::frame_geometry::cursor_model_cb(
+                    let shape = crate::frame_geometry::model_shape(sprite, shape);
+                    let Some(cb) = crate::frame_geometry::cursor_model_cb(
                         placement, size_px, pose, shape, a, clip,
-                    ) {
-                        enc.set_fragment_texture(2, Some(&tex));
-                        enc.set_fragment_texture(4, Some(&sdf));
-                        self.draw_solid(enc, &cb);
-                    }
-                    return Ok(());
+                    ) else {
+                        return Ok(None);
+                    };
+                    enc.set_fragment_texture(2, Some(&tex));
+                    enc.set_fragment_texture(4, Some(&sdf));
+                    self.draw_solid(enc, &cb);
+                    return Ok(Some(cb.dst));
                 }
                 Err(e) => eprintln!("[curseur] champ de \"{}\" : {e:#}", sprite.path),
             }
@@ -1983,7 +2201,7 @@ impl Compositor {
         );
         enc.set_fragment_texture(2, Some(&tex));
         self.draw_solid(enc, &cb);
-        Ok(())
+        Ok(Some(cb.dst))
     }
 
     /// Curseur thématisé : le sprite de l'état courant, sinon la flèche, sinon rien.
@@ -2006,14 +2224,17 @@ impl Compositor {
         a: f32,
         clip: [f32; 4],
         model: Option<crate::frame_geometry::CursorPose>,
-    ) {
-        let sprite = cursor_type.and_then(|t| sprites.get(t)).or_else(|| sprites.get("arrow"));
-        if let Some(sprite) = sprite {
-            if let Err(e) = self.draw_cursor_sprite(enc, placement, size_px, a, sprite, clip, model)
-            {
-                eprintln!("[compositor] sprite curseur \"{}\" : {e:#}", sprite.path);
-            }
-        }
+    ) -> Option<[f32; 4]> {
+        let sprite = cursor_type.and_then(|t| sprites.get(t)).or_else(|| sprites.get("arrow"))?;
+        self.draw_cursor_sprite(enc, placement, size_px, a, sprite, clip, model).unwrap_or_else(|e| {
+            eprintln!("[compositor] sprite curseur \"{}\" : {e:#}", sprite.path);
+            None
+        })
+    }
+
+    /// Le métrage dans la dernière image composée : ses coins et son warp (`FootageQuad`).
+    pub fn footage_quad(&self) -> Option<crate::frame_geometry::FootageQuad> {
+        self.footage.get()
     }
 
     /// Compose la frame : fond, ombre écran, écran, ombre caméra, caméra — puis miroir
@@ -2085,6 +2306,7 @@ impl Compositor {
             timeline_t_override: *self.timeline_time.borrow(),
             programme_time: *self.programme_time.borrow(),
         });
+        self.footage.set(Some(g.footage_quad([rw, rh])));
 
         let cmd_buf = self.gpu.context.new_command_buffer();
         // Profondeur de champ : pyramide remplie seulement sur une frame inclinée qui la lit,
@@ -2094,51 +2316,75 @@ impl Compositor {
         } else {
             None
         };
-        let enc = self.begin_pass(
-            cmd_buf,
-            &self.rt,
-            Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0)),
-            &self.pipeline_main,
-        )?;
-        // Les deux plans écran restent liés par défaut : les quads de couleur ne les
-        // échantillonnent pas, mais Metal veut des slots renseignés pour les draws qui, eux,
-        // le font.
-        enc.set_fragment_texture(0, Some(&sy));
-        enc.set_fragment_texture(1, Some(&suv));
+        // Le fond de la frame d'avant, flou compris, s'il est celui qu'on demande
+        // (`BackgroundKey`) : recopié au lieu d'être redessiné.
+        let bg_desc = scene_ref.as_ref().map(|s| &s.background);
+        let bg_blur = scene_ref.as_ref().map_or(0.0, |s| s.effects.blur);
+        let bg_cached = self
+            .bg_cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.key.matches(bg_desc, bg_blur, lp.bg_color, [rw, rh]));
+        if bg_cached {
+            if let Some(c) = self.bg_cache.borrow().as_ref() {
+                self.blit_background(cmd_buf, &c.tex, true);
+            }
+        } else {
+            let enc = self.begin_pass(
+                cmd_buf,
+                &self.rt,
+                Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0)),
+                &self.pipeline_main,
+            )?;
+            // Les deux plans écran restent liés par défaut : les quads de couleur ne les
+            // échantillonnent pas, mais Metal veut des slots renseignés pour les draws qui, eux,
+            // le font.
+            enc.set_fragment_texture(0, Some(&sy));
+            enc.set_fragment_texture(1, Some(&suv));
 
-        // --- fond --- (parité `compositor_windows.rs`, section « fond »)
-        match scene_ref.as_ref().map(|s| s.background.clone()) {
-            Some(SceneBackground::Color { color }) => {
-                let c = parse_hex(&color).unwrap_or(lp.bg_color);
-                self.draw_solid(
-                    enc,
-                    &LayerCB { dst: [0.0, 0.0, 1.0, 1.0], mode: 1.0, color: c, ..Default::default() },
-                );
-            }
-            Some(SceneBackground::Gradient { angle_deg, stops, motion }) => {
-                let c0 = stops.first().and_then(|s| parse_hex(s)).unwrap_or(lp.bg_color);
-                let c1 = stops.last().and_then(|s| parse_hex(s)).unwrap_or(c0);
-                let a = angle_deg.to_radians();
-                let (anim, mb) =
-                    crate::frame_geometry::gradient_motion_slots(motion, g.programme_t, rw / rh);
-                self.draw_solid(
-                    enc,
-                    &LayerCB {
-                        dst: [0.0, 0.0, 1.0, 1.0],
-                        src: [c1[0], c1[1], c1[2], c1[3]],
-                        mode: 5.0,
-                        color: c0,
-                        fx: [a.sin(), -a.cos(), anim[0], anim[1]],
-                        mb,
-                        ..Default::default()
-                    },
-                );
-            }
-            Some(SceneBackground::Image { path }) => {
-                // Repli couleur en cas d'échec, mais LOGGÉ : un fallback silencieux masquerait
-                // un chemin cassé.
-                if let Err(e) = self.draw_image_bg(enc, &path, rw / rh) {
-                    eprintln!("[compositor] wallpaper image \"{path}\" : {e:#}");
+            // --- fond --- (parité `compositor_windows.rs`, section « fond »)
+            // Faux si l'image du fond n'a pas pu se charger : son repli n'est pas gardé.
+            let mut bg_drawn = true;
+            match scene_ref.as_ref().map(|s| s.background.clone()) {
+                Some(SceneBackground::Color { color }) => {
+                    let c = parse_hex(&color).unwrap_or(lp.bg_color);
+                    self.draw_solid(
+                        enc,
+                        &LayerCB { dst: [0.0, 0.0, 1.0, 1.0], mode: 1.0, color: c, ..Default::default() },
+                    );
+                }
+                Some(SceneBackground::Gradient { angle_deg, stops, offsets, motion }) => {
+                    let a = angle_deg.to_radians();
+                    let (anim, mb) =
+                        crate::frame_geometry::wallpaper_motion_slots(motion, g.programme_t, rw / rh);
+                    self.draw_solid(
+                        enc,
+                        &LayerCB {
+                            dst: [0.0, 0.0, 1.0, 1.0],
+                            fx: [a.sin(), -a.cos(), anim[0], anim[1]],
+                            mb,
+                            ..crate::frame_geometry::gradient_layer(&stops, &offsets, lp.bg_color)
+                        },
+                    );
+                }
+                Some(SceneBackground::Image { path, motion }) => {
+                    // Repli couleur en cas d'échec, mais LOGGÉ : un fallback silencieux masquerait
+                    // un chemin cassé.
+                    if let Err(e) = self.draw_image_bg(enc, &path, rw / rh, motion, g.programme_t) {
+                        eprintln!("[compositor] wallpaper image \"{path}\" : {e:#}");
+                        bg_drawn = false;
+                        self.draw_solid(
+                            enc,
+                            &LayerCB {
+                                dst: [0.0, 0.0, 1.0, 1.0],
+                                mode: 1.0,
+                                color: lp.bg_color,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
+                None => {
                     self.draw_solid(
                         enc,
                         &LayerCB {
@@ -2150,41 +2396,62 @@ impl Compositor {
                     );
                 }
             }
-            None => {
-                self.draw_solid(
-                    enc,
-                    &LayerCB {
-                        dst: [0.0, 0.0, 1.0, 1.0],
-                        mode: 1.0,
-                        color: lp.bg_color,
-                        ..Default::default()
-                    },
-                );
+
+            // « Blur BG » (parité web `blurredBackgroundLayer`) : floute CE wallpaper qu'on vient
+            // de dessiner, pas la vidéo. No-op visuel sur une couleur plate, effet réel sur un
+            // gradient ou une image. Il lui faut ses propres passes, d'où la coupure ici.
+            enc.end_encoding();
+            if let Some(blur) = scene_ref.as_ref().map(|s| s.effects.blur) {
+                self.blur_bg(cmd_buf, blur)?;
+            }
+            // Pas de cache pour un fond animé (`of` rend `None`).
+            let key = bg_drawn
+                .then(|| crate::frame_geometry::BackgroundKey::of(bg_desc, bg_blur, lp.bg_color, [rw, rh]))
+                .flatten();
+            if let Some(key) = key {
+                // L'ancienne texture est reprise : `resized` vide le cache, sa taille est la bonne.
+                let old = self.bg_cache.borrow_mut().take().map(|c| c.tex);
+                let tex = old.unwrap_or_else(|| {
+                    make_texture(
+                        &self.gpu.device,
+                        metal::MTLPixelFormat::RGBA8Unorm,
+                        self.render_w,
+                        self.render_h,
+                        metal::MTLStorageMode::Private,
+                        metal::MTLTextureUsage::ShaderRead,
+                    )
+                });
+                self.blit_background(cmd_buf, &tex, false);
+                *self.bg_cache.borrow_mut() = Some(BgCache { key, tex });
             }
         }
-
-        // « Blur BG » (parité web `blurredBackgroundLayer`) : floute CE wallpaper qu'on vient
-        // de dessiner, pas la vidéo. No-op visuel sur une couleur plate, effet réel sur un
-        // gradient ou une image. Il lui faut ses propres passes, d'où la coupure ici.
-        enc.end_encoding();
-        if scene_ref.as_ref().map(|s| s.effects.blur).unwrap_or(false) {
-            self.blur_bg(cmd_buf)?;
-        }
-        let enc = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_main)?;
-        enc.set_fragment_texture(0, Some(&sy));
-        enc.set_fragment_texture(1, Some(&suv));
-
         // --- écran : ombre puis vidéo ---
         let s_px = [g.s_dst[2] * rw, g.s_dst[3] * rh];
         // Géométrie du tilt calculée UNE fois : l'ombre et l'écran doivent porter exactement
         // le même quadrilatère, sinon l'ombre se décolle dès que l'un des deux change.
         let tilt = g.screen_tilt(s_px);
+        // Flou de mouvement de l'écran CADRÉ (`FrameGeometry::screen_trail`) : ombre, cadre,
+        // métrage et appareil se dessinent dans un rendu isolé et transparent, que le mode 18
+        // recompose ensuite sur le fond le long de la trajectoire de la boîte, ou du plan incliné.
+        let trail = g.screen_trail([rw, rh]);
+        let mut enc = if trail {
+            self.begin_pass(
+                cmd_buf,
+                &self.trail,
+                Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0)),
+                &self.pipeline_main,
+            )?
+        } else {
+            self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_main)?
+        };
+        enc.set_fragment_texture(0, Some(&sy));
+        enc.set_fragment_texture(1, Some(&suv));
         let quad_center_px = [
             (g.s_dst[0] + g.s_dst[2] * 0.5) * rw,
             (g.s_dst[1] + g.s_dst[3] * 0.5) * rh,
         ];
         if cfg.shadow {
-            let spread = SCREEN_SHADOW_SPREAD_FRAC * g.frame_min_px;
+            let spread = SCREEN_SHADOW_SPREAD_FRAC * g.screen_unit_px;
             let offset = g.screen_shadow_offset();
             let opacity = 0.45 * lp.shadow_scale;
             // L'ombre suit la silhouette réellement affichée : rect arrondi quand l'écran est
@@ -2199,8 +2466,8 @@ impl Compositor {
                     ShadowCaster::Upright { dst, size_px, radius } => {
                         self.draw_shadow(enc, dst, size_px, radius, spread, offset, opacity)
                     }
-                    ShadowCaster::Tilted { corners, center_px, radius } => self.draw_quad_shadow(
-                        enc, &corners, center_px, radius, spread, offset, opacity,
+                    ShadowCaster::Tilted { corners, center_px, radius, mask } => self.draw_quad_shadow(
+                        enc, &corners, center_px, radius, mask, spread, offset, opacity,
                     ),
                 }
             }
@@ -2212,19 +2479,22 @@ impl Compositor {
         let square_top = g.screen_square_top();
         let top_lift = g.screen_top_lift_px([rw, rh]);
         let [su0, sv0, su1, sv1] = g.cut;
+        // Sous le masque d'un layout en bloc, rogné au slot (`FrameGeometry::mask_flat_screen`).
+        let (dst, src, quad_px, radius_px) =
+            g.mask_flat_screen(g.s_dst, [su0, sv0, su1, sv1], s_px, g.s_radius, [rw, rh]);
         match tilt.as_ref() {
             None => self.draw_video(
                 enc,
                 &LayerCB {
-                    dst: g.s_dst,
-                    src: [su0, sv0, su1, sv1],
-                    quad_px: s_px,
-                    radius_px: g.s_radius,
+                    dst,
+                    src,
+                    quad_px,
+                    radius_px,
                     mode: 0.0,
                     color: [0.0, 0.0, 0.0, 1.0],
                     src_prev: [su0, sv0, su1, sv1],
                     dst_prev: g.s_dst_prev,
-                    mb: [g.mb_taps, g.mb_amount, top_lift, square_top],
+                    mb: [g.screen_pixel_taps([rw, rh]), g.mb_amount, top_lift, square_top],
                     ..Default::default()
                 },
                 &sy,
@@ -2239,6 +2509,8 @@ impl Compositor {
                 g.focus_plane,
                 g.s_radius,
                 top_lift,
+                g.screen_mask,
+                g.tilt_pixel_trail([rw, rh]),
                 &sy,
                 &suv,
                 dof_pyramid.as_ref(),
@@ -2250,8 +2522,22 @@ impl Compositor {
         if let Some(cb) = g.device_frame_cb([rw, rh]) {
             self.draw_solid(enc, &cb);
         }
+        if trail {
+            enc.end_encoding();
+            enc = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_main)?;
+            // texture(2) = l'écran cadré isolé ; texture(5) = la pyramide, avec laquelle le repli
+            // relit le métrage hors de la sortie comme le mode 8 l'a dessiné.
+            enc.set_fragment_texture(2, Some(&self.trail));
+            enc.set_fragment_texture(5, dof_pyramid.as_ref().map(|t| &**t));
+            self.draw_video(enc, &g.screen_trail_cb([rw, rh], dof_pyramid.is_some()), &sy, &suv);
+        }
 
         enc.end_encoding();
+
+        // --- flous de confidentialité : sur le métrage, AVANT le curseur (parité Windows). Le
+        // curseur reste net par-dessus, et le cristal de Prism Glow, qui réfracte l'image
+        // composée, n'y voit que des pixels déjà floutés.
+        self.draw_annotations(cmd_buf, scene_ref.as_ref(), g.source_t, g.s_ann, &g, true)?;
 
         // --- curseur --- (parité `compositor_windows.rs`, section « curseur custom »)
         if let Some(track) = cursor_ref.as_ref() {
@@ -2275,6 +2561,12 @@ impl Compositor {
                     .map(|s| s.cursor.cursor_sprites.clone())
                     .unwrap_or_default();
                 let kind = plan.cursor_type.as_deref();
+                // Le cristal de Prism Glow réfracte l'image telle qu'elle est composée à cet
+                // instant, flous compris : sa copie en texture(5), une fois pour toutes les copies
+                // de la traînée (`ann_copy` est libre, les flous l'ont déjà lue).
+                if plan.glass {
+                    self.snapshot_rt(cmd_buf, false);
+                }
                 // L'impact des clics (mode 16, sans texture), posé sur l'écran SOUS le curseur.
                 if !plan.impacts.is_empty() {
                     let e = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_main)?;
@@ -2285,6 +2577,9 @@ impl Compositor {
                 }
                 if plan.taps <= 1 {
                     let e = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_main)?;
+                    if plan.glass {
+                        e.set_fragment_texture(5, Some(&self.ann_copy));
+                    }
                     self.draw_cur_themed(
                         e,
                         &sprites,
@@ -2307,11 +2602,17 @@ impl Compositor {
                         Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0)),
                         &self.pipeline_add,
                     )?;
+                    if plan.glass {
+                        e.set_fragment_texture(5, Some(&self.ann_copy));
+                    }
+                    // L'union des quads peints dans `accum` (x0, y0, x1, y1 en fractions de la
+                    // sortie) : la seule région que la recopie doit relire.
+                    let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
                     for k in 0..plan.taps {
                         let f = k as f32 / (plan.taps - 1) as f32;
                         let w = crate::frame_geometry::cursor_tap_weight(k, plan.taps);
                         e.set_blend_color(w, w, w, w);
-                        self.draw_cur_themed(
+                        let drawn = self.draw_cur_themed(
                             e,
                             &sprites,
                             kind,
@@ -2321,12 +2622,36 @@ impl Compositor {
                             plan.clip,
                             plan.model,
                         );
+                        if let Some(d) = drawn {
+                            bounds = [
+                                bounds[0].min(d[0]),
+                                bounds[1].min(d[1]),
+                                bounds[2].max(d[0] + d[2]),
+                                bounds[3].max(d[1] + d[3]),
+                            ];
+                        }
                     }
                     e.end_encoding();
 
                     let c = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_fs_tex)?;
                     c.set_fragment_texture(0, Some(&self.accum));
-                    c.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+                    // Rien n'a été peint dans `accum` hors des quads de la traînée : la recopie
+                    // s'y borne au lieu de repasser sur toute la sortie (0,5 ms par frame 1080p
+                    // mesurée sur Linux, Radeon 610M).
+                    let (w, h) = (self.render_w as f32, self.render_h as f32);
+                    let x0 = (bounds[0] * w).floor().clamp(0.0, w) as u64;
+                    let y0 = (bounds[1] * h).floor().clamp(0.0, h) as u64;
+                    let x1 = (bounds[2] * w).ceil().clamp(0.0, w) as u64;
+                    let y1 = (bounds[3] * h).ceil().clamp(0.0, h) as u64;
+                    if x1 > x0 && y1 > y0 {
+                        c.set_scissor_rect(metal::MTLScissorRect {
+                            x: x0,
+                            y: y0,
+                            width: x1 - x0,
+                            height: y1 - y0,
+                        });
+                        c.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+                    }
                     c.end_encoding();
                 }
             }
@@ -2431,8 +2756,9 @@ impl Compositor {
         // --- annotations : calque le plus haut, ancré sur le rect ÉCRAN SANS ZOOM ---
         // `s_ann`, pas `s_dst` : le zoom vit dans la boîte depuis l'issue #179, donc `s_dst`
         // grandit avec lui et emmenait annotations et sous-titres dans le mouvement. Le flou de
-        // confidentialité est l'exception : il suit le contenu, d'où `&g`.
-        self.draw_annotations(cmd_buf, scene_ref.as_ref(), g.source_t, g.s_ann, &g)?;
+        // confidentialité est l'exception : il suit le contenu, d'où `&g` ; il est passé avant le
+        // curseur (plus haut).
+        self.draw_annotations(cmd_buf, scene_ref.as_ref(), g.source_t, g.s_ann, &g, false)?;
 
         // Ni miroir RGBA ni attente ici : le miroir ne sert qu'à `readback_direct` (la
         // preview), et l'export ne lit jamais le RGBA — le blit pleine résolution était payé
@@ -3108,7 +3434,7 @@ mod tests {
         let screen = FakeFrame::new(128, 128, |_, _| 126);
         let webcam = FakeFrame::new(64, 64, |_, _| Y_WHITE);
         let mut cfg = crate::config::Cfg::c8();
-        cfg.bg_blur = false;
+        cfg.bg_blur = 0.0;
         cfg.zoom = false;
         cfg.layout_anim = false;
         cfg.cursor = false;
@@ -3440,7 +3766,7 @@ mod tests {
     //
     // Le seul golden de l'effet qui tourne en CI : celui de Windows est opt-in (source vidéo),
     // celui de Linux aussi (`OPENSCREEN_LINUX_COMPOSE`). C'est aussi le premier vrai passage de
-    // `fill_dof_pyramid`, de `generate_mipmaps` et du `texture(2)` du mode 8. Le piège qu'il
+    // `fill_dof_pyramid`, de `generate_mipmaps` et du `texture(5)` du mode 8. Le piège qu'il
     // garde : un `level(lod)` qui retomberait au niveau 0 laisserait macOS net là où Windows
     // floute.
     // -----------------------------------------------------------------------
@@ -3666,11 +3992,11 @@ mod tests {
     /// Les états que le rendu passe en revue (hotspots de `DEFAULT_CURSOR_SPRITES`), et s'ils
     /// sont centrés : ni tangage ni lacet.
     const MODEL_STATES: [(&str, [f32; 2], bool); 6] = [
-        ("arrow", [0.119, 0.0874], false),
-        ("pointer", [0.3893, 0.0032], false),
-        ("text", [0.4375, 0.5333], true),
-        ("open-hand", [0.4375, 0.1781], false),
-        ("resize-ew", [0.4881, 0.4706], true),
+        ("arrow", [0.1205, 0.0881], false),
+        ("pointer", [0.3874, 0.0032], false),
+        ("text", [0.4355, 0.5369], true),
+        ("open-hand", [0.4375, 0.1724], false),
+        ("resize-ew", [0.485, 0.4706], true),
         ("not-allowed", [0.5, 0.5], true),
     ];
 
@@ -3729,7 +4055,7 @@ mod tests {
         comp.set_cursor_time(Some(2.0));
         comp.set_timeline_time(Some(2.0));
         let mut cfg = crate::config::Cfg::c8();
-        cfg.bg_blur = false;
+        cfg.bg_blur = 0.0;
         cfg.zoom = false;
         cfg.layout_anim = false;
         cfg.cursor = true;
@@ -3888,8 +4214,9 @@ mod tests {
             let touch = compose_model(&comp, &screen, &json(Some(true), "default", true), &clicked);
             model_save(&format!("{name}-hover"), &hover);
             model_save(&format!("{name}-touch"), &touch);
-            assert!(absent == off && absent == other, "{name}: le chemin plat a change");
+            assert!(absent == off, "{name}: le chemin plat a change");
             assert!(absent != hover, "{name}: le reglage allume ne change rien");
+            assert!(other == hover, "{name}: le libelle du theme a change le rendu natif");
             let (a, b) = (model_split(&hover, &bare), model_split(&touch, &bare));
             println!(
                 "{name} : blanc {}, noir {}, ombre {} (apex a {:.1} px, posee {:.1} px), centroides {:?} / {:?}",
@@ -3906,7 +4233,7 @@ mod tests {
 
     /// Chaque état garde son art et sa silhouette : posé au centre de l'écran (vu de face), le
     /// modèle couvre ce que couvre le sprite plat, avec ses couleurs ; il porte une ombre en
-    /// l'air, suit l'inclinaison du plan, et un autre thème (ou le réglage éteint) reste plat.
+    /// l'air et suit l'inclinaison du plan. Le réglage éteint garde le sprite plat.
     #[test]
     fn every_modelled_state_keeps_its_art_footprint_and_shadow() {
         let Ok(gpu) = crate::d3d::Gpu::create(false) else {
@@ -3928,15 +4255,26 @@ mod tests {
             let touch = compose_model(&comp, &blue, &on, &clicked);
             let touch_b = compose_model(&comp, &orange, &on, &clicked);
             let hover = compose_model(&comp, &blue, &on, &still);
-            let tilted = compose_model(&comp, &blue, &json(r#""iso""#, Some(true), "default", true), &still);
+            let iso = json(r#""iso""#, Some(true), "default", true);
+            let tilted = compose_model(&comp, &blue, &iso, &still);
+            // Le modèle incliné posé en `x` sur la ligne du focus : le préset iso (`left`) amène le
+            // bord droit du plan vers la caméra.
+            let across = |x: f32| {
+                let track = crate::cursor::CursorTrack::new(vec![(0.0, x, 0.5), (9.0, x, 0.5)], vec![], vec![(0.0, key.to_string())]);
+                compose_model(&comp, &blue, &iso, &track)
+            };
+            let (near, far) = (across(0.8), across(0.2));
             let sprite = compose_model(&comp, &blue, &flat, &still);
             let sprite_b = compose_model(&comp, &orange, &flat, &still);
             let absent = compose_model(&comp, &blue, &json("null", None, "default", true), &still);
             let other = compose_model(&comp, &blue, &json("null", Some(true), "other", true), &still);
             model_save(&format!("art-{key}-touch"), &touch);
             model_save(&format!("art-{key}-iso"), &tilted);
-            if absent != sprite || other != sprite {
+            if absent != sprite {
                 failures.push(format!("{key}: le sprite plat a change"));
+            }
+            if other != hover {
+                failures.push(format!("{key}: le libelle du theme a change le rendu natif"));
             }
 
             let (m3d, m2d) = (model_opaque(&touch, &touch_b, &bare), model_opaque(&sprite, &sprite_b, &bare));
@@ -3953,9 +4291,10 @@ mod tests {
                 .count() as f32;
             let body = |rgba: &[u8]| (0..1280 * 720).filter(|&i| model_neutral(&rgba[i * 4..i * 4 + 3]) && differs(rgba, i)).count() as f32;
             let (flat_body, tilted_body) = (body(&hover), body(&tilted));
+            let (near_body, far_body) = (body(&near), body(&far));
             println!(
                 "{key} : IoU {overlap:.3}, a 2 px pres {near3d:.3} / {near2d:.3}, sprite {area} px, palette 3D {pal3d:?} / sprite {pal2d:?}, \
-                 ombre {shadow} px, corps a plat {flat_body} / incline {tilted_body}"
+                 ombre {shadow} px, corps a plat {flat_body} / incline {tilted_body}, proche {near_body} / lointain {far_body}"
             );
             let (min_iou, min_near, palette_tol) = if centred { (0.75, 0.98, 0.07) } else { (0.6, 0.9, 0.2) };
             if overlap <= min_iou || near3d < min_near || near2d < min_near {
@@ -3969,9 +4308,14 @@ mod tests {
             if shadow <= 0.3 * area {
                 failures.push(format!("{key}: pas d'ombre en l'air ({shadow} px)"));
             }
-            // Le préset iso réduit le plan (unité 51,5 contre 62,6 px) et incline le modèle.
-            if !(tilted_body < 0.9 * flat_body && tilted_body > 0.3 * flat_body) {
-                failures.push(format!("{key}: le modele ne suit pas le plan ({tilted_body} / {flat_body})"));
+            // Au focus du zoom, l'angle fixe garde au modèle sa taille à plat (`plan_cursor`) ;
+            // ailleurs, le plan l'emporte avec lui : sa perspective le grossit du côté proche et le
+            // réduit du côté lointain. Mesuré : ×1,5 de l'un à l'autre ; un modèle resté de face sur
+            // le même plan n'y gagne que ×1,0 à 1,1.
+            if !((0.85..1.15).contains(&(tilted_body / flat_body)) && near_body > 1.25 * far_body) {
+                failures.push(format!(
+                    "{key}: le modele ne suit pas le plan ({tilted_body} / {flat_body}, proche {near_body} / lointain {far_body})"
+                ));
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
@@ -4057,11 +4401,12 @@ mod tests {
             let touch = compose_model(&comp, &screen, &json, &contact);
             model_save(&format!("tap-{}", if rotation == "null" { "flat" } else { "iso" }), &touch);
             assert!(!is_red(px(&touch, m[0] as i32, (m[1] + 2.0) as i32)), "{rotation}: la pointe manque la pastille");
+            // Au-delà du bord de la pointe, que le geste du clic déplace (`quiet` reste au repos).
             // L'écart dû à l'impact, le long de deux demi-droites (haut, gauche) : même rayon, à la
             // perspective près sous `iso` (l'anneau y est une ellipse).
             let (on, off) = (compose_model(&comp, &screen, &json, &ring), compose_model(&comp, &screen, &quiet, &ring));
             let peak = |dx: i32, dy: i32| {
-                (4..45)
+                (8..45)
                     .map(|r| {
                         let (a, b) = (px(&on, m[0] as i32 + dx * r, m[1] as i32 + dy * r), px(&off, m[0] as i32 + dx * r, m[1] as i32 + dy * r));
                         ((0..3).map(|c| (a[c] - b[c]).abs()).sum::<i32>(), r)
@@ -4071,7 +4416,13 @@ mod tests {
             };
             let (up, left) = (peak(0, -1), peak(-1, 0));
             println!("{rotation} : pastille en {m:?}, anneau haut {up:?}, gauche {left:?}");
-            assert!(up.0 > 60 && left.0 > 60, "{rotation}: anneau absent ({up:?} {left:?})");
+            // Le preset incliné projette le trait plus obliquement sur un bord; son contraste
+            // mesuré est inférieur à celui du cas plat, sans que l'anneau disparaisse.
+            let min_delta = if rotation == "null" { 60 } else { 40 };
+            assert!(
+                up.0 > min_delta && left.0 > min_delta,
+                "{rotation}: anneau absent ({up:?} {left:?})"
+            );
             let tol = if rotation == "null" { 1 } else { 2 };
             assert!((up.1 - left.1).abs() <= tol, "{rotation}: anneau décentré ({up:?} {left:?})");
         }
@@ -4095,6 +4446,12 @@ mod tests {
                 &metal::CompileOptions::new(),
             )
             .expect("shaders.metal doit compiler");
+        // La variante des modèles 3D (`LAYER_MODELS`) : la seule à compiler leurs branches.
+        device
+            .new_library_with_source(&super::msl_source_with_models(), &metal::CompileOptions::new())
+            .expect("shaders.metal doit compiler avec LAYER_MODELS")
+            .get_function("ps_main", None)
+            .expect("ps_main absent de la variante LAYER_MODELS");
         for name in [
             "vs_main",
             "vs_fs",
@@ -4124,5 +4481,31 @@ mod tests {
         };
         let comp = super::Compositor::new_sized(&gpu, 640, 360).expect("Compositor::new_sized");
         assert_eq!(comp.render_size(), (640, 360));
+    }
+
+    /// Un cran de padding en format Auto change la taille de rendu de la preview. `resized`
+    /// réalloue les cibles et garde le reste : le masque webcam, et la boîte aux lettres où le
+    /// worker de segmentation dépose les suivants.
+    #[test]
+    fn resizing_keeps_the_segmentation_and_reads_back_at_the_new_size() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let comp = super::Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        let (w, h) = (crate::segmentation::MODEL_WIDTH, crate::segmentation::MODEL_HEIGHT);
+        comp.set_webcam_mask(&vec![255u8; (w * h) as usize], w, h).expect("masque");
+        let inbox = std::sync::Arc::clone(&comp.seg_inbox);
+
+        let comp = comp.resized(181, 321).expect("resized");
+
+        assert_eq!(comp.render_size(), (182, 322), "arrondi au pair, comme new_sized");
+        assert!(comp.webcam_mask.borrow().is_some(), "le masque webcam s'est perdu");
+        assert!(
+            std::sync::Arc::ptr_eq(&inbox, &comp.seg_inbox),
+            "le worker déposerait ses masques dans une boîte que plus personne ne lit",
+        );
+        let (rw, rh, rgba) = unsafe { comp.readback_direct() }.expect("readback");
+        assert_eq!((rw, rh, rgba.len()), (182, 322, 182 * 322 * 4));
     }
 }

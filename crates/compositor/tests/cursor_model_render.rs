@@ -41,17 +41,17 @@ const CONTACT_S: f32 = 0.0495;
 /// Les seize états du thème par défaut et leurs hotspots (`DEFAULT_CURSOR_SPRITES`,
 /// `src/lib/cursor/cursorThemes.ts`).
 const STATES: [(&str, [f32; 2]); 16] = [
-    ("arrow", [0.119, 0.0874]),
-    ("text", [0.4375, 0.5333]),
-    ("pointer", [0.3893, 0.0032]),
+    ("arrow", [0.1205, 0.0881]),
+    ("text", [0.4355, 0.5369]),
+    ("pointer", [0.3874, 0.0032]),
     ("crosshair", [0.4667, 0.4667]),
-    ("open-hand", [0.4375, 0.1781]),
-    ("closed-hand", [0.3889, 0.451]),
-    ("resize-ew", [0.4881, 0.4706]),
+    ("open-hand", [0.4375, 0.1724]),
+    ("closed-hand", [0.3889, 0.4455]),
+    ("resize-ew", [0.485, 0.4706]),
     ("resize-ns", [0.5, 0.5]),
     ("resize-nesw", [0.5, 0.5]),
     ("resize-nwse", [0.5, 0.5]),
-    ("move", [0.4444, 0.4444]),
+    ("move", [0.4437, 0.4437]),
     ("not-allowed", [0.5, 0.5]),
     ("wait", [0.5, 0.5]),
     ("app-starting", [0.05, 0.0537]),
@@ -150,21 +150,65 @@ impl FakeFrame {
 
 /// Les seize sprites livrés, au format `cursorSprites` de la scène.
 fn sprites_json() -> String {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../public/cursors/default")
+    sprites_json_with(None)
+}
+
+/// Le dossier des curseurs livrés, `public/cursors`.
+fn cursors_dir() -> String {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../public/cursors")
         .to_string_lossy()
-        .replace('\\', "/");
+        .replace('\\', "/")
+}
+
+/// Les thèmes d'origine et les hotspots de leur flèche et de leur main plates (`CURSOR_THEMES`,
+/// `src/lib/cursor/cursorThemes.ts`, sur 32).
+const SCULPTED: [(&str, [f32; 2], [f32; 2]); 5] = [
+    ("studio-ink", [6.2304, 2.0992], [12.848, 2.0704]),
+    ("prism-glow", [6.3456, 2.0672], [11.968, 2.0352]),
+    ("pop-coral", [10.4768, 2.1792], [12.3456, 2.0]),
+    ("pixel-candy", [6.5, 2.0], [10.75, 2.0]),
+    ("star-sprout", [4.7232, 2.1152], [13.1712, 2.0384]),
+];
+
+/// `sprites_json`, avec la flèche et la main plates du thème d'origine `sculpted` et leur curseur
+/// sculpté, comme les passe `resolveCursorSprites` en 3D.
+fn sprites_json_with(sculpted: Option<&str>) -> String {
+    let dir = cursors_dir();
+    let theme = sculpted.map(|name| *SCULPTED.iter().find(|(t, ..)| *t == name).expect("thème d'origine"));
     let entries: Vec<String> = STATES
         .iter()
-        .map(|(key, [hx, hy])| format!(r#""{key}":{{"path":"{dir}/{key}.png","hotspotX":{hx},"hotspotY":{hy}}}"#))
+        .map(|(key, [hx, hy])| match (theme, *key) {
+            (Some((name, [ax, ay], _)), "arrow") | (Some((name, _, [ax, ay])), "pointer") => format!(
+                r#""{key}":{{"path":"{dir}/{name}/{key}.png","hotspotX":{},"hotspotY":{},"sculpt":"{name}/{key}"}}"#,
+                ax / 32.0,
+                ay / 32.0
+            ),
+            _ => format!(r#""{key}":{{"path":"{dir}/default/{key}.png","hotspotX":{hx},"hotspotY":{hy}}}"#),
+        })
         .collect();
     format!("{{{}}}", entries.join(","))
 }
 
 /// `model3d` : `None` = clé absente (payload d'avant le réglage).
 fn scene_json(rotation: &str, model3d: Option<bool>, theme: &str, motion_blur: f32, size: f32) -> String {
+    scene_json_with(rotation, model3d, theme, motion_blur, size, &sprites_json())
+}
+
+/// Un thème d'origine en 3D : sa flèche et sa main sculptées.
+fn sculpted_scene_json(rotation: &str, theme: &str, size: f32) -> String {
+    scene_json_with(rotation, Some(true), theme, 0.0, size, &sprites_json_with(Some(theme)))
+}
+
+fn scene_json_with(
+    rotation: &str,
+    model3d: Option<bool>,
+    theme: &str,
+    motion_blur: f32,
+    size: f32,
+    sprites: &str,
+) -> String {
     let model3d = model3d.map(|m| format!(r#","model3d":{m}"#)).unwrap_or_default();
-    let sprites = sprites_json();
     format!(
         r##"{{"clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
             "layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rounded","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false,
@@ -227,7 +271,7 @@ fn resting(name: &str, click: bool) -> CursorTrack {
 
 fn cfg() -> Cfg {
     let mut cfg = Cfg::c8();
-    cfg.bg_blur = false;
+    cfg.bg_blur = 0.0;
     cfg.zoom = false;
     cfg.layout_anim = false;
     cfg.cursor = true;
@@ -399,6 +443,20 @@ fn opaque_mask(on_blue: &[u8], on_orange: &[u8], bare_blue: &[u8]) -> Vec<bool> 
         .map(|i| {
             let (a, b, c) = (&on_blue[i * 4..i * 4 + 3], &on_orange[i * 4..i * 4 + 3], &bare_blue[i * 4..i * 4 + 3]);
             a == b && a != c
+        })
+        .collect()
+}
+
+/// Les pixels que couvre un curseur de VERRE (le cristal de Prism Glow, qui laisse voir le contenu
+/// et le réfracte) : opaques, ou changés sur les deux teintes sans y être plus sombres (une ombre
+/// ne fait qu'assombrir ; le verre réfracte, reflète et luit).
+fn covered_mask(on_blue: &[u8], on_orange: &[u8], bare_blue: &[u8], bare_orange: &[u8]) -> Vec<bool> {
+    let opaque = opaque_mask(on_blue, on_orange, bare_blue);
+    let px = |img: &[u8], i: usize| [img[i * 4], img[i * 4 + 1], img[i * 4 + 2], 255];
+    (0..1280 * 720)
+        .map(|i| {
+            let lit = |on: &[u8], bare: &[u8]| px(on, i) != px(bare, i) && luma(px(on, i)) >= luma(px(bare, i)) - 2.0;
+            opaque[i] || (lit(on_blue, bare_blue) && lit(on_orange, bare_orange))
         })
         .collect()
 }
@@ -581,15 +639,18 @@ fn every_state_keeps_its_art_and_its_footprint() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// Incliné et à plat, le modèle n'a pas la même silhouette : le plan l'emporte avec lui.
+/// Incliné et à plat, le modèle n'a pas la même silhouette : le plan l'emporte avec lui. Au focus,
+/// l'angle fixe lui garde sa taille (`plan_cursor`) : seule son orientation sépare les deux
+/// silhouettes, et un demi-pixel de décalage en changerait autant de pixels. Les deux rendus
+/// posent donc la pointe sur le même point, fraction de pixel comprise.
 #[test]
 fn the_tilt_turns_every_state_with_the_screen() {
     let Some(gpu) = gpu() else { return };
     let comp = Compositor::new_sized(&gpu, 1280, 720).expect("compositor");
     let screen = FakeFrame::new(&gpu, Tint::Blue);
     for key in TESTED {
-        let still = resting_as(&format!("tilt-{key}"), Some(key), false);
-        let mask = |rotation: &str| -> (Vec<bool>, Probe) {
+        let mask = |rotation: &str, x: f32, y: f32| -> (Vec<bool>, Probe) {
+            let still = track_as(&format!("tilt-{key}"), Some(key), &[(0.0, x, y, false), (9.0, x, y, false)]);
             let (rgba, p) = render(&comp, &screen, &scene_json(rotation, Some(true), "default", 0.0, 3.0), &still);
             // Silhouette relative au hotspot, sur une fenêtre de ±1,1 unité.
             let r = (1.1 * p.unit) as i32;
@@ -602,17 +663,25 @@ fn the_tilt_turns_every_state_with_the_screen() {
             }
             (m, p)
         };
-        let (flat, pf) = mask("null");
-        let (iso, pi) = mask(r#""iso""#);
+        let (iso, pi) = mask(r#""iso""#, 0.45, 0.45);
+        // À plat, l'écran couvre 1024 × 576 px depuis (128, 72) (`screenRect`) : la pointe s'y pose
+        // sur celle du rendu incliné.
+        let (flat, pf) = mask("null", (pi.tip[0] - 128.0) / 1024.0, (pi.tip[1] - 72.0) / 576.0);
+        assert!(
+            (pf.tip[0] - pi.tip[0]).abs() < 0.01 && (pf.tip[1] - pi.tip[1]).abs() < 0.01,
+            "{key}: pointes {:?} et {:?}",
+            pf.tip,
+            pi.tip
+        );
         let n = flat.len().min(iso.len());
         let differ = (0..n).filter(|&k| flat[k] != iso[k]).count();
         println!("{key} : {differ} px diffèrent (unités {:.1} / {:.1})", pf.unit, pi.unit);
-        assert!(differ as f32 > 0.05 * pf.unit * pf.unit, "{key}: le modèle ne suit pas l'inclinaison ({differ})");
+        assert!(differ as f32 > 0.02 * pf.unit * pf.unit, "{key}: le modèle ne suit pas l'inclinaison ({differ})");
     }
 }
 
-/// Réglage éteint : la frame est celle du sprite plat, quelle que soit la façon de le dire (clé
-/// absente, `false`, ou allumé sur un autre thème), et quel que soit l'état.
+/// Le réglage éteint garde le sprite plat. Activé, le mode 3D dépend du sprite fourni au natif,
+/// pas du libellé du thème.
 #[test]
 fn without_the_model_the_cursor_renders_the_flat_sprite() {
     let Some(gpu) = gpu() else { return };
@@ -641,13 +710,13 @@ fn without_the_model_the_cursor_renders_the_flat_sprite() {
             }
         }
         assert!(absent == off, "{rotation}: model3d=false a changé la frame");
-        assert!(absent == other, "{rotation}: un thème sans modèle a changé la frame");
+        assert!(other == on, "{rotation}: le libellé du thème a changé le rendu natif");
         assert!(absent != on, "{rotation}: le réglage allumé ne change rien");
         let text_off = render(&comp, &screen, &scene_json(rotation, Some(false), "default", 0.0, 3.0), &text).0;
         let text_other = render(&comp, &screen, &scene_json(rotation, Some(true), "other", 0.0, 3.0), &text).0;
         let text_on = render(&comp, &screen, &scene_json(rotation, Some(true), "default", 0.0, 3.0), &text).0;
-        assert!(text_off == text_other, "{rotation}: le I d'un autre thème n'est plus plat");
-        assert!(text_off != text_on, "{rotation}: le I du thème par défaut reste plat");
+        assert!(text_other == text_on, "{rotation}: le libellé du thème a changé le rendu natif du I");
+        assert!(text_off != text_on, "{rotation}: le I ne passe pas en 3D");
         assert!(text_off != off, "{rotation}: l'état n'a pas changé le sprite");
     }
 }
@@ -710,6 +779,75 @@ fn the_motion_blur_trail_draws_modelled_copies() {
     assert!(rgba != flat, "la traînée 3D est celle du sprite plat");
 }
 
+/// Les curseurs sculptés (flèche et main de chaque thème), dessinés par le shader et non extrudés
+/// d'un PNG : chacun est là, sa pointe sur le hotspot, son corps en bas à droite de celle-ci (y
+/// vers le bas : un modèle retourné finirait au-dessus), et il porte son ombre en l'air. Le
+/// cristal de Prism Glow est de verre : son corps compte ce qu'il couvre, et il doit laisser voir
+/// le contenu (une bonne part de lui change avec la teinte de l'écran).
+#[test]
+fn the_sculpted_cursors_stand_at_the_hotspot() {
+    let Some(gpu) = gpu() else { return };
+    let comp = Compositor::new_sized(&gpu, 1280, 720).expect("compositor");
+    let (blue, orange) = (FakeFrame::new(&gpu, Tint::Blue), FakeFrame::new(&gpu, Tint::Orange));
+    let bare = render_any(&comp, &blue, &hidden_json("null"), &resting("sculpt-bare", false)).0;
+    let bare_orange = render_any(&comp, &orange, &hidden_json("null"), &resting("sculpt-bare", false)).0;
+    let mut failures = Vec::new();
+    for (theme, ..) in SCULPTED {
+        for state in ["arrow", "pointer"] {
+            let json = sculpted_scene_json("null", theme, 5.0);
+            let still = resting_at(&format!("sculpt-{theme}-{state}"), Some(state), false, 0.5);
+            let (hover, p) = render(&comp, &blue, &json, &still);
+            let hover_b = render(&comp, &orange, &json, &still).0;
+            save(&format!("sculpt-{theme}-{state}"), &hover);
+            let glass = theme == "prism-glow";
+            let mask = if glass { covered_mask(&hover, &hover_b, &bare, &bare_orange) } else { opaque_mask(&hover, &hover_b, &bare) };
+            let (mut body, mut c, mut near) = (0usize, [0.0f32; 2], f32::MAX);
+            for y in 0..720 {
+                for x in 0..1280 {
+                    if mask[y * 1280 + x] {
+                        body += 1;
+                        c = [c[0] + x as f32, c[1] + y as f32];
+                        near = near.min((x as f32 - p.tip[0]).hypot(y as f32 - p.tip[1]));
+                    }
+                }
+            }
+            let c = [c[0] / body.max(1) as f32, c[1] / body.max(1) as f32];
+            let shadow = (0..1280 * 720)
+                .filter(|&i| {
+                    let (a, b) = (&hover[i * 4..i * 4 + 4], &bare[i * 4..i * 4 + 4]);
+                    !mask[i] && a != b && luma([a[0], a[1], a[2], 255]) < luma([b[0], b[1], b[2], 255]) - 6.0
+                })
+                .count();
+            let u = p.unit;
+            println!(
+                "{theme}/{state} : unité {u:.1} px, corps {body} px, pointe à {near:.1} px du hotspot, \
+                 centroïde {c:?} pour la pointe {:?}, ombre {shadow} px",
+                p.tip
+            );
+            if (body as f32) < 0.12 * u * u {
+                failures.push(format!("{theme}/{state} : {body} px de corps pour {u:.0} px d'unité"));
+            }
+            if near > 0.08 * u {
+                failures.push(format!("{theme}/{state} : le modèle est à {near:.1} px du hotspot"));
+            }
+            if !(c[0] > p.tip[0] && c[1] > p.tip[1] + 0.2 * u) {
+                failures.push(format!("{theme}/{state} : corps en {c:?}, pas en bas à droite de {:?}", p.tip));
+            }
+            if shadow * 10 < body * 3 {
+                failures.push(format!("{theme}/{state} : pas d'ombre en l'air ({shadow} px)"));
+            }
+            if glass {
+                let through = (0..1280 * 720).filter(|&i| mask[i] && hover[i * 4..i * 4 + 3] != hover_b[i * 4..i * 4 + 3]).count();
+                println!("{theme}/{state} : {through} px du corps laissent voir l'écran");
+                if through * 10 < body * 3 {
+                    failures.push(format!("{theme}/{state} : le cristal ne laisse voir l'écran que sur {through} px"));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 /// Planches à regarder (opt-in, `OPENSCREEN_CURSOR3D_OUT`) : les seize états en l'air sur un
 /// écran à plat, chacun à côté de son sprite plat ; la flèche, la main et le I posés sur un écran
 /// incliné ; et les grandes flèches (taille 8) qui servent à la comparaison avec le modèle
@@ -750,6 +888,19 @@ fn contact_sheets() {
         }
     }
     tilted.save(format!("{dir}/states-touch-flat-and-iso.png")).expect("planche");
+
+    // Les curseurs sculptés : un thème par ligne, flèche et main en l'air sur l'écran à plat,
+    // puis posées sur l'écran incliné.
+    let cases = [("arrow", "null", false), ("pointer", "null", false), ("arrow", r#""iso""#, true), ("pointer", r#""iso""#, true)];
+    let mut sculpted = image::RgbaImage::new(4 * CELL, SCULPTED.len() as u32 * CELL);
+    for (row, (theme, ..)) in SCULPTED.iter().enumerate() {
+        for (col, (state, rotation, click)) in cases.iter().enumerate() {
+            let track = resting_as(&format!("sheet-{theme}-{col}"), Some(state), *click);
+            let (rgba, p) = render(&comp, &screen, &sculpted_scene_json(rotation, theme, 5.0), &track);
+            image::imageops::overlay(&mut sculpted, &crop(&rgba, p), (col as u32 * CELL) as i64, (row as u32 * CELL) as i64);
+        }
+    }
+    sculpted.save(format!("{dir}/sculpted.png")).expect("planche");
 
     let (still, clicked) = (resting("big-still", false), resting("big-clicked", true));
     for (name, rotation) in [("flat", "null"), ("iso", r#""iso""#)] {

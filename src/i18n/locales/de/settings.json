@@ -5,13 +5,14 @@
 		"motionDrift": "Treiben",
 		"motionAurora": "Polarlicht",
 		"motionWaves": "Wellen",
-		"motionGradientOnly": "Animation gilt nur für Verlaufshintergründe. Wähle einen Verlauf, um ihn zu animieren.",
 		"gradientLabel": "Verlauf {{index}}",
 		"uploadCustom": "Eigenes hochladen",
 		"unsupportedImage": "Nicht unterstütztes Bild. Verwende eine JPG- oder PNG-Datei.",
 		"title": "Hintergrund",
 		"imageLabel": "Hintergrund {{index}}",
 		"custom": "Eigenes",
+		"customColor": "Eigene Farbe",
+		"customGradient": "Verlauf aus einer Farbe",
 		"help": "Wähle, was hinter der Aufnahme zu sehen ist: ein mitgeliefertes Hintergrundbild, eine Volltonfarbe, einen Verlauf oder ein eigenes Bild von der Festplatte.",
 		"gradient": "Verlauf",
 		"colorLabel": "Farbe {{color}}",
@@ -50,9 +51,9 @@
 		"errorReading": "Beim Lesen der Datei ist ein Fehler aufgetreten."
 	},
 	"annotation": {
-		"supportedFormats": "Unterstützte Formate: JPG, PNG, GIF, WebP",
 		"blurShapeRectangle": "Rechteck",
 		"size": "Größe",
+		"customSize": "Eigene Größe",
 		"tipShiftTabCycle": "Mit Shift+Tab rückwärts durchlaufen.",
 		"clearBackground": "Hintergrund entfernen",
 		"colorPalette": "Farbpalette",
@@ -106,17 +107,20 @@
 		"blurBg": "Hintergrund unscharf",
 		"help": "Rahmengestaltung der Aufnahme: Hintergrund-Unschärfe, Schlagschatten, Bewegungsunschärfe, Eckenrundung und Abstand um das Video.",
 		"fitClipOne": "{{count}} Clip",
+		"formatAuto": "Auto",
+		"formatAutoMixed": "Clips unterschiedlich",
+		"formatFill": "Aufnahme",
+		"formatFillFit": "Ganz",
+		"formatFillFollow": "Cursor folgen",
 		"formatOriginal": "Original",
 		"fitClipMany": "{{count}} Clips",
 		"frame": "Rahmen",
 		"motion": "Bewegung",
 		"padding": "Abstand",
 		"format": "Format",
-		"fitClip": "Einpassen",
 		"motionBlur": "Bewegungsunschärfe",
 		"depthOfField": "Tiefenschärfe",
-		"depthOfFieldHint": "3D-Zooms",
-		"depthOfFieldNoTilt": "Kein 3D-Zoom in diesem Projekt",
+		"depthOfFieldTip": "Die ferne Seite des gekippten Bildschirms wird unscharf",
 		"roundness": "Rundung",
 		"frameStyle": "Stil",
 		"windowNone": "Keins",
@@ -127,9 +131,11 @@
 		"frameTheme": "Design",
 		"frameThemeLight": "Hell",
 		"frameThemeDark": "Dunkel",
-		"frameThemeHelp": "Silbernes Gehäuse mit hellem Rahmen oder Graphit mit dunklem. Gilt für alle Rahmen.",
-		"windowHelp": "Zeichnet ein Fenster oder ein in 3D modelliertes Gerät um die Aufnahme.",
-		"roundnessFrameHelp": "Der Bereich passt sich dem Rahmen an: 100 % ist die stärkste Rundung, die ihm steht."
+		"roundnessFrameHelp": "Der Bereich hängt vom Rahmen ab. 100 % ist die stärkste Rundung, die noch gut aussieht.",
+		"shadowNone": "Keiner",
+		"shadowLight": "Leicht",
+		"shadowMedium": "Mittel",
+		"shadowStrong": "Stark"
 	},
 	"stylePresets": {
 		"button": "Vorgaben",
@@ -146,6 +152,9 @@
 		"revealLinux": "Im Ordner anzeigen",
 		"rename": "Umbenennen",
 		"update": "Aus aktuellem Projekt aktualisieren",
+		"useForNewProjects": "Für neue Projekte verwenden",
+		"stopForNewProjects": "Nicht mehr für neue Projekte verwenden",
+		"newProjectsBadge": "Neue Projekte",
 		"delete": "Löschen",
 		"confirmDelete": "„{{name}}“ löschen?",
 		"applied": "„{{name}}“ angewendet",
@@ -167,7 +176,7 @@
 		"help": "Zusammengeführtes Transkript aller Clips auf der Timeline. Backspace / Entf schneidet ein Wort oder eine Auswahl aus dem Film (rot). Doppelklick auf ein Wort korrigiert seinen Text. Zeig auf ein markiertes Wort, um die Markierung aufzuheben.",
 		"editWord": "„{{word}}“ bearbeiten",
 		"laneFeedsCaptions": "Die Untertitel werden aus dieser Spur gebrannt.",
-		"insertedWord": "Von dir hinzugefügt — kein Audio dahinter",
+		"insertedWord": "Von dir hinzugefügt. Dazu gibt es kein Audio.",
 		"whisperHint": "Die Transkription nutzt lokales Whisper — sie läuft auf deinem Computer, es verlassen keine Daten das Gerät.",
 		"insertAria": "Neues Wort",
 		"editorAria": "Transkript für {{filename}}",
@@ -180,7 +189,7 @@
 		"laneVoiceover": "Voiceover",
 		"silence": "[Stille {{duration}} s]",
 		"clipLabel": "Clip {{index}}",
-		"correctedWord": "Korrigiert — die Transkription hörte „{{original}}“",
+		"correctedWord": "Korrigiert. Im Transkript stand „{{original}}“.",
 		"noClipTranscript": "Kein Transkript für diesen Clip — öffne die Asset-Karte und erzeuge es neu.",
 		"editingHintDev": "Doppelklick auf ein Wort korrigiert es, Backspace schneidet es aus dem Film, Tippen zwischen zwei Wörtern fügt eines hinzu.",
 		"noAudio": "Dieses Medium hat keine Audiospur",
@@ -200,15 +209,12 @@
 		"legacyAnnotations": "Dieses Projekt enthält noch Untertitel-Anmerkungen aus der alten Untertitel-Funktion ({{count}}). Sie werden über der Untertitel-Ebene gerendert.",
 		"backgroundOpacity": "Deckkraft",
 		"backgroundColor": "Hintergrundfarbe",
-		"alignCenter": "Zentriert",
 		"translationIsNonDestructive": "Übersetzungen werden neben dem Transkript gespeichert, nie darin — der Originaltext und seine Timings bleiben unangetastet.",
 		"distanceFromRight": "Abstand von rechts",
 		"language": "Sprache",
 		"text": "Text",
-		"anchorHintBottom": "Lange Untertitel wachsen nach oben — die Unterkante bleibt, wo sie ist.",
 		"distanceFromTop": "Abstand von oben",
 		"translateFailed": "Übersetzung fehlgeschlagen.",
-		"alignLeft": "Links",
 		"distanceFromBottom": "Abstand von unten",
 		"derivedFromTranscript": "{{count}} Untertitelzeilen, live aus dem Transkript abgeleitet.",
 		"translate": "Übersetzen",
@@ -217,14 +223,10 @@
 		"hiddenHint": "Untertitel stammen aus dem Transkript dieses Mediums. Schalte sie ein, um sie in der Vorschau und in Exporten zu sehen.",
 		"noTranscript": "Untertitel werden aus dem Medien-Transkript gelesen. Transkribiere dieses Video, um sie einzuschalten.",
 		"distanceFromLeft": "Abstand von links",
-		"anchorBottom": "Unten",
 		"transcribe": "Video transkribieren",
 		"bold": "Fett",
-		"alignRight": "Rechts",
-		"anchorTop": "Oben",
 		"minWords": "Min. Wörter pro Zeile",
 		"translateHint": "Das Transkript mit dem konfigurierten KI-Anbieter übersetzen",
-		"anchorHintTop": "Lange Untertitel wachsen nach unten — die Oberkante bleibt, wo sie ist.",
 		"displayLanguage": "Anzeige",
 		"removeLegacyAnnotations": "Alte Untertitel-Anmerkungen entfernen",
 		"background": "Hintergrund",
@@ -234,7 +236,15 @@
 		"font": "Schrift",
 		"translating": "Übersetzung läuft…",
 		"show": "Untertitel anzeigen",
-		"textColor": "Textfarbe"
+		"textColor": "Textfarbe",
+		"style": "Stil",
+		"styles": {
+			"classic": "Klassisch",
+			"bold": "Fett",
+			"minimal": "Minimal",
+			"light": "Hell"
+		},
+		"customize": "Anpassen"
 	},
 	"panes": {
 		"help": "Hilfe"
@@ -265,20 +275,30 @@
 		"fadeIn": "Einblenden",
 		"remove": "Spur löschen",
 		"loop": "Wiederholen",
-		"slipHint": "Mit Alt ziehen, um das Audio darin zu verschieben",
-		"help": "Lautstärke, Blenden und Wiederholung für diese Audiospur. Sie wird in der Vorschau und im Export über die Aufnahme gemischt. Zieh die Spur auf der Timeline, um sie zu verschieben oder ihre Länge zu ändern, oder halte Alt und zieh, um das Audio darin zu verschieben.",
+		"slipHint": "{{modifier}} halten und ziehen, um das Audio in der Spur zu verschieben",
+		"help": "Lautstärke, Blenden und Wiederholung für diese Audiospur. Sie wird in der Vorschau und im Export über die Aufnahme gemischt. Eine Musikspur wird automatisch leiser, während jemand spricht. Zieh die Spur auf der Timeline, um sie zu verschieben oder ihre Länge zu ändern, oder halte Alt und zieh, um das Audio darin zu verschieben.",
 		"add": "Audiospur hinzufügen",
 		"mute": "Stumm"
 	},
 	"layout": {
-		"help": "Wie die Webcam mit dem Bildschirm komponiert wird: Bild in Bild, vertikal gestapelt, Doppelrahmen, Maskenform, Größe und Spiegelung.",
+		"help": "Wie die Webcam mit dem Bildschirm komponiert wird: Bild in Bild, vertikal gestapelt, Doppelrahmen, Form, Rundung, Größe, Position und Spiegelung.",
 		"mirrorWebcam": "Webcam spiegeln",
 		"webcamFraming": "Webcam-Ausschnitt",
+		"webcamFramingDrag": "Ziehe den Rahmen, um ihn zu verschieben, oder eine Ecke, um zu zoomen.",
 		"shapes": {
-			"rectangle": "Rechteck",
-			"rounded": "Gerundet",
-			"circle": "Kreis",
-			"square": "Quadrat"
+			"square": "Quadrat",
+			"original": "Original"
+		},
+		"webcamPosition": "Position",
+		"anchors": {
+			"topLeft": "Oben links",
+			"top": "Oben",
+			"topRight": "Oben rechts",
+			"left": "Links",
+			"right": "Rechts",
+			"bottomLeft": "Unten links",
+			"bottom": "Unten",
+			"bottomRight": "Unten rechts"
 		},
 		"selectPreset": "Vorgabe auswählen",
 		"bgModes": {
@@ -287,18 +307,15 @@
 			"blur": "Unschärfe",
 			"transparent": "Freisteller"
 		},
-		"reactiveWebcamDescription": "Die Kamera verkleinert sich sanft, während das Video herangezoomt ist, damit sie nicht im Weg ist.",
 		"webcamBlurIntensity": "Unschärfe-Stärke",
 		"preset": "Vorgabe",
-		"webcamCropZoom": "Zoom",
 		"webcamSize": "Webcam-Größe",
 		"dualFrame": "Doppelrahmen",
-		"webcamCropY": "Vertikal verschieben",
 		"verticalStack": "Vertikal gestapelt",
 		"pictureInPicture": "Bild in Bild",
 		"webcamShape": "Kameraform",
-		"webcamCropX": "Horizontal verschieben",
 		"reactiveWebcam": "Bei Zoom verkleinern",
+		"reactiveWebcamTip": "Die Kamera wird kleiner, solange das Video herangezoomt ist",
 		"webcamBackground": "Kamera-Hintergrund",
 		"helpNoWebcam": "Dieses Projekt hat keine Kamera, deshalb sind die Layout-Regler aus und die Vorgabe zeigt „Keine Webcam“. Dein gespeichertes Layout bleibt erhalten, falls später eine Kamera dazukommt.",
 		"title": "Kamera-Layout",
@@ -317,7 +334,14 @@
 	},
 	"facets": {
 		"transcript": "Transkript",
-		"captions": "Untertitel"
+		"captions": "Untertitel",
+		"tips": {
+			"effects": "Komposition: Hintergrund, Rahmen, Schatten und Abstand",
+			"layout": "Kamera-Layout: Position, Form und Größe der Kamera",
+			"audio": "Audio: Ausgangspegel des ganzen Videos",
+			"cursor": "Cursor: Stil, Größe und Effekte",
+			"transcript": "Transkript: Wörter bearbeiten, um das Video zu schneiden"
+		}
 	},
 	"crop": {
 		"title": "Zuschneiden",
@@ -341,39 +365,20 @@
 			"lockedDisclaimer": "Wird vom globalen Auto-Fokus-Schalter in der Timeline gesteuert. Schalte ihn aus, um den Fokusmodus pro Zoom festzulegen.",
 			"auto": "Auto",
 			"manual": "Manuell",
-			"autoDescription": "Die Kamera folgt der aufgezeichneten Cursorposition",
 			"title": "Fokusmodus"
 		},
 		"camera": {
 			"title": "3D-Kamera",
 			"off": "Aus",
-			"fixed": "Fester Winkel",
-			"moving": "Bewegte Kamera",
 			"preset": {
-				"iso": "Schräg von oben",
 				"left": "Bildschirm nach links gedreht",
 				"right": "Bildschirm nach rechts gedreht",
-				"followCursor": "Kreist mit dem Cursor"
-			},
-			"description": {
-				"off": "Der Bildschirm bleibt flach.",
-				"iso": "Hält eine Pose: nach links gedreht und von oben gesehen.",
-				"left": "Hält eine Pose: Der Bildschirm zeigt nach links, seine rechte Kante kommt nach vorn.",
-				"right": "Hält eine Pose: Der Bildschirm zeigt nach rechts, seine linke Kante kommt nach vorn.",
-				"followCursor": "Der Bildschirm bleibt stehen; die Kamera kreist um ihn, schwenkt zur Seite des Cursors und hebt oder senkt sich mit ihm."
-			},
-			"needsCursor": "Der Cursor ist ausgeblendet: Diese Kamera hat nichts zu folgen und hält ihren Startwinkel."
-		},
-		"clickImpact": {
-			"title": "Klick-Impuls",
-			"description": "Jeder Klick drückt den geneigten Bildschirm: Die geklickte Seite sinkt ein und federt zurück.",
-			"needsRotation": "Wähle zuerst eine 3D-Kamera: Nur ein geneigter Bildschirm kann gedrückt werden.",
-			"needsCursor": "Der Cursor ist ausgeblendet: Der Bildschirm reagiert nur auf sichtbare Klicks.",
-			"descriptionCamera": "Jeder Klick schiebt die Kamera ein wenig zurück, dann federt sie nach vorn."
+				"orbit": "3D-Orbit"
+			}
 		},
 		"level": "Zoomstufe",
-		"previewHold": "Gedrückt halten für die Zoom-Vorschau",
 		"customScale": "Eigener Zoom",
+		"customScaleRange": "Der Zoom reicht von {{min}}× bis {{max}}×",
 		"selectRegion": "Wähle einen Zoom-Bereich zum Anpassen",
 		"cursor": {
 			"title": "Cursor",
@@ -383,7 +388,7 @@
 	},
 	"audio": {
 		"outputGain": "Ausgangspegel",
-		"help": "Passe den Audio-Ausgangspegel an. Er gilt in der Vorschau und im Export identisch.",
+		"help": "Stimmen werden automatisch auf eine Standardlautheit gebracht. Passe den Ausgangspegel davon ausgehend an; er gilt in der Vorschau und im Export identisch.",
 		"reset": "Audio zurücksetzen",
 		"title": "Audio"
 	},
@@ -404,18 +409,33 @@
 		"smoothing": "Glättung",
 		"clickBounce": "Klick-Federung",
 		"model3d": "3D-Cursor",
-		"model3dHint": "Standardstil: Jede Cursorform wird 3D. Andere Stile bleiben flach.",
-		"model3dNeedsCursor": "Aktiviere „Cursor anzeigen“, um den 3D-Cursor zu verwenden.",
+		"model3dTip": "Zeichnet den Standard-Cursor als 3D-Objekt mit Schatten",
+		"clickImpact": "Klick-Impuls",
+		"clickImpactTip": "Der Bildschirm bewegt sich bei jedem Klick ein wenig",
 		"help": "Cursor-Darstellung aus der aufgezeichneten Telemetrie: Stil, Größe, Glättung, Bewegungsunschärfe und Klick-Federung.",
-		"clipToBoundsDescription": "Hält den Cursor innerhalb des Videobilds. Schalte es aus, damit der Cursor über die Ränder hinausragen kann — nützlich beim Hineinzoomen oder Verschieben.",
 		"size": "Größe",
 		"title": "Cursor",
 		"show": "Cursor anzeigen",
 		"themeDefault": "Standard",
-		"clipToBounds": "Auf Canvas begrenzen",
+		"types": "Cursortypen",
+		"typeArrow": "Pfeil",
+		"typePointer": "Hand",
+		"typeText": "Text",
+		"typeGrab": "Greifen",
+		"typeResize": "Größe ändern",
+		"typeBusy": "Beschäftigt",
+		"typeCrosshair": "Fadenkreuz",
+		"typeNotAllowed": "Nicht verfügbar",
+		"typeHelp": "Hilfe",
+		"typeUpArrow": "Alternative Auswahl",
+		"typeAsArrow": "{{type}}: wird als Pfeil gezeigt",
 		"motionBlur": "Bewegungsunschärfe",
 		"theme": "Cursor-Stil",
-		"autoHide": "Bei Inaktivität ausblenden"
+		"autoHide": "Bei Inaktivität ausblenden",
+		"autoHideTip": "Der Cursor blendet sich aus, wenn er stillsteht",
+		"bounceNone": "Keiner",
+		"bounceLight": "Leicht",
+		"bounceStrong": "Stark"
 	},
 	"export": {
 		"gifButton": "GIF exportieren",
@@ -424,5 +444,11 @@
 	},
 	"trim": {
 		"deleteRegion": "Trim-Bereich löschen"
+	},
+	"textPlate": {
+		"none": "Keine",
+		"dark": "Dunkel",
+		"light": "Hell",
+		"custom": "Eigene"
 	}
 }

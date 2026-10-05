@@ -24,10 +24,10 @@ Cette page est publiée par le projet OpenScreen. Les informations sur Cap provi
 | Ce qu'il enregistre | Un écran ou une fenêtre. Recadrage possible ensuite dans l'éditeur | Un écran, une fenêtre, une zone, ou la caméra seule |
 | Liens de partage hébergés | Non | Oui. Jusqu'à 5 minutes par lien avec la formule Free et la licence Desktop, sans limite avec Cap Pro (en septembre 2026) |
 | Connexion à un compte | Jamais nécessaire | Nécessaire pour les liens de partage et le mode Instant |
-| Zooms automatiques | Oui, placés à partir du mouvement enregistré du curseur | Oui, générés à partir des clics enregistrés |
+| Zooms automatiques | Oui, planifiés à partir des clics enregistrés | Oui, générés à partir des clics enregistrés |
 | Sous-titres | Whisper en local, un modèle d'environ 264 Mo, téléchargé une fois. Incrustés dans la vidéo | Whisper ou Parakeet en local, en bêta. Incrustés dans la vidéo, ou enregistrés en SRT ou WebVTT |
 | Fonctions IA | Montage par chat en option et traduction des sous-titres en 15 langues, avec votre propre clé de fournisseur | Hébergées dans Cap Pro : titres, résumés, chapitres, transcriptions et traduction des sous-titres. Aucune clé nécessaire |
-| Export | MP4 (H.264 ou H.265) en 720p, 1080p ou taille source, 24, 30 ou 60 fps. GIF de 15 à 30 fps. Sans filigrane | MP4 en 720p, 1080p ou 4K, 15, 30 ou 60 fps. GIF de 10 à 30 fps. MOV transparent curseur seul. Sans filigrane. Aucun réglage de codec documenté |
+| Export | MP4 (H.264) en 720p, 1080p ou taille source, 24, 30 ou 60 fps. GIF de 15 à 30 fps. Sans filigrane | MP4 en 720p, 1080p ou 4K, 15, 30 ou 60 fps. GIF de 10 à 30 fps. MOV transparent curseur seul. Sans filigrane |
 | Équipes et conformité | Aucune | Espaces de travail d'équipe. Module SSO SAML à 199 $/mois. SOC 2 Type II, ISO 27001 et HIPAA, avec un BAA signé à 99 $/mois (en septembre 2026) |
 | Interface en ligne de commande | Oui, avec sortie JSON | Oui, avec sortie JSON |
 
@@ -35,7 +35,7 @@ Cette page est publiée par le projet OpenScreen. Les informations sur Cap provi
 
 Les deux éditeurs se recoupent largement. Rien de ce qui suit n'est propre à l'une ou l'autre.
 
-- **Zooms automatiques et manuels.** Dans OpenScreen, **Amélioration auto → Zooms automatiques** place les zooms à partir du mouvement enregistré du curseur, sans appel réseau ni modèle, et les zooms manuels se déclinent en six profondeurs. Cap génère des zooms autour des clics enregistrés et propose des zooms manuels de 1x à 4,5x. Plus de détails sur le [zoom automatique](/features/auto-zoom/).
+- **Zooms automatiques et manuels.** Dans OpenScreen, **Amélioration auto → Zooms automatiques** planifie les zooms à partir des clics enregistrés, sans appel réseau ni modèle, et les zooms manuels se déclinent en six profondeurs. Cap génère des zooms autour des clics enregistrés et propose des zooms manuels de 1x à 4,5x. Plus de détails sur le [zoom automatique](/features/auto-zoom/).
 - **Un curseur modifiable après coup.** Les deux enregistrent le pointeur sous forme de données plutôt que de pixels, donc vous pouvez le redimensionner, lisser son mouvement ou le masquer après la prise.
 - **Arrière-plans et cadrage.** Les deux ajoutent des fonds d'écran, des couleurs unies, des dégradés ou votre propre image derrière l'enregistrement, avec marge, coins arrondis et ombre. Les deux produisent une vidéo large, verticale ou carrée.
 - **Webcam, microphone et audio système** dans le même enregistrement. Les deux peuvent flouter l'arrière-plan de la webcam. OpenScreen peut aussi le retirer ou le remplacer par une image, sans écran vert. Cap a ajouté la suppression d'arrière-plan sous macOS dans la version 0.6.0.
@@ -63,7 +63,6 @@ Si vous choisissez entre les deux, vérifiez d'abord la licence. Les autres diff
 
 ### Montage et export {#editing-and-export}
 
-- **Choix du codec.** L'export MP4 se fait en H.264 ou H.265. Les options d'export de Cap listent des préréglages de résolution, de fréquence d'images et de qualité, mais aucun réglage de codec. Voir [Export](/docs/export/).
 - **Une plage de vitesse plus large.** Les régions de vitesse d'OpenScreen vont de 0,1x à 100x. La documentation du mode Studio de Cap liste des vitesses de segment de 0,25x à 8x.
 - **Vitesse d'export.** Les deux applications figurent dans le [banc d'essai d'export public (en anglais)](/blog/2026/09/09/an-export-benchmark-hard-to-fake/). Au moment d'écrire ces lignes, l'entrée d'OpenScreen se classe devant Cap 0.6.0. Les résultats varient selon les machines : consultez le classement à jour sur cette page.
 
@@ -81,11 +80,11 @@ Si vous choisissez entre les deux, vérifiez d'abord la licence. Les autres diff
 ## Pour commencer {#getting-started}
 
 1. Téléchargez OpenScreen depuis la [page de téléchargement](/download/). Sous Windows, le Microsoft Store est la voie recommandée.
-2. Suivez l'[Installation](/docs/installation/). Sous macOS, accordez les autorisations Enregistrement de l'écran et Accessibilité avant la première prise.
-3. Faites un premier enregistrement avec le [démarrage rapide](/docs/quick-start/), puis lancez **Amélioration auto → Zooms automatiques** dessus.
+2. Suivez l'[Installation](/docs/installation/). Sous macOS, accordez les autorisations depuis la fenêtre qui s'ouvre au premier lancement.
+3. Faites un premier enregistrement avec le [démarrage rapide](/docs/quick-start/). Il s'ouvre dans l'éditeur avec ses zooms automatiques déjà placés.
 4. Pour réutiliser des vidéos faites avec Cap, exportez-les d'abord en MP4. La [médiathèque](/docs/media-library/) importe des fichiers MP4, MOV, MKV et d'autres formats vidéo dans un projet.
 
-Vous comparez aussi d'autres outils  Voir l'[alternative à Screen Studio](/alternatives/screen-studio/), [OpenScreen vs OBS Studio](/compare/openscreen-vs-obs/), l'[alternative à Camtasia](/alternatives/camtasia/) et l'[alternative à Loom](/alternatives/loom/), ou retournez à la [page d'accueil d'OpenScreen](/).
+Vous comparez aussi d'autres outils ? Voir l'[alternative à Screen Studio](/alternatives/screen-studio/), [OpenScreen vs OBS Studio](/compare/openscreen-vs-obs/), l'[alternative à Camtasia](/alternatives/camtasia/) et l'[alternative à Loom](/alternatives/loom/), ou retournez à la [page d'accueil d'OpenScreen](/).
 
 ## Sources {#sources}
 

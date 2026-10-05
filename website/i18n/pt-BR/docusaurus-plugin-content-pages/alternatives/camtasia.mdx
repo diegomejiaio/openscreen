@@ -11,7 +11,7 @@ keywords:
 
 # Uma alternativa grátis e de código aberto ao Camtasia
 
-O OpenScreen é uma alternativa gratuita ao Camtasia para Windows, macOS e Linux, lançada sob a licença MIT. Assim como o Camtasia, ele grava a tela, a webcam e o áudio, dá zoom para onde o cursor vai, transcreve a fala na sua máquina com o Whisper, e exporta em MP4 ou GIF. Diferente do Camtasia, que é vendido como assinatura anual e coloca marca d'água nas exportações do editor gratuito, ele não custa nada, não exige conta e não adiciona marca d'água. O Camtasia ainda é a melhor escolha se você cria treinamentos com quizzes e relatórios SCORM, entrega legendas ocultas ou arquivos VTT, ou publica direto no YouTube ou no Screencast.
+O OpenScreen é uma alternativa gratuita ao Camtasia para Windows, macOS e Linux, lançada sob a licença MIT. Assim como o Camtasia, ele grava a tela, a webcam e o áudio, dá zoom onde você clica, transcreve a fala na sua máquina com o Whisper, e exporta em MP4 ou GIF. Diferente do Camtasia, que é vendido como assinatura anual e coloca marca d'água nas exportações do editor gratuito, ele não custa nada, não exige conta e não adiciona marca d'água. O Camtasia ainda é a melhor escolha se você cria treinamentos com quizzes e relatórios SCORM, entrega legendas ocultas ou arquivos VTT, ou publica direto no YouTube ou no Screencast.
 
 Esta página é publicada pelo projeto OpenScreen. Os dados sobre o Camtasia vêm das próprias páginas da TechSmith e foram verificados em setembro de 2026. As fontes estão listadas no final.
 
@@ -25,13 +25,13 @@ Esta página é publicada pelo projeto OpenScreen. Os dados sobre o Camtasia vê
 | Código-fonte | Código aberto, licença MIT | Proprietário |
 | Plataformas | Windows 10 (1903 ou posterior) e 11, x64. macOS 13 ou posterior, Apple Silicon e Intel. Linux, x64 | Windows 10 20H2 ou posterior, 64 bits, com processador AVX2. macOS 14.0 ou posterior. Sem Linux (em setembro de 2026) |
 | O que grava | Uma tela ou uma janela, com webcam, microfone e áudio do sistema | Tela, webcam, microfone e áudio do sistema, em faixas separadas |
-| Zooms automáticos | Sim, posicionados a partir do cursor gravado | Sim, SmartFocus, em gravações do Camtasia Recorder e do Camtasia Rev |
-| Efeitos de cursor | Tamanho, suavização, desfoque de movimento, rebote de clique e temas de cursor | 14 efeitos de cursor, além de efeitos de clique como ondulação, anéis e zoom de clique |
+| Zooms automáticos | Sim, posicionados nos cliques gravados | Sim, SmartFocus, em gravações do Camtasia Recorder e do Camtasia Rev |
+| Efeitos de cursor | Tamanho, suavização, desfoque de movimento e rebote de clique | 14 efeitos de cursor, além de efeitos de clique como ondulação, anéis e zoom de clique |
 | Legendas | Whisper no dispositivo, um modelo de cerca de 264 MB, baixado uma vez. Detecção automática ou 100 códigos de idioma. Embutidas no vídeo | Whisper no dispositivo, 57 idiomas listados. Legendas dinâmicas, legendas ocultas, e importação e exportação básica de VTT |
 | Tradução | Legendas em 15 idiomas, por um provedor de IA que você conecta | Áudio e transcrição em 7 idiomas e 9 dialetos, no plano Pro |
 | IA generativa | Edição por chat opcional, com sua própria chave | Incluída nos planos Create e Pro. Vozes nos dois. Avatares, dublagem e tradução no Pro |
 | Quizzes e SCORM | Não | Sim. Quatro tipos de pergunta, com resultados enviados a um LMS compatível com SCORM |
-| Exportação | MP4 (H.264 ou H.265) ou GIF, até 60 fps, sem marca d'água | MP4, GIF, M4A, WebM com transparência, ou um vídeo interativo Smart Player |
+| Exportação | MP4 (H.264) ou GIF, até 60 fps, sem marca d'água | MP4, GIF, M4A, WebM com transparência, ou um vídeo interativo Smart Player |
 | Publicação | Um arquivo no disco. Sem hospedagem | Hospedagem no Screencast e envio direto ao YouTube |
 | Linha de comando | Comandos `record`, `export`, `captions` e `pack`. Saída NDJSON com `--json` | Opções documentadas que controlam o Camtasia Recorder no Windows, versões 9 em diante |
 
@@ -39,7 +39,7 @@ Esta página é publicada pelo projeto OpenScreen. Os dados sobre o Camtasia vê
 
 O núcleo de um fluxo de gravação de tela está nos dois. Nada do que segue é exclusivo de um ou outro.
 
-- **Zooms automáticos.** O SmartFocus do Camtasia lê movimento do mouse, rolagem e cliques de um arquivo do Camtasia Recorder, e também funciona em mídia do Camtasia Rev. No OpenScreen, **Melhoria automática → Zooms automáticos** posiciona os zooms a partir do movimento gravado do cursor, sem chamada de rede e sem modelo. Zooms manuais em seis profundidades ficam ao lado deles. Mais em [zoom automático](/features/auto-zoom/).
+- **Zooms automáticos.** O SmartFocus do Camtasia lê movimento do mouse, rolagem e cliques de um arquivo do Camtasia Recorder, e também funciona em mídia do Camtasia Rev. No OpenScreen, **Melhoria automática → Zooms automáticos** posiciona os zooms nos cliques gravados, sem chamada de rede e sem modelo. Zooms manuais em seis profundidades ficam ao lado deles. Mais em [zoom automático](/features/auto-zoom/).
 - **Um cursor que você pode mudar depois.** Os dois mantêm dados do cursor das próprias gravações, então os efeitos de cursor e clique são aplicados depois da gravação.
 - **Webcam, microfone e áudio do sistema** na mesma gravação.
 - **Uma linha do tempo com vários clipes.** Os dois editam gravações e vídeos importados em uma linha do tempo. No OpenScreen, a linha do tempo também tem faixas de locução e música, regiões de velocidade e um recorte para cada clipe. Veja [Biblioteca de mídia e clipes](/docs/media-library/).
@@ -75,9 +75,9 @@ O núcleo de um fluxo de gravação de tela está nos dois. Nada do que segue é
 ## Primeiros passos {#getting-started}
 
 1. Baixe o OpenScreen na [página de download](/download/). No Windows, a Microsoft Store é o caminho recomendado.
-2. Siga a [Instalação](/docs/installation/). No macOS, conceda as permissões de Gravação de Tela e Acessibilidade antes da primeira gravação.
+2. Siga a [Instalação](/docs/installation/). No macOS, conceda as permissões na janela que se abre na primeira execução.
 3. Traga trabalhos prontos como arquivos de vídeo. O OpenScreen não abre projetos do Camtasia, então exporte-os para MP4 primeiro e depois importe os arquivos pela [biblioteca de mídia](/docs/media-library/).
-4. Faça uma primeira gravação com o [início rápido](/docs/quick-start/), depois rode **Melhoria automática → Zooms automáticos** nela e adicione [legendas](/docs/captions/).
+4. Faça uma primeira gravação com o [início rápido](/docs/quick-start/). Ela abre no editor com os zooms automáticos já posicionados. Depois adicione [legendas](/docs/captions/).
 
 Comparando outras ferramentas também? Veja a [alternativa ao Screen Studio](/alternatives/screen-studio/), [OpenScreen vs Cap](/compare/openscreen-vs-cap/), [OpenScreen vs OBS Studio](/compare/openscreen-vs-obs/) e a [alternativa ao Loom](/alternatives/loom/), ou volte para a [página inicial do OpenScreen](/).
 

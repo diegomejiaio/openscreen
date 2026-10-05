@@ -22,9 +22,9 @@ Nach dem Start zeigt OpenScreen eine kleine schwebende Leiste (das HUD) am unter
 
 ## 2. Auswählen, was aufgenommen wird {#2-pick-what-to-record}
 
-Klicke auf die Quellenauswahl (Bildschirmsymbol), um die Quellenliste zu öffnen. Sie zeigt deine **Screens** und **Windows** in zwei Tabs. Wähle ein Vorschaubild und klicke auf **Share**.
+Klicke auf die Quellenauswahl (Bildschirmsymbol), um die Quellenliste zu öffnen. Sie zeigt deine **Bildschirme** und **Fenster** in zwei Tabs. Wähle ein Vorschaubild und klicke auf **Teilen**. Unter macOS 15.2 und neuer wählst du den Bildschirm oder das Fenster stattdessen in der Systemauswahl von Apple aus.
 
-Unter Linux hat das HUD keine Quellenauswahl. Dort steht *Your system will ask what to share*: Wenn du auf Aufnahme klickst, fragt der Freigabedialog deines Desktops nach dem Bildschirm oder Fenster, vor dem Countdown und bei jedem Take erneut.
+Unter Linux hat das HUD keine Quellenauswahl. Dort steht *Dein System fragt gleich, was du teilen möchtest*: Wenn du auf Aufnahme klickst, fragt der Freigabedialog deines Desktops nach dem Bildschirm oder Fenster, vor dem Countdown und bei jedem Take erneut.
 
 ## 3. Audio und Webcam einschalten (optional) {#3-turn-on-audio-and-webcam-optional}
 
@@ -49,7 +49,7 @@ Klicke auf **Open Studio** (oder warte, bis es sich nach dem Stoppen von selbst 
 ## 6. Kürzen und exportieren {#6-trim-and-export}
 
 - Setze den Abspielkopf an die Stelle, an der du schneiden willst, und drücke `T` (oder klicke auf die Scheren-Schaltfläche): Dort entsteht ein zwei Sekunden langer Schnittbereich. Ziehe an seinen Rändern, um anzupassen, was entfernt wird.
-- Klicke in der oberen Leiste auf **Export**, wähle **MP4** oder **GIF**, lege eine Qualität fest und klicke auf **Export**.
+- Klicke in der oberen Leiste auf **Export**, prüfe Format und Qualität und klicke auf **Export**.
 - Wenn der Export fertig ist, findest du deine Datei über **Show in folder**.
 
 Das ist der grundlegende Ablauf. Die vollständigen Bearbeitungswerkzeuge (Zooms, Geschwindigkeitsänderungen, Annotationen, Cursorgestaltung, Webcam-Layout) findest du unter [Bearbeitung & Zeitleiste](./editing-timeline.md). Wie du mehrere Takes zu einem Video zusammensetzt, steht unter [Mediathek](./media-library.md).

@@ -1,5 +1,6 @@
 import { DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import type { ExportFormat, ExportQuality, GifFrameRate, GifSizePreset } from "@/lib/exporter";
+import { DEFAULT_PROJECT_APPEARANCE } from "@/lib/projectDefaults";
 import { DEFAULT_WALLPAPER } from "@/lib/wallpaper";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
 import {
@@ -7,7 +8,6 @@ import {
 	DEFAULT_CROP_REGION,
 	DEFAULT_CURSOR_AUTO_HIDE,
 	DEFAULT_CURSOR_CLICK_BOUNCE,
-	DEFAULT_CURSOR_CLIP_TO_BOUNDS,
 	DEFAULT_CURSOR_MODEL3D,
 	DEFAULT_CURSOR_MOTION_BLUR,
 	DEFAULT_CURSOR_SIZE,
@@ -34,16 +34,17 @@ export const DEFAULT_GIF_OUTPUT_DIMENSIONS = {
 
 export const DEFAULT_EDITOR_APPEARANCE_SETTINGS: {
 	shadowIntensity: number;
-	showBlur: boolean;
+	backgroundBlur: number;
 	motionBlurAmount: number;
 	borderRadius: number;
 } = {
-	// Keep in sync with `DEFAULT_EDITOR_SETTINGS` (lib/ai-edition/store/editorSettings.ts),
-	// which is what the mounted v4 shell reads — see the rationale there.
-	shadowIntensity: 0.2,
-	showBlur: false,
-	motionBlurAmount: 0.2,
-	borderRadius: 40,
+	// The project defaults the v4 shell reads (`DEFAULT_PROJECT_APPEARANCE`), not a copy of them:
+	// this is what the CLI and a v2 project file fall back to, and a copy kept "in sync" by hand
+	// was one change away from rendering a different look there.
+	shadowIntensity: DEFAULT_PROJECT_APPEARANCE.shadowIntensity,
+	backgroundBlur: DEFAULT_PROJECT_APPEARANCE.backgroundBlur,
+	motionBlurAmount: DEFAULT_PROJECT_APPEARANCE.motionBlurAmount,
+	borderRadius: DEFAULT_PROJECT_APPEARANCE.borderRadius,
 };
 
 export const DEFAULT_EDITOR_LAYOUT_SETTINGS: {
@@ -52,7 +53,10 @@ export const DEFAULT_EDITOR_LAYOUT_SETTINGS: {
 	cropRegion: typeof DEFAULT_CROP_REGION;
 	wallpaper: string;
 } = {
-	padding: 50,
+	padding: DEFAULT_PROJECT_APPEARANCE.padding,
+	// What a v2 project file means when it states no ratio. Every such file predates Auto, so
+	// the answer stays 16:9 for good, as the v8 upgrader pins it for documents. New projects
+	// state their ratio instead (see CliRecordRunner).
 	aspectRatio: "16:9",
 	cropRegion: DEFAULT_CROP_REGION,
 	wallpaper: DEFAULT_WALLPAPER,
@@ -78,7 +82,8 @@ export const DEFAULT_CURSOR_SETTINGS: CursorVisualSettings & { show: boolean; th
 	motionBlur: DEFAULT_CURSOR_MOTION_BLUR,
 	clickBounce: DEFAULT_CURSOR_CLICK_BOUNCE,
 	model3d: DEFAULT_CURSOR_MODEL3D,
-	clipToBounds: DEFAULT_CURSOR_CLIP_TO_BOUNDS,
+	asArrow: DEFAULT_PROJECT_APPEARANCE.cursor.asArrow,
+	clickImpact: false,
 	theme: DEFAULT_CURSOR_THEME_ID,
 };
 

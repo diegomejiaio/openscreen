@@ -14,6 +14,12 @@
  * which is then stored as a concrete `"W:H"` token and can no longer drift.
  */
 
+import {
+	autoFormatAspect,
+	getWebcamLayoutPresetDefinition,
+	resolveWebcamLayoutPreset,
+	type WebcamLayoutPreset,
+} from "@/lib/compositeLayout";
 import { calculateEffectiveSourceDimensions } from "@/lib/exporter/mp4ExportSettings";
 import {
 	type AspectRatio,
@@ -22,6 +28,8 @@ import {
 	toAspectRatioToken,
 } from "@/utils/aspectRatioUtils";
 import type { AxcutAsset, AxcutClip, AxcutDocument } from "../schema";
+import { getEditorSettings } from "../store/editorSettings";
+import { assetCameraSource } from "../timeline/camera";
 
 export interface Dims {
 	width: number;
@@ -168,6 +176,141 @@ export function referenceClipDims(
 }
 
 /**
+ * The layout a clip actually gets: the project's preset, once the clip's own camera is
+ * resolved. Same predicate as the scene (`clipHasCamera`), so Auto and the render agree on
+ * which clips are laid out as a block.
+ */
+function clipLayoutPreset(
+	clip: AxcutClip,
+	assets: AxcutAsset[],
+	layoutPreset: WebcamLayoutPreset,
+): WebcamLayoutPreset {
+	const asset = assets.find((a) => a.id === clip.assetId);
+	return resolveWebcamLayoutPreset(layoutPreset, assetCameraSource(asset).path !== "");
+}
+
+/**
+ * Whether Auto is offered: every clip on the timeline has the same ratio, crop included, and the
+ * same layout once its own camera is resolved (picture-in-picture, a block layout, or no camera).
+ * Anything else is a timeline no single frame suits, and which clip should win is the user's
+ * call, made by picking a format, not a rule's.
+ *
+ * A clip without a camera counts as a different layout even under picture-in-picture, where the
+ * frame's shape would not change: the bubble is part of the look, and Auto only frames a timeline
+ * that looks the same throughout. Clips whose dimensions are not probed yet are skipped rather
+ * than counted as different.
+ */
+export function isAutoFormatAvailable(
+	document: AxcutDocument,
+	probedAssetDims: Record<string, Dims> = {},
+): boolean {
+	const { webcamLayoutPreset } = getEditorSettings(document);
+	const assetById = new Map(document.assets.map((a) => [a.id, a]));
+	const compositions = new Set<string>();
+	for (const clip of document.timeline.clips) {
+		const dims = clipEffectiveDims(clip, assetById, probedAssetDims);
+		if (!dims) continue;
+		const layout = clipLayoutPreset(clip, document.assets, webcamLayoutPreset);
+		compositions.add(`${toAspectRatioToken(dims.width, dims.height)}|${layout}`);
+	}
+	return compositions.size <= 1;
+}
+
+/**
+ * Whether the format can be filled with a window that follows the cursor, and if not, why.
+ *
+ * - `"none"`: nothing to fill. The format is Auto or has the recording's own shape, so the
+ *   recording already fills it; the option is not shown.
+ * - `"mixed"`: clips differ in shape, crop included. One window rule cannot suit them all.
+ * - `"layout"`: a side-by-side or stacked camera layout already fills its own slot.
+ * - `"frame"`: a device frame is drawn around the whole recording.
+ * - `"available"`: one shape, not the format's, alone in its frame.
+ */
+export type FormatFillAvailability = "none" | "mixed" | "layout" | "frame" | "available";
+
+export function formatFillAvailability(
+	document: AxcutDocument,
+	probedAssetDims: Record<string, Dims> = {},
+): FormatFillAvailability {
+	const settings = getEditorSettings(document);
+	if (settings.aspectRatio === "auto" || settings.aspectRatio === "native") return "none";
+	const assetById = new Map(document.assets.map((a) => [a.id, a]));
+	const shapes = new Set<string>();
+	let blockLayout = false;
+	for (const clip of document.timeline.clips) {
+		const dims = clipEffectiveDims(clip, assetById, probedAssetDims);
+		if (!dims) continue;
+		shapes.add(toAspectRatioToken(dims.width, dims.height) ?? "");
+		const preset = clipLayoutPreset(clip, document.assets, settings.webcamLayoutPreset);
+		blockLayout ||= getWebcamLayoutPresetDefinition(preset).transform.type === "block";
+	}
+	if (shapes.size > 1) return "mixed";
+	const [shape] = shapes;
+	// Within 1 %: a 1366×768 take is 16:9 to the eye, and a window would crop 3 px of it.
+	const format = getAspectRatioValue(settings.aspectRatio);
+	if (!shape || Math.abs(getAspectRatioValue(shape as AspectRatio) / format - 1) < 0.01) {
+		return "none";
+	}
+	if (blockLayout) return "layout";
+	if (settings.frame !== "none") return "frame";
+	return "available";
+}
+
+/** The fill is drawn: the user asked for it and the timeline allows it. */
+export function isFormatFillActive(
+	document: AxcutDocument,
+	probedAssetDims: Record<string, Dims> = {},
+): boolean {
+	return (
+		getEditorSettings(document).formatFollowCursor === true &&
+		formatFillAvailability(document, probedAssetDims) === "available"
+	);
+}
+
+/**
+ * The clip that opens the timeline, among those whose dimensions are known: where Auto reads
+ * the composition it frames.
+ */
+function firstClip(
+	document: AxcutDocument,
+	probedAssetDims: Record<string, Dims>,
+): { clip: AxcutClip; dims: Dims } | null {
+	const assetById = new Map(document.assets.map((a) => [a.id, a]));
+	let first: { clip: AxcutClip; dims: Dims } | null = null;
+	for (const clip of document.timeline.clips) {
+		const dims = clipEffectiveDims(clip, assetById, probedAssetDims);
+		if (dims && (!first || clip.timelineStartSec < first.clip.timelineStartSec)) {
+			first = { clip, dims };
+		}
+	}
+	return first;
+}
+
+/**
+ * What "Auto" resolves to: the frame shaped around the composition instead of the other way
+ * round (`autoFormatAspect`).
+ *
+ * Auto is only offered while the timeline holds one composition (`isAutoFormatAvailable`), so
+ * any clip describes it, and the first one is read. That choice only matters for a project that
+ * was on Auto and then became mixed: its frame keeps the first clip's shape, so a clip added
+ * after it, larger or not, moves nothing until the user picks a format. The output's SIZE still
+ * follows the largest clip (`referenceClipDims`), so no clip is drawn past its own resolution.
+ *
+ * Zoom, shadow and captions are left out on purpose: they happen inside the frame, in every
+ * format alike, and would make the shape move with the playhead. A device frame is in: every
+ * format measures the padding from its outer edge, so Auto wraps the whole device.
+ */
+function autoAspectRatioValue(document: AxcutDocument, probedAssetDims: Record<string, Dims>) {
+	const settings = getEditorSettings(document);
+	const first = firstClip(document, probedAssetDims);
+	const preset = first
+		? clipLayoutPreset(first.clip, document.assets, settings.webcamLayoutPreset)
+		: "no-webcam";
+	const screen = first?.dims ?? referenceClipDims(document, probedAssetDims);
+	return autoFormatAspect(screen, preset, settings.frame, settings.padding);
+}
+
+/**
  * The distinct native shapes of the clips on the timeline, most-used first.
  *
  * Deduped by REDUCED ratio, so 1920x1080 and 3840x2160 are the same entry (`"16:9"`) — the user
@@ -225,17 +368,18 @@ export function collectNativeFormats(
 }
 
 /**
- * Numeric ratio for a stored selection, with the document available to resolve the legacy
- * `"native"` value. Every consumer that frames or sizes the output must go through this rather
- * than bare `getAspectRatioValue`, which has no document and falls back to 16/9.
+ * Numeric ratio for a stored selection, with the document available to resolve `"auto"` and the
+ * legacy `"native"` value. Every consumer that frames or sizes the output must go through this
+ * rather than bare `getAspectRatioValue`, which has no document and falls back to 16/9.
  */
 export function resolveAspectRatioValue(
 	document: AxcutDocument | null | undefined,
 	aspectRatio: AspectRatio,
 	probedAssetDims: Record<string, Dims> = {},
 ): number {
-	if (aspectRatio !== "native") return getAspectRatioValue(aspectRatio);
-	if (!document) return getAspectRatioValue("native");
+	if (aspectRatio !== "native" && aspectRatio !== "auto") return getAspectRatioValue(aspectRatio);
+	if (!document) return getAspectRatioValue(aspectRatio);
+	if (aspectRatio === "auto") return autoAspectRatioValue(document, probedAssetDims);
 	const reference = referenceClipDims(document, probedAssetDims);
 	return getNativeAspectRatioValue(reference.width, reference.height);
 }

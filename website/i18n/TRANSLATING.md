@@ -66,19 +66,9 @@ In `code.json`, a description that mentions an English-only page means the same 
 
 ## Interface labels
 
-When a text names something in the OpenScreen interface (a button, a panel, a setting, in **bold** in the docs), use **the app's own translation**, not your own. They are in the app repository: `src/i18n/locales/<app-locale>/*.json`. The app locale is `fr`, `es`, `pt-BR`, `ja-JP`, `zh-CN` or `zh-TW`.
+When a text names something in the OpenScreen interface (a button, a panel, a setting, in **bold** in the docs), use **the app's own translation**, not your own. They are in the app repository: `src/i18n/locales/<app-locale>/*.json`. The app locale is `fr`, `es`, `pt-BR`, `ja-JP`, `zh-CN`, `zh-TW` or `de`.
 
 The same goes for operating-system labels (SmartScreen's *More info* and *Run anyway*, macOS's *Screen Recording* and *Accessibility*): use the words the system shows in your language.
-
-### German: English interface labels, for now
-
-No OpenScreen release has a German interface yet. It was added by [pull request #672](https://github.com/getopenscreen/openscreen/pull/672), which no release includes, so German users see the English interface. Until a release ships it:
-
-- German docs keep every OpenScreen interface label in English, exactly as the app shows it, in **bold**, with German text around it.
-- Do not take labels from that pull request or from `main`: they are not what German users see.
-- Operating-system labels are not affected: use the German ones.
-
-Once a release includes the German interface, switch the German docs to the app's own labels, from `src/i18n/locales/de/*.json` at that release.
 
 ## Check your work
 

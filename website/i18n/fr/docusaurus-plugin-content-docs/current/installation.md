@@ -26,7 +26,7 @@ Sous Windows, la voie recommandée est le [Microsoft Store](#windows). Partout a
 | | Minimum | Recommandé |
 |---|---|---|
 | **Windows** | Windows 10 version 1903 (build 18362) ou ultérieure, x64, Intel 8e génération / AMD Ryzen série 2000 ou plus récent. La capture native exige Windows 10 version 2004 (build 19041) ou ultérieure ; les builds antérieures se rabattent sur la [capture par le navigateur](#platform-differences) | Windows 11, Intel 12e génération / AMD Ryzen série 4000 ou plus récent |
-| **macOS** | macOS 13 (Ventura), exigé par ScreenCaptureKit pour la capture | macOS 14 ou ultérieur |
+| **macOS** | macOS 13 (Ventura), exigé par ScreenCaptureKit pour la capture. L'enregistrement du micro exige macOS 15 ou ultérieur | macOS 15.2 ou ultérieur |
 | **Linux** | x64. `xdg-desktop-portal` et PipeWire, dont l'enregistrement a besoin : le module de capture natif passe par eux, et un échec à ce niveau est signalé comme une erreur. Le repli sur la [capture par le navigateur](#platform-differences) ne s'active que si une version d'OpenScreen ne contient pas le module lui-même. L'audio système exige en plus PipeWire comme serveur son (par défaut sur [Ubuntu 22.10+](https://discourse.ubuntu.com/t/kinetic-kudu-release-notes/27976) et [Fedora 34+](https://fedoraproject.org/wiki/Changes/DefaultPipeWire)). Pour enregistrer les clics de souris sous Wayland, votre utilisateur doit faire partie du groupe `input` : voir [Clics de souris sous Wayland](#mouse-clicks-on-wayland) | Les mêmes, à jour |
 | **RAM** | 8 Go | 16 Go |
 
@@ -38,11 +38,12 @@ Rien n'empêche d'installer l'application sur une machine dont la puce graphique
 
 Téléchargez le programme d'installation `.dmg` depuis [Releases](https://github.com/getopenscreen/openscreen/releases) et glissez OpenScreen dans votre dossier Applications. Les versions à partir de la 1.9.0 sont signées avec un certificat Developer ID et notarisées par Apple : Gatekeeper ne les bloque donc pas, et aucune étape dans le terminal n'est nécessaire.
 
-Allez ensuite dans **Réglages Système → Confidentialité et sécurité** et accordez à OpenScreen les autorisations **Enregistrement de l'écran** et **Accessibilité**. Sans Enregistrement de l'écran, il ne peut rien capturer. Accessibilité est nécessaire au curseur éditable, le mode par défaut, pour enregistrer la forme du curseur et les clics : dans ce mode, si vous lancez l'enregistrement sans cette autorisation, une invite s'ouvre avec un lien vers le réglage. Une fois l'autorisation accordée, relancez l'enregistrement pour qu'il démarre.
+La première fois que vous l'ouvrez, OpenScreen affiche une fenêtre d'autorisations qui liste toutes les autorisations qu'il utilise, chacune avec un bouton pour l'accorder. Vous pouvez la rouvrir à tout moment depuis l'icône d'OpenScreen dans la barre des menus : **Autorisations…**. Ce que macOS demande dépend de sa version :
 
-:::note macOS 15 et versions ultérieures redemandent régulièrement l'autorisation
-macOS redemande de temps en temps l'autorisation d'enregistrer l'écran, pour tous les enregistreurs d'écran tiers. Cette invite vient du système d'exploitation : elle ne signifie pas que votre installation est défectueuse ni qu'une mise à jour s'est mal passée. Accordez-la de nouveau quand elle apparaît.
-:::
+- **macOS 15.2 et ultérieur :** vous choisissez l'écran ou la fenêtre dans le sélecteur du système d'Apple, et ce choix vaut consentement : aucune autorisation **Enregistrement de l'écran** n'est nécessaire. L'audio système demande sa propre autorisation, plus restreinte : **Enregistrement des sons du système uniquement**.
+- **macOS 13 à 15.1 :** OpenScreen utilise son propre sélecteur de source et a besoin de l'autorisation **Enregistrement de l'écran**, qui couvre aussi l'audio système. Sous macOS 15.0 et 15.1, macOS demande aussi de temps en temps si OpenScreen peut accéder directement à l'écran, sans passer par le sélecteur du système : autorisez-le.
+
+**Accessibilité** est nécessaire au curseur éditable, le mode par défaut, pour enregistrer la forme du curseur et les clics : dans ce mode, si vous lancez l'enregistrement sans cette autorisation, la fenêtre d'autorisations s'ouvre. Une fois l'autorisation accordée, relancez l'enregistrement pour qu'il démarre.
 
 :::tip Vous passez d'une version antérieure à la 1.9.0 ?
 Ces versions n'étaient pas signées avec un certificat Developer ID, et macOS lie les autorisations Enregistrement de l'écran et Accessibilité à la signature d'une application : il ne peut donc pas savoir que la nouvelle version est la même application, et les autorisations accordées à l'ancienne ne sont pas reprises. Si une nouvelle version refuse d'enregistrer même après les avoir accordées, supprimez les entrées d'OpenScreen dans ces deux autorisations des Réglages Système, puis relancez l'application et accordez-les de nouveau.
@@ -151,15 +152,15 @@ Les outils de montage sont les mêmes partout : zooms, arrière-plans, recadrag
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | Chaîne de capture | Native (ScreenCaptureKit) | Native (Windows Graphics Capture) à partir de la build 19041 ; repli sur le navigateur sur les builds antérieures ou sans le module | Native (PipeWire via le portail ScreenCast) ; repli sur le navigateur sans le module, avec perte de l'encodage matériel et de la télémétrie du curseur |
-| Thèmes de curseur personnalisés / effets de clic | ✅ : les clics et la forme du curseur exigent l'autorisation Accessibilité | ✅ | ✅ sous Wayland : la capture des clics exige le groupe `input` ([détails](#mouse-clicks-on-wayland)) |
+| Curseur personnalisé / effets de clic | ✅ : les clics et la forme du curseur exigent l'autorisation Accessibilité | ✅ | ✅ sous Wayland : la capture des clics exige le groupe `input` ([détails](#mouse-clicks-on-wayland)) |
 | Webcam | Capture par le navigateur, enregistrée dans un fichier séparé (reste utilisable en incrustation d'image) | Capture native, enregistrée dans un fichier séparé | Capture par le navigateur, enregistrée dans un fichier séparé (reste utilisable en incrustation d'image) |
-| Audio système | Fonctionne sans configuration ; invite d'autorisation sur macOS 14.2+ | Fonctionne sans configuration | Exige PipeWire comme serveur son (par défaut sur Ubuntu 22.10+, Fedora 34+) |
-| Export MP4 | ✅ | ✅ | ✅ : H.264 sur le GPU via VAAPI quand la pile graphique le permet (voir la note ci-dessous), en logiciel sinon ; H.265 uniquement en logiciel |
+| Audio système | Fonctionne sans configuration ; sa propre invite d'autorisation sur macOS 15.2+, couvert par l'autorisation Enregistrement de l'écran sur les versions antérieures | Fonctionne sans configuration | Exige PipeWire comme serveur son (par défaut sur Ubuntu 22.10+, Fedora 34+) |
+| Export MP4 | ✅ | ✅ | ✅ : H.264 sur le GPU via VAAPI quand la pile graphique le permet (voir la note ci-dessous), en logiciel sinon |
 | Export GIF | ✅ | ✅ | ✅ |
 | Transcription en local | Metal (Apple Silicon) / CPU | Vulkan / CPU | Vulkan / CPU |
 
 :::note Export MP4 sous Linux
-Le moteur de composition GPU qui sert à l'aperçu en direct et à l'export MP4 a trois backends (Direct3D 11 sous Windows, Metal sous macOS, wgpu/WGSL sous Linux) et il est inclus dans les trois builds. Sous Linux, un export H.264 confie chaque image composée à `h264_vaapi` sans copie côté CPU quand le pilote GPU expose VAAPI *et* que le périphérique Vulkan peut transmettre l'image sous forme de dmabuf (`VK_KHR_external_memory_fd` et `VK_EXT_external_memory_dma_buf`). S'il manque l'un de ces éléments (pas de nœud de rendu, un pilote sans VAAPI, un périphérique Vulkan sans ces extensions), l'export se rabat sur un encodeur logiciel et prend simplement plus de temps ; rien d'autre ne change. Sous Linux, les exports H.265 utilisent toujours l'encodeur logiciel.
+Le moteur de composition GPU qui sert à l'aperçu en direct et à l'export MP4 a trois backends (Direct3D 11 sous Windows, Metal sous macOS, wgpu/WGSL sous Linux) et il est inclus dans les trois builds. Sous Linux, un export H.264 confie chaque image composée à `h264_vaapi` sans copie côté CPU quand le pilote GPU expose VAAPI *et* que le périphérique Vulkan peut transmettre l'image sous forme de dmabuf (`VK_KHR_external_memory_fd` et `VK_EXT_external_memory_dma_buf`). S'il manque l'un de ces éléments (pas de nœud de rendu, un pilote sans VAAPI, un périphérique Vulkan sans ces extensions), l'export se rabat sur un encodeur logiciel et prend simplement plus de temps ; rien d'autre ne change.
 :::
 
 Les pages [Windows](/screen-recorder-windows/), [Mac](/screen-recorder-mac/) et [Linux](/screen-recorder-linux/) résument ce que fait OpenScreen sur chaque système, et les cas où un autre outil convient mieux.

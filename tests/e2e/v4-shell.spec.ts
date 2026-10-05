@@ -6,13 +6,25 @@
 // no accessible name (the timeline's tracks + nav window).
 //
 // Needs a dev server: `npm run dev` (default 5173, override with E2E_BASE_URL).
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
 const EDITOR_URL = `${BASE_URL}/?windowType=editor`;
 
 // 300 MB exactly, so MediaStage's formatSize renders "300 MB".
 const SIZED_BYTES = 314_572_800;
+
+// Only what a zoom region needs to survive `documentSchema` and reach the timeline.
+interface ZoomFixture {
+	id: string;
+	startMs: number;
+	endMs: number;
+	clipId: string;
+	sourceStartSec: number;
+	sourceEndSec: number;
+	depth: 1 | 2 | 3 | 4 | 5 | 6;
+	focus: { cx: number; cy: number };
+}
 
 function makeAsset(id: string, label: string, sizeBytes?: number) {
 	return {
@@ -64,13 +76,33 @@ function makeDoc() {
 			captionRanges: [],
 		},
 		annotations: [],
-		zoomRanges: [],
+		zoomRanges: [] as ZoomFixture[],
 		legacyEditor: null,
 		agent: { pendingQuestions: [], suggestions: [], lastAppliedOperations: [] },
 		preview: { strategy: "seek" as const, revision: 0 },
 		export: { preset: "final-balanced" as const, lastJobId: null },
 		history: { revisions: [] },
 	};
+}
+
+// Same fixture with one zoom region on the only clip, so the inspector's zoom pane —
+// and the level row inside it — has something to select. Depth 3 is the editor's default,
+// and `ZOOM_DEPTH_SCALES` renders it as the "1.80×" the pill is addressed by below.
+function makeZoomDoc(): ReturnType<typeof makeDoc> {
+	const doc = makeDoc();
+	doc.zoomRanges = [
+		{
+			id: "zoom_e2e",
+			startMs: 60_000,
+			endMs: 180_000,
+			clipId: "clip_e2e",
+			sourceStartSec: 60,
+			sourceEndSec: 180,
+			depth: 3,
+			focus: { cx: 0.5, cy: 0.5 },
+		},
+	];
+	return doc;
 }
 
 // Same fixture, split into two clips: FloatingInspector's "Edit clip" button
@@ -103,6 +135,14 @@ function makeTwoClipDoc(): ReturnType<typeof makeDoc> {
 		},
 	];
 	return doc;
+}
+
+// A pill draws its own label when it is wide enough, and carries the label as a `title` only when
+// it is not (a title next to a visible label would repeat it), so a pill is found by either.
+function zoomPill(page: Page, label: string): Locator {
+	return page.locator(
+		`[class*="lanePill"][title="${label}"], [class*="lanePill"]:has-text("${label}")`,
+	);
 }
 
 async function seedAndOpen(page: Page, doc: ReturnType<typeof makeDoc> = makeDoc()): Promise<void> {
@@ -140,9 +180,8 @@ test.describe("v4 editor shell", () => {
 	test("inspector facet header opens a contextual help popover", async ({ page }) => {
 		await seedAndOpen(page);
 
-		// The inspector opens on the "effects" facet; the rail buttons are labelled
-		// from settings.<facet>.title (FloatingInspector's FACETS).
-		await page.getByRole("button", { name: "Background" }).click();
+		// The inspector opens on the Composition facet, whose help covers the background
+		// section. Clicking its rail button again would collapse the inspector.
 		const help = page.getByRole("button", { name: "Help" });
 		await help.click();
 
@@ -243,6 +282,67 @@ test.describe("v4 editor shell", () => {
 		expect(await storeTimeSec()).toBeGreaterThan(400);
 	});
 
+	// The zoom levels are buttons rather than a `<select>` (issue #670), which puts them
+	// under the shell's WINDOW key handling: Space there is play/pause and it
+	// `preventDefault()`s the keydown, which cancels a button's own activation outright.
+	// jsdom dispatches no native activation for Space at all, so a browser is the only
+	// place that can hold the line that Space still commits the focused level.
+	test("the zoom level row commits the focused level on Space and keeps focus in place", async ({
+		page,
+	}) => {
+		await seedAndOpen(page, makeZoomDoc());
+		await zoomPill(page, "1.80×").first().click();
+
+		const levels = page.getByRole("group", { name: "Zoom Level" }).getByRole("button");
+		await expect(levels).toHaveCount(4);
+
+		// One row inside the 300px pane, with every label intact: the reason this control
+		// stacks its own label instead of sitting in a `paneRow` like its neighbours.
+		const tops = await levels.evaluateAll((els) =>
+			els.map((el) => Math.round(el.getBoundingClientRect().top)),
+		);
+		expect(new Set(tops).size).toBe(1);
+		expect(
+			await levels.evaluateAll((els) => els.every((el) => el.scrollWidth <= el.clientWidth + 1)),
+		).toBe(true);
+
+		const depth = () =>
+			page.evaluate(
+				() =>
+					(
+						window as unknown as {
+							__osProjectStore: {
+								getState: () => { document: { zoomRanges: Array<{ depth: number }> } | null };
+							};
+						}
+					).__osProjectStore.getState().document?.zoomRanges[0]?.depth ?? null,
+			);
+		expect(await depth()).toBe(3);
+
+		await levels.nth(2).focus(); // 2.2×, depth 4
+		await page.keyboard.press("Space");
+		await expect.poll(depth).toBe(4);
+		await expect(levels.nth(2)).toBeFocused();
+
+		// Arrows step from the focused level, not from the selected one: every level is a
+		// Tab stop, so ArrowLeft on the first button has nowhere to go — and must not throw
+		// focus back across the row to wherever the selection happens to be.
+		await levels.nth(0).focus();
+		await page.keyboard.press("ArrowLeft");
+		await expect(levels.nth(0)).toBeFocused();
+		expect(await depth()).toBe(4);
+		await page.keyboard.press("ArrowRight");
+		await expect.poll(depth).toBe(3);
+		await expect(levels.nth(1)).toBeFocused();
+
+		// Any other level goes through the free field, and then no preset is pressed.
+		const custom = page.getByRole("textbox", { name: "Custom zoom" });
+		await custom.fill("2.5");
+		await custom.press("Enter");
+		await expect(zoomPill(page, "2.50×")).toHaveCount(1);
+		await expect(levels.and(page.locator('[aria-pressed="true"]'))).toHaveCount(0);
+	});
+
 	test("clicking outside the clip picker popover closes it", async ({ page }) => {
 		await seedAndOpen(page, makeTwoClipDoc());
 
@@ -254,5 +354,94 @@ test.describe("v4 editor shell", () => {
 		// stable target the other tests already click on.
 		await page.locator('[class*="tlTracks"]').click({ position: { x: 10, y: 10 } });
 		await expect(picker).toBeHidden();
+	});
+
+	// Issue #739: the shell and body set user-select: none, which used to
+	// swallow drag selection on chat message text too — leaving Ctrl+C and
+	// Edit → Copy nothing to act on. The bubble opts back in with
+	// user-select: text; the surrounding chrome must stay non-selectable.
+	test("chat message text drag-selects and is copyable; panel chrome stays non-selectable", async ({
+		page,
+	}) => {
+		// A connected provider enables the chat composer; the shim's chat
+		// assistant replies with a canned message, which is the assistant
+		// selection target below.
+		await page.addInitScript(() => {
+			localStorage.setItem(
+				"browser-shim-llm",
+				JSON.stringify({
+					config: { provider: "openai-compatible", model: "shim-model" },
+					credentials: { "openai-compatible": { apiKey: "e2e-stub" } },
+				}),
+			);
+		});
+		await seedAndOpen(page);
+
+		await page.getByRole("button", { name: "Chat panel", exact: true }).click();
+		const composer = page.getByRole("textbox", { name: "Describe the edit you want." });
+		await expect(composer).toBeVisible();
+		await composer.fill("selectable user turn text");
+		await composer.press("Enter");
+		const userText = page.getByText("selectable user turn text", { exact: true });
+		await expect(userText).toBeVisible({ timeout: 15_000 });
+		const assistantBubble = page
+			.locator('[class*="msgBubble"]', { hasText: "browser-shim" })
+			.last();
+		await expect(assistantBubble).toBeVisible({ timeout: 15_000 });
+
+		// Real-mouse drags across both turns must produce a selection whose
+		// text is bubble content — what Ctrl+C / Edit → Copy would put on the
+		// clipboard. The transcript pins itself to the bottom on every render,
+		// so scroll each target into view before measuring its box, and accept
+		// any visible fragment of it.
+		const dragSelectText = async (target: Locator) => {
+			await target.scrollIntoViewIfNeeded();
+			// The transcript re-pins itself to the bottom with a smooth scroll on
+			// every render; a box measured mid-animation is stale and the drag
+			// lands off the text. Wait for the target to stop moving.
+			let previousY: number | undefined;
+			await expect
+				.poll(async () => {
+					const y = (await target.boundingBox())?.y ?? -1;
+					const settled = y === previousY && y >= 0;
+					previousY = y;
+					return settled;
+				})
+				.toBe(true);
+			const box = await target.boundingBox();
+			expect(box).not.toBeNull();
+			await page.mouse.move(box!.x + 4, box!.y + box!.height / 2);
+			await page.mouse.down();
+			await page.mouse.move(box!.x + box!.width - 8, box!.y + box!.height / 2, { steps: 12 });
+			await page.mouse.up();
+			const selected = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+			const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
+			expect(normalize(selected).length).toBeGreaterThan(0);
+			expect(normalize((await target.textContent()) ?? "")).toContain(normalize(selected));
+		};
+		await dragSelectText(userText);
+		await dragSelectText(assistantBubble);
+
+		// Scoped to the bubble: the surrounding chrome must still resolve to
+		// user-select: none.
+		const chromeUserSelect = await page.evaluate(() => {
+			const pick = (selector: string) => {
+				const el = document.querySelector(selector);
+				return el ? getComputedStyle(el).userSelect : "missing";
+			};
+			return {
+				sessionHeader: pick('[class*="panelHeader"]'),
+				timelineTrack: pick("[data-clip-id]"),
+				// FloatingInspector is the only element whose class contains
+				// "inspector"; the chat panel's class contains "panel_", which
+				// must not shadow it here.
+				inspectorFound: Boolean(document.querySelector('[class*="inspector"]')),
+				inspectorPane: pick('[class*="inspector"]'),
+			};
+		});
+		expect(chromeUserSelect.sessionHeader).toBe("none");
+		expect(chromeUserSelect.timelineTrack).toBe("none");
+		expect(chromeUserSelect.inspectorFound).toBe(true);
+		expect(chromeUserSelect.inspectorPane).toBe("none");
 	});
 });

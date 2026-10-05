@@ -12,7 +12,6 @@ import {
 	type CropRegion,
 	type CursorVisualSettings,
 	DEFAULT_CROP_REGION,
-	DEFAULT_WEBCAM_POSITION,
 	isWallpaperMotion,
 	isWebcamBackgroundMode,
 	type WallpaperMotion,
@@ -22,15 +21,21 @@ import {
 	type WebcamPosition,
 	type WebcamSizePreset,
 } from "@/components/video-editor/types";
+import { normalizeCursorThemeId, readCursorAsArrow } from "@/lib/cursor/cursorThemes";
 import {
 	DEFAULT_PROJECT_APPEARANCE,
 	type FrameTheme,
 	isFrameTheme,
 	type RecordingFrame,
+	readBackgroundBlur,
+	readBounded,
 	readRecordingFrame,
+	readWebcamAnchor,
+	readWebcamMask,
+	type WebcamAnchor,
+	type WebcamMask,
 } from "@/lib/projectDefaults";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
-import { clamp01 } from "@/utils/math";
 import type { AxcutDocument } from "../schema";
 
 // ponytail: avoid dragging in lib/exporter full surface here — we only
@@ -46,6 +51,8 @@ import type { AxcutDocument } from "../schema";
  *  stretched, concatenated timeline, so the same value meant different delays under a speed
  *  region, and near a cut the export pulls audio across the junction while the preview cannot. */
 export const AUDIO_GAIN_DB_LIMIT = 12;
+export const AUDIO_TRACK_GAIN_DB_MIN = -60;
+export const AUDIO_TRACK_GAIN_DB_MAX = 12;
 
 /** dB to the linear scalar every side of the boundary multiplies by.
  *
@@ -87,19 +94,30 @@ export interface EditorSettingsSnapshot {
 	/** Light or dark, for whichever frame is on. Inert with `frame: "none"`. */
 	frameTheme: FrameTheme;
 	aspectRatio: AspectRatio;
+	/**
+	 * Under a fixed format that is not the recording's shape: fill the frame with a window of
+	 * the recording that follows the smoothed cursor (true), or show it whole (false). `null`
+	 * until the user picks a format or this option: projects from before it keep showing the
+	 * recording whole. See `formatFillAvailability`.
+	 */
+	formatFollowCursor: boolean | null;
 	shadowIntensity: number;
-	showBlur: boolean;
+	backgroundBlur: number;
 	motionBlurAmount: number;
 	depthOfField: boolean;
 	borderRadius: number;
 	padding: number;
 	cropRegion: CropRegion;
 	webcamLayoutPreset: WebcamLayoutPreset;
-	webcamMaskShape: WebcamMaskShape;
+	/** The camera's proportions. `circle` and `rounded` are read as a roundness: see `readWebcamMask`. */
+	webcamMaskShape: WebcamMask;
+	/** 0 square corners to 1 fully round, a fraction of half the camera's short side. */
+	webcamRoundness: number;
 	webcamMirrored: boolean;
 	webcamReactiveZoom: boolean;
 	webcamSizePreset: WebcamSizePreset;
-	webcamPosition: WebcamPosition | null;
+	/** Where the picture-in-picture camera sits, at a constant distance from the border. */
+	webcamAnchor: WebcamAnchor;
 	webcamCropRegion: CropRegion;
 	/** Where the crop window sits in the room the zoom leaves it, 0..1 per axis.
 	 *  Authoritative: `webcamCropRegion.x/y` are rebuilt from it on read. */
@@ -126,6 +144,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	webcamCropRegion: DEFAULT_CROP_REGION,
 	webcamCropPan: DEFAULT_CROP_PAN,
 	audioGainDb: 0,
+	formatFollowCursor: null,
 };
 
 interface LegacyShape {
@@ -135,7 +154,10 @@ interface LegacyShape {
 	frame?: unknown;
 	frameTheme?: FrameTheme;
 	aspectRatio?: AspectRatio;
+	formatFollowCursor?: boolean;
 	shadowIntensity?: number;
+	backgroundBlur?: number;
+	/** Before the amount: an on/off switch. Read by `readBackgroundBlur`, never written. */
 	showBlur?: boolean;
 	motionBlurAmount?: number;
 	depthOfField?: boolean;
@@ -144,9 +166,12 @@ interface LegacyShape {
 	cropRegion?: CropRegion;
 	webcamLayoutPreset?: WebcamLayoutPreset;
 	webcamMaskShape?: WebcamMaskShape;
+	webcamRoundness?: number;
 	webcamMirrored?: boolean;
 	webcamReactiveZoom?: boolean;
 	webcamSizePreset?: WebcamSizePreset;
+	webcamAnchor?: WebcamAnchor;
+	/** Written by builds that let the camera be dragged anywhere; read as the nearest anchor. */
 	webcamPosition?: WebcamPosition | null;
 	webcamCropRegion?: CropRegion;
 	webcamCropPan?: CropPan;
@@ -159,7 +184,11 @@ interface LegacyShape {
 	cursorMotionBlur?: number;
 	cursorClickBounce?: number;
 	cursorModel3d?: boolean;
-	cursorClipToBounds?: boolean;
+	/** `unknown`: read through `readCursorAsArrow`, which drops what this build does not know. */
+	cursorAsArrow?: unknown;
+	/** Written by builds with one "always use the arrow" switch; read as every kind. */
+	cursorAlwaysArrow?: boolean;
+	cursorClickImpact?: boolean;
 	cursorShow?: boolean;
 	cursorAutoHide?: boolean;
 	cursorTheme?: string;
@@ -187,14 +216,28 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 	// `window-light` / `window-dark` were the frame AND its theme; they split here.
 	const stored = readRecordingFrame(legacy?.frame);
 
+	const defaults = DEFAULT_EDITOR_SETTINGS;
 	const cursor: CursorVisualSettings = {
-		size: num(legacy?.cursorSize, DEFAULT_EDITOR_SETTINGS.cursor.size),
-		smoothing: num(legacy?.cursorSmoothing, DEFAULT_EDITOR_SETTINGS.cursor.smoothing),
-		motionBlur: num(legacy?.cursorMotionBlur, DEFAULT_EDITOR_SETTINGS.cursor.motionBlur),
-		clickBounce: num(legacy?.cursorClickBounce, DEFAULT_EDITOR_SETTINGS.cursor.clickBounce),
+		size: readBounded(legacy?.cursorSize, "cursorSize", defaults.cursor.size),
+		smoothing: readBounded(legacy?.cursorSmoothing, "cursorSmoothing", defaults.cursor.smoothing),
+		motionBlur: readBounded(
+			legacy?.cursorMotionBlur,
+			"cursorMotionBlur",
+			defaults.cursor.motionBlur,
+		),
+		clickBounce: readBounded(
+			legacy?.cursorClickBounce,
+			"cursorClickBounce",
+			defaults.cursor.clickBounce,
+		),
 		// Absent in every project saved before the setting existed: those keep the flat cursor.
 		model3d: bool(legacy?.cursorModel3d, DEFAULT_EDITOR_SETTINGS.cursor.model3d),
-		clipToBounds: bool(legacy?.cursorClipToBounds, DEFAULT_EDITOR_SETTINGS.cursor.clipToBounds),
+		asArrow: readCursorAsArrow(
+			legacy?.cursorAsArrow,
+			legacy?.cursorAlwaysArrow,
+			defaults.cursor.asArrow,
+		),
+		clickImpact: bool(legacy?.cursorClickImpact, DEFAULT_EDITOR_SETTINGS.cursor.clickImpact),
 		autoHide: bool(legacy?.cursorAutoHide, DEFAULT_EDITOR_SETTINGS.cursorAutoHide),
 	};
 
@@ -202,6 +245,9 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 	// drift apart — on disk, or in a patch that wrote one and not the other. Only the SIZE
 	// survives from the stored rect; `pan * (1 - size)` is a position that cannot leave the
 	// frame, which is why nothing here clamps it.
+	// `circle` and `rounded` were a proportion and a rounding in one value; they split here.
+	const webcamMask = readWebcamMask(legacy?.webcamMaskShape, legacy?.webcamRoundness);
+
 	const storedCrop = normaliseCropRegion(legacy?.webcamCropRegion);
 	const webcamCropPan = normaliseCropPan(legacy?.webcamCropPan, storedCrop);
 	const webcamCrop: CropRegion = {
@@ -223,22 +269,39 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 			? legacy.frameTheme
 			: (stored?.theme ?? DEFAULT_EDITOR_SETTINGS.frameTheme),
 		aspectRatio: legacy?.aspectRatio ?? DEFAULT_EDITOR_SETTINGS.aspectRatio,
-		shadowIntensity: num(legacy?.shadowIntensity, DEFAULT_EDITOR_SETTINGS.shadowIntensity),
-		showBlur: bool(legacy?.showBlur, DEFAULT_EDITOR_SETTINGS.showBlur),
-		motionBlurAmount: num(legacy?.motionBlurAmount, DEFAULT_EDITOR_SETTINGS.motionBlurAmount),
+		formatFollowCursor:
+			typeof legacy?.formatFollowCursor === "boolean" ? legacy.formatFollowCursor : null,
+		// Every number below is read into its `SETTING_BOUNDS` range: the slider's range, and the
+		// one a preset and the agent are held to. A stored value past it plays at the bound.
+		shadowIntensity: readBounded(
+			legacy?.shadowIntensity,
+			"shadowIntensity",
+			defaults.shadowIntensity,
+		),
+		backgroundBlur: readBackgroundBlur(legacy, defaults.backgroundBlur),
+		motionBlurAmount: readBounded(
+			legacy?.motionBlurAmount,
+			"motionBlurAmount",
+			defaults.motionBlurAmount,
+		),
 		depthOfField: bool(legacy?.depthOfField, DEFAULT_EDITOR_SETTINGS.depthOfField),
-		borderRadius: num(legacy?.borderRadius, DEFAULT_EDITOR_SETTINGS.borderRadius),
-		padding: num(legacy?.padding, DEFAULT_EDITOR_SETTINGS.padding),
+		borderRadius: readBounded(legacy?.borderRadius, "borderRadius", defaults.borderRadius),
+		padding: readBounded(legacy?.padding, "padding", defaults.padding),
 		cropRegion: legacy?.cropRegion ?? DEFAULT_EDITOR_SETTINGS.cropRegion,
 		webcamLayoutPreset: legacy?.webcamLayoutPreset ?? DEFAULT_EDITOR_SETTINGS.webcamLayoutPreset,
-		webcamMaskShape: legacy?.webcamMaskShape ?? DEFAULT_EDITOR_SETTINGS.webcamMaskShape,
+		webcamMaskShape: webcamMask.shape,
+		webcamRoundness: webcamMask.roundness,
 		webcamMirrored: bool(legacy?.webcamMirrored, DEFAULT_EDITOR_SETTINGS.webcamMirrored),
 		webcamReactiveZoom: bool(
 			legacy?.webcamReactiveZoom,
 			DEFAULT_EDITOR_SETTINGS.webcamReactiveZoom,
 		),
-		webcamSizePreset: num(legacy?.webcamSizePreset, DEFAULT_EDITOR_SETTINGS.webcamSizePreset),
-		webcamPosition: normaliseWebcamPosition(legacy?.webcamPosition),
+		webcamSizePreset: readBounded(
+			legacy?.webcamSizePreset,
+			"webcamSizePreset",
+			defaults.webcamSizePreset,
+		),
+		webcamAnchor: readWebcamAnchor(legacy?.webcamAnchor, legacy?.webcamPosition),
 		webcamCropRegion: webcamCrop,
 		webcamCropPan: webcamCropPan,
 		// Same bound the slider offers and the native `finish_audio` clamps to. Two
@@ -252,15 +315,20 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 			? legacy.webcamBackgroundMode
 			: DEFAULT_EDITOR_SETTINGS.webcamBackgroundMode,
 		webcamWallpaper: str(legacy?.webcamWallpaper, DEFAULT_EDITOR_SETTINGS.webcamWallpaper),
-		// Same 0-1 range the slider offers; unclamped, a stored 1000 reaches
-		// `blur(25000px)` on the preview canvas and wedges the compositing thread.
-		webcamBlurIntensity: clamp01(
-			num(legacy?.webcamBlurIntensity, DEFAULT_EDITOR_SETTINGS.webcamBlurIntensity),
+		// Unclamped, a stored 1000 reached `blur(25000px)` on the preview canvas and wedged the
+		// compositing thread.
+		webcamBlurIntensity: readBounded(
+			legacy?.webcamBlurIntensity,
+			"webcamBlurIntensity",
+			defaults.webcamBlurIntensity,
 		),
 		cursor,
 		cursorShow: bool(legacy?.cursorShow, DEFAULT_EDITOR_SETTINGS.cursorShow),
 		cursorAutoHide: bool(legacy?.cursorAutoHide, DEFAULT_EDITOR_SETTINGS.cursorAutoHide),
-		cursorTheme: str(legacy?.cursorTheme, DEFAULT_EDITOR_SETTINGS.cursorTheme),
+		// A pack the app no longer ships reads as the default art, which is what the renderer
+		// draws for it anyway. Left raw, the id would also switch off the modelled cursor: the
+		// compositor only builds it for the default theme.
+		cursorTheme: normalizeCursorThemeId(legacy?.cursorTheme),
 		autoFocusAll: bool(legacy?.autoFocusAll, DEFAULT_EDITOR_SETTINGS.autoFocusAll),
 	};
 }
@@ -270,19 +338,21 @@ export interface EditorSettingsPatch {
 	frame?: RecordingFrame;
 	frameTheme?: FrameTheme;
 	aspectRatio?: AspectRatio;
+	formatFollowCursor?: boolean;
 	shadowIntensity?: number;
-	showBlur?: boolean;
+	backgroundBlur?: number;
 	motionBlurAmount?: number;
 	depthOfField?: boolean;
 	borderRadius?: number;
 	padding?: number;
 	cropRegion?: CropRegion;
 	webcamLayoutPreset?: WebcamLayoutPreset;
-	webcamMaskShape?: WebcamMaskShape;
+	webcamMaskShape?: WebcamMask;
+	webcamRoundness?: number;
 	webcamMirrored?: boolean;
 	webcamReactiveZoom?: boolean;
 	webcamSizePreset?: WebcamSizePreset;
-	webcamPosition?: WebcamPosition | null;
+	webcamAnchor?: WebcamAnchor;
 	webcamCropRegion?: CropRegion;
 	webcamCropPan?: CropPan;
 	audioGainDb?: number;
@@ -315,7 +385,12 @@ function nextLegacy(current: LegacyShape | null, patch: EditorSettingsPatch): Le
 		if (c.motionBlur !== undefined) next.cursorMotionBlur = c.motionBlur;
 		if (c.clickBounce !== undefined) next.cursorClickBounce = c.clickBounce;
 		if (c.model3d !== undefined) next.cursorModel3d = c.model3d;
-		if (c.clipToBounds !== undefined) next.cursorClipToBounds = c.clipToBounds;
+		if (c.asArrow !== undefined) {
+			next.cursorAsArrow = c.asArrow;
+			// The kinds now say it all; the old switch would only contradict them.
+			delete next.cursorAlwaysArrow;
+		}
+		if (c.clickImpact !== undefined) next.cursorClickImpact = c.clickImpact;
 		if (c.theme !== undefined) next.cursorTheme = c.theme;
 		if (c.show !== undefined) next.cursorShow = c.show;
 		if (c.autoHide !== undefined) next.cursorAutoHide = c.autoHide;
@@ -329,20 +404,6 @@ export function patchEditorSettings(doc: AxcutDocument, patch: EditorSettingsPat
 	return {
 		...doc,
 		legacyEditor: nextLegacy(current, patch) as Record<string, unknown>,
-	};
-}
-
-// Normalise a webcam position from legacy storage. Anything outside 0-1 is
-// clamped so a malformed `legacyEditor` doesn't seed the drag with bad coords.
-function normaliseWebcamPosition(value: unknown): WebcamPosition | null {
-	if (!value || typeof value !== "object") return DEFAULT_WEBCAM_POSITION;
-	const candidate = value as Record<string, unknown>;
-	const cxRaw = candidate.cx;
-	const cyRaw = candidate.cy;
-	if (typeof cxRaw !== "number" || typeof cyRaw !== "number") return DEFAULT_WEBCAM_POSITION;
-	return {
-		cx: Math.min(1, Math.max(0, cxRaw)),
-		cy: Math.min(1, Math.max(0, cyRaw)),
 	};
 }
 

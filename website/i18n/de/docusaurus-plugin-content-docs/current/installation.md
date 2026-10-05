@@ -26,7 +26,7 @@ Unter Windows ist der [Microsoft Store](#windows) der empfohlene Weg. Auf allen 
 | | Minimum | Empfohlen |
 |---|---|---|
 | **Windows** | Windows 10 Version 1903 (Build 18362) oder neuer, x64, Intel ab 8. Generation / AMD Ryzen ab Serie 2000. Die native Aufnahme braucht Windows 10 Version 2004 (Build 19041) oder neuer; ältere Builds nehmen über die [Browser-Aufnahme als Fallback](#platform-differences) auf | Windows 11, Intel ab 12. Generation / AMD Ryzen ab Serie 4000 |
-| **macOS** | macOS 13 (Ventura), das ScreenCaptureKit für die Aufnahme voraussetzt | macOS 14 oder neuer |
+| **macOS** | macOS 13 (Ventura), das ScreenCaptureKit für die Aufnahme voraussetzt. Die Mikrofonaufnahme braucht macOS 15 oder neuer | macOS 15.2 oder neuer |
 | **Linux** | x64. `xdg-desktop-portal` und PipeWire, die die Aufnahme braucht: Das native Aufnahme-Hilfsprogramm läuft über sie, und schlägt dort etwas fehl, wird das als Fehler gemeldet. Die [Browser-Aufnahme als Fallback](#platform-differences) springt nur ein, wenn einem Build das Hilfsprogramm selbst fehlt. Systemaudio braucht zusätzlich PipeWire als Soundserver (Standard ab [Ubuntu 22.10](https://discourse.ubuntu.com/t/kinetic-kudu-release-notes/27976) und [Fedora 34](https://fedoraproject.org/wiki/Changes/DefaultPipeWire)). Damit unter Wayland Mausklicks aufgenommen werden, muss dein Benutzer in der Gruppe `input` sein, siehe [Mausklicks unter Wayland](#mouse-clicks-on-wayland) | Wie Minimum, jeweils aktuell |
 | **RAM** | 8 GB | 16 GB |
 
@@ -38,11 +38,12 @@ Auf Rechnern mit integrierter Grafik, die älter ist als etwa Intels 8. Generati
 
 Lade den `.dmg`-Installer von [Releases](https://github.com/getopenscreen/openscreen/releases) herunter und ziehe OpenScreen in deinen Ordner „Programme“. Builds ab 1.9.0 sind mit einem Developer-ID-Zertifikat signiert und von Apple notarisiert. Gatekeeper blockiert sie deshalb nicht, und du brauchst keinen Schritt im Terminal.
 
-Öffne dann **Systemeinstellungen → Datenschutz & Sicherheit** und erteile OpenScreen die Berechtigungen **Bildschirmaufnahme** und **Bedienungshilfen**. Ohne „Bildschirmaufnahme“ kann OpenScreen überhaupt nicht aufnehmen. „Bedienungshilfen“ braucht der standardmäßige bearbeitbare Cursor, um Cursorform und Klicks aufzuzeichnen: In diesem Modus öffnet ein Klick auf Aufnahme ohne diese Berechtigung einen Hinweis mit einem Link zur Einstellung, und die Aufnahme startet, sobald du die Berechtigung erteilt und erneut auf Aufnahme geklickt hast.
+Wenn du OpenScreen zum ersten Mal öffnest, zeigt es ein Berechtigungsfenster, das jede Berechtigung auflistet, die es nutzt, jeweils mit einer Schaltfläche, um sie zu erteilen. Du kannst es jederzeit über das OpenScreen-Symbol in der Menüleiste wieder öffnen: **Berechtigungen …**. Was macOS abfragt, hängt von der Version ab:
 
-:::note macOS 15 und neuer fragt regelmäßig erneut
-macOS fragt die Berechtigung zur Bildschirmaufnahme von Zeit zu Zeit neu ab, und zwar für jeden Bildschirmrekorder von Drittanbietern. Diese Abfrage kommt vom Betriebssystem. Sie bedeutet nicht, dass deine Installation defekt ist oder ein Update schiefgegangen ist. Erteile die Berechtigung erneut, wenn du gefragt wirst.
-:::
+- **macOS 15.2 und neuer:** Du wählst den Bildschirm oder das Fenster in der Systemauswahl von Apple aus, und diese Auswahl ist deine Zustimmung. Die Berechtigung **Bildschirmaufnahme** ist deshalb nicht nötig. Systemaudio fragt eine eigene, engere Berechtigung ab: **Nur Aufnahme von Systemaudio**.
+- **macOS 13 bis 15.1:** OpenScreen nutzt seine eigene Quellenauswahl und braucht **Bildschirmaufnahme**, was auch Systemaudio abdeckt. Unter macOS 15.0 und 15.1 fragt macOS außerdem von Zeit zu Zeit, ob OpenScreen ohne die Systemauswahl direkt auf den Bildschirm zugreifen darf: Erlaube den Zugriff.
+
+**Bedienungshilfen** braucht der standardmäßige bearbeitbare Cursor, um Cursorform und Klicks aufzuzeichnen: In diesem Modus öffnet ein Klick auf Aufnahme ohne diese Berechtigung das Berechtigungsfenster, und die Aufnahme startet, sobald du die Berechtigung erteilt und erneut auf Aufnahme geklickt hast.
 
 :::tip Update von einer Version vor 1.9.0?
 Diese Builds waren nicht mit einem Developer-ID-Zertifikat signiert, und macOS bindet die Berechtigungen für Bildschirmaufnahme und Bedienungshilfen an die Signatur einer App. macOS kann deshalb nicht erkennen, dass der neue Build dieselbe App ist, und die Berechtigungen der alten Version werden nicht übernommen. Wenn eine neue Version auch nach dem Erteilen nicht aufnimmt, entferne die Einträge von OpenScreen unter beiden Berechtigungen in den Systemeinstellungen, starte die App dann neu und erteile die Berechtigungen noch einmal.
@@ -151,15 +152,15 @@ Die Bearbeitungswerkzeuge sind überall gleich: Zooms, Hintergründe, Zuschneide
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | Aufnahme-Pipeline | Nativ (ScreenCaptureKit) | Nativ (Windows Graphics Capture) ab Build 19041; Browser-Fallback auf älteren Builds oder ohne das Hilfsprogramm | Nativ (PipeWire über das ScreenCast-Portal); Browser-Fallback ohne das Hilfsprogramm, dann ohne Hardware-Encoding und ohne Cursor-Telemetrie |
-| Eigene Cursor-Themes / Klickeffekte | ✅, Klicks und Cursorform brauchen die Berechtigung „Bedienungshilfen“ | ✅ | ✅ unter Wayland, die Klickerfassung braucht die Gruppe `input` ([Details](#mouse-clicks-on-wayland)) |
+| Eigener Cursor / Klickeffekte | ✅, Klicks und Cursorform brauchen die Berechtigung „Bedienungshilfen“ | ✅ | ✅ unter Wayland, die Klickerfassung braucht die Gruppe `input` ([Details](#mouse-clicks-on-wayland)) |
 | Webcam | Browser-Aufnahme, als separate Datei gespeichert (funktioniert trotzdem als Bild-im-Bild) | Native Aufnahme, als separate Datei gespeichert | Browser-Aufnahme, als separate Datei gespeichert (funktioniert trotzdem als Bild-im-Bild) |
-| Systemaudio | Funktioniert ohne Einrichtung; Berechtigungsabfrage ab macOS 14.2 | Funktioniert ohne Einrichtung | Braucht PipeWire als Soundserver (Standard ab Ubuntu 22.10, Fedora 34) |
-| MP4-Export | ✅ | ✅ | ✅, H.264 auf der GPU über VAAPI, wenn der Grafik-Stack es zulässt (siehe Hinweis unten), sonst in Software; H.265 nur in Software |
+| Systemaudio | Funktioniert ohne Einrichtung; eigene Berechtigungsabfrage ab macOS 15.2, in älteren Versionen durch „Bildschirmaufnahme“ abgedeckt | Funktioniert ohne Einrichtung | Braucht PipeWire als Soundserver (Standard ab Ubuntu 22.10, Fedora 34) |
+| MP4-Export | ✅ | ✅ | ✅, H.264 auf der GPU über VAAPI, wenn der Grafik-Stack es zulässt (siehe Hinweis unten), sonst in Software |
 | GIF-Export | ✅ | ✅ | ✅ |
 | Lokale Transkription | Metal (Apple Silicon) / CPU | Vulkan / CPU | Vulkan / CPU |
 
 :::note MP4-Export unter Linux
-Der GPU-Compositor hinter der Live-Vorschau und dem MP4-Export hat drei Backends (Direct3D 11 unter Windows, Metal unter macOS, wgpu/WGSL unter Linux) und ist in allen drei Builds enthalten. Unter Linux übergibt ein H.264-Export jedes zusammengesetzte Bild ohne CPU-Kopie an `h264_vaapi`, wenn der GPU-Treiber VAAPI bereitstellt *und* das Vulkan-Gerät das Bild als dmabuf weitergeben kann (`VK_KHR_external_memory_fd` und `VK_EXT_external_memory_dma_buf`). Fehlt davon etwas (kein Render-Node, ein Treiber ohne VAAPI, ein Vulkan-Gerät ohne diese Erweiterungen), weicht der Export auf einen Software-Encoder aus und dauert einfach länger; sonst ändert sich nichts. H.265-Exporte nutzen unter Linux immer den Software-Encoder.
+Der GPU-Compositor hinter der Live-Vorschau und dem MP4-Export hat drei Backends (Direct3D 11 unter Windows, Metal unter macOS, wgpu/WGSL unter Linux) und ist in allen drei Builds enthalten. Unter Linux übergibt ein H.264-Export jedes zusammengesetzte Bild ohne CPU-Kopie an `h264_vaapi`, wenn der GPU-Treiber VAAPI bereitstellt *und* das Vulkan-Gerät das Bild als dmabuf weitergeben kann (`VK_KHR_external_memory_fd` und `VK_EXT_external_memory_dma_buf`). Fehlt davon etwas (kein Render-Node, ein Treiber ohne VAAPI, ein Vulkan-Gerät ohne diese Erweiterungen), weicht der Export auf einen Software-Encoder aus und dauert einfach länger; sonst ändert sich nichts.
 :::
 
 Was OpenScreen auf dem jeweiligen System leistet und wann ein anderes Tool besser passt, fassen die Seiten zu [Windows](/screen-recorder-windows/), [Mac](/screen-recorder-mac/) und [Linux](/screen-recorder-linux/) zusammen.

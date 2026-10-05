@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CursorTelemetryPoint } from "@/components/video-editor/types";
 import { replaceTimeline as replaceTimelineOp } from "@/lib/ai-edition/document/timeline";
 import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -74,6 +75,19 @@ function stubElectronApi(
 	// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the contextBridge surface
 	(window as any).electronAPI = api;
 	return api;
+}
+
+type PrefsBridge = { getRecordingPrefs?: () => Promise<unknown> };
+
+/** Points the prefs bridge at one getter, leaving the rest of the stub alone.
+ *  `undefined` stands for a surface that does not expose the method at all. */
+function stubRecordingPrefsBridge(getRecordingPrefs: PrefsBridge["getRecordingPrefs"]) {
+	const host = window as unknown as { electronAPI?: PrefsBridge };
+	host.electronAPI = { ...(host.electronAPI ?? {}), getRecordingPrefs };
+}
+
+function stubRecordingPrefs(prefs: Record<string, unknown>) {
+	stubRecordingPrefsBridge(vi.fn(async () => prefs));
 }
 
 describe("importPendingRecording", () => {
@@ -245,19 +259,14 @@ describe("what the recording import leaves on the undo stack", () => {
 	});
 });
 
-function dwell(
-	centerMs: number,
-	cx: number,
-	cy: number,
-	count = 6,
-	spanMs = 900,
-): Array<{ timeMs: number; cx: number; cy: number }> {
-	const step = spanMs / (count - 1);
-	return Array.from({ length: count }, (_, i) => ({
-		timeMs: centerMs - spanMs / 2 + i * step,
-		cx,
-		cy,
-	}));
+// A click at `atMs`, in a take whose pointer moves on for 5.5 s more: the click is not its last.
+function clickAt(atMs: number, cx: number, cy: number): CursorTelemetryPoint[] {
+	return [
+		{ timeMs: atMs - 300, cx, cy },
+		{ timeMs: atMs, cx, cy, interactionType: "click" },
+		{ timeMs: atMs + 300, cx, cy, interactionType: "mouseup" },
+		{ timeMs: atMs + 5500, cx: 0.5, cy: 0.5 },
+	];
 }
 
 const RECORDING_PATH = "C:\\recordings\\rec.mp4";
@@ -300,6 +309,9 @@ describe("fresh-recording auto-zoom", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		consumeFreshRecordingAutoZoomPending();
+		// Each test starts from the default answer; the ones about the preference set
+		// their own. Without this a stubbed "off" leaks into whatever runs next.
+		stubRecordingPrefs({ autoZoomEnabled: true });
 		useProjectStore.setState({
 			document: null,
 			createProject,
@@ -320,7 +332,7 @@ describe("fresh-recording auto-zoom", () => {
 		expect(consumeFreshRecordingAutoZoomPending()).toBe(false);
 	});
 
-	// A system-cursor take writes no `.cursor.json`, so there is never a dwell to
+	// A system-cursor take writes no `.cursor.json`, so there is never a click to
 	// find. Marking it pending anyway armed the hand-off for a take that can never
 	// spend it.
 	it("does not mark a system-cursor take as waiting", async () => {
@@ -335,36 +347,102 @@ describe("fresh-recording auto-zoom", () => {
 		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
 	});
 
-	it("applies cursor-dwell zooms once, after duration is known", async () => {
+	it("applies click zooms once, after duration is known", async () => {
 		markFreshRecordingAutoZoomPending(RECORDING_PATH);
 		const next = await applyPendingFreshRecordingAutoZooms(documentWithClip(), {
-			getTelemetry: async () => dwell(4000, 0.4, 0.6),
+			getTelemetry: async () => clickAt(4000, 0.4, 0.6),
 			createId: (prefix) => `${prefix}_test`,
 		});
 		expect(next.zoomRanges).toHaveLength(1);
 		expect(next.zoomRanges[0]).toMatchObject({
-			startMs: 3000,
-			endMs: 5000,
+			startMs: 3500,
+			endMs: 5500,
 			focusMode: "auto",
 		});
 		expect(await applyPendingFreshRecordingAutoZooms(next)).toBe(next);
 	});
 
-	it("applies cursor-dwell zooms by default without requiring an enabled flag", async () => {
+	it("applies click zooms by default without requiring an enabled flag", async () => {
 		markFreshRecordingAutoZoomPending(RECORDING_PATH);
 		const document = documentWithClip();
 		const next = await applyPendingFreshRecordingAutoZooms(document, {
-			getTelemetry: async () => dwell(4000, 0.5, 0.5),
+			getTelemetry: async () => clickAt(4000, 0.5, 0.5),
 			createId: (prefix) => `${prefix}_test`,
 		});
 		expect(next.zoomRanges).toHaveLength(1);
+	});
+
+	// getopenscreen/openscreen#723 — the recording preference is the whole point of the
+	// toggle: a take imported with it off must arrive undecorated, and the hand-off must
+	// be spent rather than left armed for the next document loaded in this window.
+	it("skips the take when the recording preference is off", async () => {
+		markFreshRecordingAutoZoomPending(RECORDING_PATH);
+		stubRecordingPrefs({ autoZoomEnabled: false });
+		const document = documentWithClip();
+		const next = await applyPendingFreshRecordingAutoZooms(document, {
+			getTelemetry: async () => clickAt(4000, 0.5, 0.5),
+		});
+		expect(next.zoomRanges).toEqual([]);
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(false);
+	});
+
+	// The invoke is accepted and never answered — the shape `catch` cannot see. Left
+	// unbounded this held `freshRecordingAutoZoomSaveChain`, and therefore the metadata
+	// write queue awaiting it, for the life of the renderer.
+	it("gives up on a prefs read that never settles and applies zooms anyway", async () => {
+		markFreshRecordingAutoZoomPending(RECORDING_PATH);
+		// Never resolves, never rejects — the invoke the main process simply does not answer.
+		stubRecordingPrefsBridge(() => new Promise(() => undefined));
+		const next = await applyPendingFreshRecordingAutoZooms(documentWithClip(), {
+			prefsTimeoutMs: 10,
+			getTelemetry: async () => clickAt(4000, 0.5, 0.5),
+			createId: (prefix) => `${prefix}_test`,
+		});
+		expect(next.zoomRanges).toHaveLength(1);
+	});
+
+	// A bridge that is missing or throwing says nothing about what the user chose, and
+	// the answer every installation had before the preference existed is "on".
+	it("treats an unreadable prefs bridge as on", async () => {
+		const broken: Array<PrefsBridge["getRecordingPrefs"]> = [
+			undefined,
+			() => Promise.reject(new Error("no bridge")),
+		];
+		for (const getRecordingPrefs of broken) {
+			consumeFreshRecordingAutoZoomPending();
+			markFreshRecordingAutoZoomPending(RECORDING_PATH);
+			stubRecordingPrefsBridge(getRecordingPrefs);
+			const next = await applyPendingFreshRecordingAutoZooms(documentWithClip(), {
+				getTelemetry: async () => clickAt(4000, 0.5, 0.5),
+				createId: (prefix) => `${prefix}_test`,
+			});
+			expect(next.zoomRanges).toHaveLength(1);
+		}
+	});
+
+	// The prefs read yields, and the user can open another project before it answers.
+	// That project is not the take's: nothing is written to it and the hand-off survives.
+	it("leaves a project opened during the prefs read alone, and keeps the hand-off", async () => {
+		markFreshRecordingAutoZoomPending(RECORDING_PATH);
+		const opened = documentWithClip();
+		const other = { ...opened, project: { ...opened.project, id: "p_other" } };
+		stubRecordingPrefsBridge(async () => {
+			useProjectStore.setState({ document: other });
+			return { autoZoomEnabled: true };
+		});
+		const next = await applyPendingFreshRecordingAutoZooms(documentWithClip(), {
+			getTelemetry: async () => clickAt(4000, 0.5, 0.5),
+			createId: (prefix) => `${prefix}_test`,
+		});
+		expect(next).toBe(other);
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
 	});
 
 	// The stop handler awaits `writePendingCursorTelemetry` before it publishes the
 	// session, so the sidecar is on disk by the time a take can be imported. An empty
 	// read is therefore the take's real answer, not a mid-flush one, and leaving the
 	// hand-off armed would let it fire on the next document loaded in this window.
-	it("consumes the hand-off when the sidecar holds no dwell", async () => {
+	it("consumes the hand-off when the sidecar holds no click", async () => {
 		markFreshRecordingAutoZoomPending(RECORDING_PATH);
 		const document = documentWithClip();
 		const first = await applyPendingFreshRecordingAutoZooms(document, {
@@ -380,13 +458,13 @@ describe("fresh-recording auto-zoom", () => {
 		const document = createEmptyDocument({ projectId: "p_empty", title: "Recording" });
 		const next = await applyPendingFreshRecordingAutoZooms(document, {
 			enabled: true,
-			getTelemetry: async () => dwell(4000, 0.5, 0.5),
+			getTelemetry: async () => clickAt(4000, 0.5, 0.5),
 		});
 		expect(next).toBe(document);
 		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
 	});
 
-	it("consumes the hand-off when the cursor never sits still", async () => {
+	it("consumes the hand-off when the pointer only moves, never clicks", async () => {
 		markFreshRecordingAutoZoomPending(RECORDING_PATH);
 		const document = documentWithClip();
 		const moving = Array.from({ length: 8 }, (_, i) => ({
@@ -403,7 +481,7 @@ describe("fresh-recording auto-zoom", () => {
 	});
 
 	// The one read that is not an answer: an error says nothing about whether the take
-	// has a dwell, so the hand-off survives it.
+	// has a click, so the hand-off survives it.
 	it("keeps pending when telemetry read throws", async () => {
 		markFreshRecordingAutoZoomPending(RECORDING_PATH);
 		const document = documentWithClip();
@@ -422,7 +500,7 @@ describe("fresh-recording auto-zoom", () => {
 		const other = documentWithClip();
 		const next = await applyPendingFreshRecordingAutoZooms(other, {
 			enabled: true,
-			getTelemetry: async () => dwell(4000, 0.4, 0.6),
+			getTelemetry: async () => clickAt(4000, 0.4, 0.6),
 		});
 		expect(next).toBe(other);
 		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
@@ -465,10 +543,10 @@ describe("fresh-recording auto-zoom", () => {
 		markFreshRecordingAutoZoomPending(fresh.assets[0].originalPath);
 		const next = await applyPendingFreshRecordingAutoZooms(withLater, {
 			enabled: true,
-			getTelemetry: async (videoPath) => (videoPath === laterPath ? dwell(14000, 0.4, 0.6) : []),
+			getTelemetry: async (videoPath) => (videoPath === laterPath ? clickAt(14000, 0.4, 0.6) : []),
 			createId: (prefix) => `${prefix}_later`,
 		});
-		// The point of the test: the later clip's dwell is not read at all, so the fresh
+		// The point of the test: the later clip's click is not read at all, so the fresh
 		// take is never decorated with another asset's telemetry. Its own sidecar was
 		// empty, which is a real answer, so the hand-off is spent either way.
 		expect(next).toBe(withLater);
@@ -482,7 +560,7 @@ describe("fresh-recording auto-zoom", () => {
 		placeholder.assets[0].durationSec = undefined;
 		const first = await applyPendingFreshRecordingAutoZooms(placeholder, {
 			enabled: true,
-			getTelemetry: async () => dwell(4000, 0.4, 0.6),
+			getTelemetry: async () => clickAt(4000, 0.4, 0.6),
 		});
 		expect(first).toBe(placeholder);
 		expect(first.zoomRanges).toEqual([]);
@@ -514,7 +592,7 @@ describe("fresh-recording auto-zoom", () => {
 			enabled: true,
 			getTelemetry: async () => {
 				await gate;
-				return dwell(4000, 0.4, 0.6);
+				return clickAt(4000, 0.4, 0.6);
 			},
 			createId: (prefix) => `${prefix}_live`,
 		});
@@ -539,7 +617,7 @@ describe("fresh-recording auto-zoom", () => {
 		await expect(
 			maybeSaveFreshRecordingAutoZooms(document, {
 				enabled: true,
-				getTelemetry: async () => dwell(4000, 0.4, 0.6),
+				getTelemetry: async () => clickAt(4000, 0.4, 0.6),
 				createId: (prefix) => `${prefix}_once`,
 			}),
 		).resolves.toBe(true);
@@ -553,7 +631,7 @@ describe("fresh-recording auto-zoom", () => {
 		await expect(
 			maybeSaveFreshRecordingAutoZooms(cleared, {
 				enabled: true,
-				getTelemetry: async () => dwell(4000, 0.4, 0.6),
+				getTelemetry: async () => clickAt(4000, 0.4, 0.6),
 			}),
 		).resolves.toBe(false);
 		expect(useProjectStore.getState().document?.zoomRanges).toEqual([]);
@@ -598,7 +676,7 @@ describe("fresh-recording auto-zoom", () => {
 			enabled: true,
 			getTelemetry: async () => {
 				await telemetryGate;
-				return dwell(4000, 0.4, 0.6);
+				return clickAt(4000, 0.4, 0.6);
 			},
 			createId: (prefix) => `${prefix}_race`,
 		});
@@ -641,7 +719,7 @@ describe("fresh-recording auto-zoom", () => {
 					userSaveLanded = true;
 					await useProjectStore.getState().saveDocument(trimmed, { history: true });
 				}
-				return dwell(4000, 0.4, 0.6);
+				return clickAt(4000, 0.4, 0.6);
 			},
 			createId: (prefix) => `${prefix}_contended`,
 		});
@@ -704,7 +782,7 @@ describe("fresh-recording auto-zoom", () => {
 		markFreshRecordingAutoZoomPending(stale.assets[0].originalPath);
 		const autoZoom = maybeSaveFreshRecordingAutoZooms(stale, {
 			enabled: true,
-			getTelemetry: async () => dwell(4000, 0.4, 0.6),
+			getTelemetry: async () => clickAt(4000, 0.4, 0.6),
 			createId: (prefix) => `${prefix}_after`,
 		});
 		await autoZoomStartedGate;
@@ -721,7 +799,7 @@ describe("fresh-recording auto-zoom", () => {
 		await expect(
 			maybeSaveFreshRecordingAutoZooms(wiped as AxcutDocument, {
 				enabled: true,
-				getTelemetry: async () => dwell(4000, 0.4, 0.6),
+				getTelemetry: async () => clickAt(4000, 0.4, 0.6),
 				createId: (prefix) => `${prefix}_rebase`,
 			}),
 		).resolves.toBe(true);
@@ -746,7 +824,7 @@ describe("fresh-recording auto-zoom", () => {
 		await expect(
 			maybeSaveFreshRecordingAutoZooms(doc, {
 				enabled: true,
-				getTelemetry: async () => dwell(4000, 0.4, 0.6),
+				getTelemetry: async () => clickAt(4000, 0.4, 0.6),
 				createId: (prefix) => `${prefix}_stuck`,
 				saveTimeoutMs: 10,
 				waitTimeoutMs: 10,
@@ -763,7 +841,7 @@ describe("fresh-recording auto-zoom", () => {
 		await expect(
 			maybeSaveFreshRecordingAutoZooms(doc, {
 				enabled: true,
-				getTelemetry: async () => dwell(4000, 0.4, 0.6),
+				getTelemetry: async () => clickAt(4000, 0.4, 0.6),
 				createId: (prefix) => `${prefix}_after`,
 				saveTimeoutMs: 1_000,
 				waitTimeoutMs: 10,

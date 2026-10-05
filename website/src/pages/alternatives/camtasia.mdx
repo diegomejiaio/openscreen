@@ -11,7 +11,7 @@ keywords:
 
 # A free, open-source Camtasia alternative
 
-OpenScreen is a free Camtasia alternative for Windows, macOS and Linux, released under the MIT license. Like Camtasia, it records the screen, webcam and audio, zooms in where the cursor goes, transcribes speech on your machine with Whisper, and exports MP4 or GIF. Unlike Camtasia, which is sold as an annual subscription and watermarks exports from its free editor, it costs nothing, needs no account and adds no watermark. Camtasia is still the better choice if you build training with quizzes and SCORM reporting, deliver closed captions or VTT files, or publish straight to YouTube or Screencast.
+OpenScreen is a free Camtasia alternative for Windows, macOS and Linux, released under the MIT license. Like Camtasia, it records the screen, webcam and audio, zooms in where you click, transcribes speech on your machine with Whisper, and exports MP4 or GIF. Unlike Camtasia, which is sold as an annual subscription and watermarks exports from its free editor, it costs nothing, needs no account and adds no watermark. Camtasia is still the better choice if you build training with quizzes and SCORM reporting, deliver closed captions or VTT files, or publish straight to YouTube or Screencast.
 
 This page is published by the OpenScreen project. The Camtasia details come from TechSmith's own pages and were checked in September 2026. The sources are listed at the end.
 
@@ -25,13 +25,13 @@ This page is published by the OpenScreen project. The Camtasia details come from
 | Source code | Open source, MIT license | Proprietary |
 | Platforms | Windows 10 (1903 or later) and 11, x64. macOS 13 or later, Apple Silicon and Intel. Linux, x64 | Windows 10 20H2 or later, 64-bit, with an AVX2 processor. macOS 14.0 or later. No Linux (as of September 2026) |
 | What it records | A display or one window, with webcam, microphone and system audio | Screen, webcam, microphone and system audio, on separate tracks |
-| Automatic zooms | Yes, placed from the recorded cursor | Yes, SmartFocus, on Camtasia Recorder and Camtasia Rev recordings |
-| Cursor effects | Size, smoothing, motion blur, click bounce and cursor themes | 14 cursor effects, plus click effects such as ripple, rings and click zoom |
+| Automatic zooms | Yes, placed on recorded clicks | Yes, SmartFocus, on Camtasia Recorder and Camtasia Rev recordings |
+| Cursor effects | Size, smoothing, motion blur and click bounce | 14 cursor effects, plus click effects such as ripple, rings and click zoom |
 | Captions | On-device Whisper, one model of about 264 MB, downloaded once. Auto-detect or 100 language codes. Burned into the video | On-device Whisper, 57 languages listed. Dynamic captions, closed captions, and basic VTT import and export |
 | Translation | Captions into 15 languages, through an AI provider you connect | Audio and transcript into 7 languages and 9 dialects, on the Pro plan |
 | Generative AI | Optional chat editing, with your own key | Built into the Create and Pro plans. Voices on both. Avatars, dubbing and translation on Pro |
 | Quizzes and SCORM | No | Yes. Four question types, with results reported to a SCORM-compliant LMS |
-| Export | MP4 (H.264 or H.265) or GIF, up to 60 fps, no watermark | MP4, GIF, M4A, WebM with transparency, or an interactive Smart Player video |
+| Export | MP4 (H.264) or GIF, up to 60 fps, no watermark | MP4, GIF, M4A, WebM with transparency, or an interactive Smart Player video |
 | Publishing | A file on disk. No hosting | Screencast hosting and direct YouTube upload |
 | Command line | `record`, `export`, `captions` and `pack` commands. NDJSON output with `--json` | Documented switches that control Camtasia Recorder on Windows, versions 9 and later |
 
@@ -39,7 +39,7 @@ This page is published by the OpenScreen project. The Camtasia details come from
 
 The core of a screen-recording workflow is in both. None of the following is unique to either app.
 
-- **Automatic zooms.** Camtasia's SmartFocus reads mouse movement, scrolling and clicks from a Camtasia Recorder file, and also works on Camtasia Rev media. In OpenScreen, **Auto-enhance → Automatic zooms** places the zooms from the recorded cursor movement, with no network call and no model. Manual zooms at six depths sit alongside them. More on [auto-zoom](/features/auto-zoom/).
+- **Automatic zooms.** Camtasia's SmartFocus reads mouse movement, scrolling and clicks from a Camtasia Recorder file, and also works on Camtasia Rev media. In OpenScreen, **Auto-enhance → Automatic zooms** places the zooms on the recorded clicks, with no network call and no model. Manual zooms at six depths sit alongside them. More on [auto-zoom](/features/auto-zoom/).
 - **A cursor you can change afterward.** Both keep cursor data from their own recordings, so cursor and click effects are applied after the take.
 - **Webcam, microphone and system audio** in the same recording.
 - **A timeline with several clips.** Both edit recordings and imported videos on a timeline. In OpenScreen, the timeline also holds voice-over and music tracks, speed regions, and a crop for each clip. See [Media library & clips](/docs/media-library/).
@@ -75,9 +75,9 @@ The core of a screen-recording workflow is in both. None of the following is uni
 ## Getting started
 
 1. Download OpenScreen from the [download page](/download/). On Windows, the Microsoft Store is the recommended route.
-2. Follow [Installation](/docs/installation/). On macOS, grant the Screen Recording and Accessibility permissions before the first take.
+2. Follow [Installation](/docs/installation/). On macOS, grant permissions from the window that opens on first launch.
 3. Bring over finished work as video files. OpenScreen does not open Camtasia projects, so export them to MP4 first, then import the files from the [media library](/docs/media-library/).
-4. Make a first recording with the [quick start](/docs/quick-start/), then run **Auto-enhance → Automatic zooms** on it and add [captions](/docs/captions/).
+4. Make a first recording with the [quick start](/docs/quick-start/). It opens in the editor with automatic zooms already placed. Then add [captions](/docs/captions/).
 
 Comparing other tools as well? See the [Screen Studio alternative](/alternatives/screen-studio/), [OpenScreen vs Cap](/compare/openscreen-vs-cap/), [OpenScreen vs OBS Studio](/compare/openscreen-vs-obs/) and the [Loom alternative](/alternatives/loom/), or go back to the [OpenScreen home page](/).
 

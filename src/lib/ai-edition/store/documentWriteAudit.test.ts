@@ -254,6 +254,8 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "addTrim", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addZoom", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "addZoomsBulk", "save", "gesture"),
+	// The Clear timeline button: every edit region in one write, so one undo step.
+	w("src/lib/ai-edition/store/useTimeline.ts", "clearTimeline", "save", "gesture"),
 	// The two drag commits. One undo step per gesture, recorded on release and only
 	// if the write lands — `historyBase` carries the pre-drag document.
 	w("src/lib/ai-edition/store/useTimeline.ts", "commitAnnotationChange", "save", "gesture"),
@@ -285,6 +287,7 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "removeClip", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "removeRegion", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "removeRegions", "save", "gesture"),
+	w("src/lib/ai-edition/store/useTimeline.ts", "saveZoomPatch", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "setTrimEntries", "save", "gesture"),
 	// The live halves of the two drags.
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateAnnotationLive", "set", "automatic"),
@@ -293,12 +296,7 @@ const DECLARED: WritePath[] = [
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateSpeedSpan", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateSpeedValue", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateTrim", "save", "gesture"),
-	w("src/lib/ai-edition/store/useTimeline.ts", "updateZoomClickImpact", "save", "gesture"),
-	w("src/lib/ai-edition/store/useTimeline.ts", "updateZoomDepth", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateZoomFocusLive", "set", "automatic"),
-	w("src/lib/ai-edition/store/useTimeline.ts", "updateZoomFocusMode", "save", "gesture"),
-	w("src/lib/ai-edition/store/useTimeline.ts", "updateZoomHideCursor", "save", "gesture"),
-	w("src/lib/ai-edition/store/useTimeline.ts", "updateZoomRotation", "save", "gesture"),
 	w("src/lib/ai-edition/store/useTimeline.ts", "updateZoomSpan", "save", "gesture"),
 	// Source-dimension backfill for assets a migration left unprobed. On load, for
 	// every project, whether or not the user touches anything.

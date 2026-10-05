@@ -16,8 +16,7 @@
     "message": "x86_64 · .dmg"
   },
   "download.macos.footnote": {
-    "message": "已簽署並完成公證，開啟時不需要在終端機操作。首次啟動時，請授予「螢幕錄製」與「輔助使用」權限。",
-    "description": "Screen Recording and Accessibility are macOS privacy settings: use the names macOS shows in your language."
+    "message": "已簽署並完成公證，開啟時不需要在終端機操作。首次啟動時，請在它顯示的視窗中授予權限。"
   },
   "download.windows.store.label": {
     "message": "Microsoft Store"
@@ -110,33 +109,26 @@
   "download.preRelease.cta": {
     "message": "瀏覽所有版本"
   },
+  "download.started.title": {
+    "message": "下載已開始"
+  },
+  "download.started.blurb": {
+    "message": "OpenScreen 免費且採用 MIT 授權。在 GitHub 上給顆星，能幫助更多人找到它。"
+  },
+  "download.started.cta": {
+    "message": "在 GitHub 上給星"
+  },
   "home.meta.title": {
     "message": "免費開源的螢幕錄影與影片剪輯軟體"
   },
   "home.meta.description": {
-    "message": "OpenScreen 是一款免費、開源的螢幕錄影與影片剪輯軟體，適用於 Windows、macOS 與 Linux 電腦：使用系統原生的螢幕擷取，字幕直接在你的裝置上產生，匯出的影片也沒有浮水印。"
-  },
-  "home.hero.badge.new": {
-    "message": "最新"
-  },
-  "home.hero.badge.text": {
-    "message": "1.11 在 macOS 與 Linux 上匯出更快",
-    "description": "Links to an English-only blog post. Must fit on one line on a 375px phone."
-  },
-  "home.hero.titleTagline": {
-    "message": "免費開源的螢幕錄影與影片剪輯軟體"
+    "message": "把螢幕錄製變成精美的展示影片：自動縮放、自訂背景、可編輯游標。適用於 Windows、macOS 和 Linux，免費開源，無浮水印。"
   },
   "home.hero.tagline": {
-    "message": "原生擷取、本機 AI、沒有付費牆的螢幕錄影。"
+    "message": "自動縮放、流暢游標和精美外框。錄製、調整、分享。"
   },
   "home.hero.download": {
     "message": "下載"
-  },
-  "home.hero.readDocs": {
-    "message": "閱讀文件"
-  },
-  "home.hero.scrollHint": {
-    "message": "向下捲動"
   },
   "home.features.kicker": {
     "message": "此外"
@@ -252,16 +244,16 @@
     "message": "接著寫出檔案。"
   },
   "showcase.export.body": {
-    "message": "MP4 可選 720p 到原始解析度，24、30 或 60 fps，H.264 或 H.265；也可以輸出 GIF。編碼在你的電腦上執行，過程中會計算影格數。不用排隊，不需要帳號，沒有浮水印，進度條跑滿時，檔案就已經在磁碟上。"
+    "message": "MP4 可選 720p 到原始解析度，24、30 或 60 fps，H.264；也可以輸出 GIF。編碼在你的電腦上執行，過程中會計算影格數。不用排隊，不需要帳號，沒有浮水印，進度條跑滿時，檔案就已經在磁碟上。"
   },
   "showcase.export.fact": {
-    "message": "H.264 / H.265 · 24、30、60 fps · 無浮水印"
+    "message": "H.264 · 24、30、60 fps · 無浮水印"
   },
   "showcase.export.link.docs": {
     "message": "影片匯出說明文件"
   },
   "showcase.export.label": {
-    "message": "匯出面板的示意圖：recording-1783066227227.mp4 正以 MP4 匯出，已選取 H.265，旁邊是 H.264、1080p、60 fps 與 GIF；進度條走到 62%，顯示 frame 1 488 of 2 400，正在寫入 Movies 資料夾。",
+    "message": "匯出面板的示意圖：recording-1783066227227.mp4 正以 MP4、1080p、60 fps 匯出，畫質與影格率兩列在進度條上方；進度條走到 62%，顯示 frame 1 488 of 2 400，正在寫入 Movies 資料夾。",
     "description": "Describes a drawing of the app for screen readers. The drawing is in English: keep the quoted words as drawn."
   },
   "showcase.captions.kicker": {
@@ -283,15 +275,11 @@
     "message": "本機字幕功能比較",
     "description": "Link label under the panel."
   },
-  "showcase.captions.label": {
-    "message": "字幕面板的示意圖：影片上以大字顯示「amber day on the validator, and it」這一行；旁邊的字幕已開啟，註明有七行字幕是從逐字稿即時產生，還有一列語言選項，提供 English、Français、Translate 按鈕，以及刪除翻譯的選項。",
-    "description": "Describes a drawing of the app for screen readers. The drawing is in English: keep the quoted words as drawn."
-  },
   "showcase.agent.kicker": {
     "message": "代理"
   },
   "showcase.agent.claim": {
-    "message": "或者，直接說要剪掉哪些部分。"
+    "message": "描述你要的修改，代理來完成。"
   },
   "showcase.agent.body": {
     "message": "本頁上方的精靈會觀察游標移動到哪裡，據此放置縮放。代理則更進一步：它會讀取實際的逐字稿與實際的時間軸，因此回答時會附上你可以自行核對的時間碼，說明要剪掉哪些區段、能省下多少時間。它做的每一項編輯都是一般可復原的操作，而且需要你自備提供者的金鑰。在你連接之前，什麼都不會執行。"
@@ -305,10 +293,6 @@
   "showcase.agent.link.feature": {
     "message": "自動縮放的運作方式",
     "description": "Link label under the panel."
-  },
-  "showcase.agent.label": {
-    "message": "代理回覆的示意圖。被要求剪掉空檔時，它以時間碼回答：「Hi」之前 0 到 2.19 秒的開場，以及「think.」之後 35.12 到 40.03 秒的結尾，讓影片的可播放長度從 40 秒變成 33 秒，既有的縮放仍留在相同的時刻；最後是一行綠字「applied: added 2 trims」。",
-    "description": "Describes a drawing of the app for screen readers. The drawing is in English: keep the quoted words as drawn."
   },
   "showcase.title": {
     "message": "錄影工具、字幕、代理、編碼器。"
@@ -762,5 +746,340 @@
   "theme.tags.tagsPageTitle": {
     "message": "標籤",
     "description": "The title of the tag list page"
+  },
+  "demoLoop.pause": {
+    "message": "暫停影片"
+  },
+  "demoLoop.play": {
+    "message": "播放影片"
+  },
+  "demoLoop.classic-zoom": {
+    "message": "在 OpenScreen 中錄製的任務看板。點擊清單項目和 Ship 按鈕時畫面隨之放大，接著拉遠到整個看板。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.3d-camera": {
+    "message": "透過 3D 攝影機觀看的同一段錄製，它傾斜螢幕並繞著螢幕環繞，同時跟隨游標。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.3d-cursors": {
+    "message": "同一個錄製的指標，在錄製持續播放的同時，依序以五種游標樣式重新繪製。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.automatic-subtitles": {
+    "message": "一段有旁白的錄製，下方顯示字幕，從英文依序切換到法文、西班牙文和韓文。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.caption-styles": {
+    "message": "同一則字幕的五種樣式：一般字幕、黃色粗體、手寫體、等寬字型，以及一次只顯示一個詞的樣式。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.edit-by-transcript": {
+    "message": "在編輯器的逐字稿中選取並刪除一句話，時間軸上隨即出現對應的剪輯。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.tighten-pauses": {
+    "message": "在逐字稿中點擊兩次靜音標記，兩處停頓就從時間軸上剪掉了。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.background-picker": {
+    "message": "編輯器的背景選擇器依序切換桌布、漸層和純色，接著開啟動態背景 Aurora。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.every-format": {
+    "message": "同一段錄製依序匯出為 16:9、方形和直式，構圖跟隨游標。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.sensitive-data-mask": {
+    "message": "正在填寫的登入表單。輸入時，電子郵件和密碼欄位始終保持模糊。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.every-layout": {
+    "message": "一段含網路攝影機的錄製依序切換版面配置：子母畫面、左右並排、上下堆疊、攝影機全螢幕，最後僅顯示螢幕。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.device-frames": {
+    "message": "同一段正在播放的錄製，依序套上瀏覽器視窗、手機、筆記型電腦和桌上型螢幕的外框。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.animated-backgrounds": {
+    "message": "一段錄製先在純色背景上，接著換到在其後方緩慢移動的模糊相片背景上。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.beautiful-by-default": {
+    "message": "一段原始螢幕錄製，接著是 OpenScreen 開啟時的同一段素材，已自動縮放、完成構圖並換了游標樣式，之後再切換幾種外觀。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.simpler-editor": {
+    "message": "OpenScreen 編輯器。點擊一次背景縮圖即可改變整部影片的外觀，接著側邊面板切換到逐字稿。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.edit-like-a-doc": {
+    "message": "在逐字稿中選取的文字像文件裡一樣被刪除，影片也隨之剪輯。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.ask-the-agent": {
+    "message": "在編輯器聊天面板中輸入的請求，以及代理所做的編輯出現在時間軸上。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "films.default.kicker": {
+    "message": "開箱即用"
+  },
+  "films.default.title": {
+    "message": "第一段素材就好看。"
+  },
+  "films.default.lead": {
+    "message": "每段新錄製開啟時都{zoomed}，帶有桌布、邊距、陰影和圓角。想改哪裡都可以，也能直接匯出。"
+  },
+  "films.default.lead.zoomed": {
+    "message": "已經在你的點擊處放大"
+  },
+  "films.default.note.zooms": {
+    "message": "{t} 每段素材都依固定規則在你點擊的位置放大：不用 AI，也不連網。可在錄製模式中關閉。"
+  },
+  "films.default.note.zooms.t": {
+    "message": "依點擊放大。"
+  },
+  "films.default.note.frame": {
+    "message": "{t} 桌布、邊距、陰影、圓角和一點動態模糊，在你動手之前就已到位。"
+  },
+  "films.default.note.frame.t": {
+    "message": "現成的畫面。"
+  },
+  "films.default.note.cursor": {
+    "message": "{t} 指標與像素分開記錄，所以錄完後仍可更改它的大小和樣式。"
+  },
+  "films.default.note.cursor.t": {
+    "message": "可以重做的游標。"
+  },
+  "films.depth.kicker": {
+    "message": "3D"
+  },
+  "films.depth.title": {
+    "message": "不只是縮放，還有縱深。"
+  },
+  "films.depth.lead": {
+    "message": "放大時可以傾斜螢幕或{orbit}，把指標畫成帶陰影的{cursor}，再把整段素材{device}，放在會動的背景上。"
+  },
+  "films.depth.lead.orbit": {
+    "message": "繞著它旋轉"
+  },
+  "films.depth.lead.cursor": {
+    "message": "3D 游標"
+  },
+  "films.depth.lead.device": {
+    "message": "放進裝置裡"
+  },
+  "films.depth.tab.camera": {
+    "message": "3D 攝影機"
+  },
+  "films.depth.tab.cursors": {
+    "message": "游標"
+  },
+  "films.depth.tab.frames": {
+    "message": "裝置外框"
+  },
+  "films.depth.tab.backgrounds": {
+    "message": "動態背景"
+  },
+  "films.depth.note.camera": {
+    "message": "{t} 每次縮放都可以保持平面、把螢幕向左或向右轉，或跟隨縮放焦點環繞螢幕。景深會柔化遠側。"
+  },
+  "films.depth.note.camera.t": {
+    "message": "3D 攝影機。"
+  },
+  "films.depth.note.cursors": {
+    "message": "{t} Studio Ink, Prism Glow, Pop Coral, Pixel Candy 和 Star Sprout，每一套都能畫成帶陰影的 3D 物件。"
+  },
+  "films.depth.note.cursors.t": {
+    "message": "五套游標。"
+  },
+  "films.depth.note.frames": {
+    "message": "{t} 視窗、筆記型電腦、手機或螢幕，淺色或深色，背景可用漂移、極光或波浪動畫。"
+  },
+  "films.depth.note.frames.t": {
+    "message": "外框與動態。"
+  },
+  "films.camera.kicker": {
+    "message": "攝影機"
+  },
+  "films.camera.title": {
+    "message": "你的攝影機、你的螢幕，或兩者兼具。"
+  },
+  "films.camera.lead": {
+    "message": "含網路攝影機的素材可以{layouts}，你身後的房間也可以在你自己的電腦上{blurred}、去背或替換，不需要綠幕。"
+  },
+  "films.camera.lead.layouts": {
+    "message": "子母畫面、左右並排、上下堆疊或全螢幕"
+  },
+  "films.camera.tab.layouts": {
+    "message": "版面配置"
+  },
+  "films.camera.note.layouts": {
+    "message": "{t} 子母畫面、雙畫框、垂直堆疊，或完全不用網路攝影機。"
+  },
+  "films.camera.note.layouts.t": {
+    "message": "四種版面配置。"
+  },
+  "films.camera.note.full": {
+    "message": "{t} 把時間軸上的一段交給攝影機：它會放大到全螢幕，然後平順地縮回。"
+  },
+  "films.camera.note.full.t": {
+    "message": "全螢幕攝影機。"
+  },
+  "films.camera.note.background": {
+    "message": "{t} 分割模型在你自己的電腦上把你和房間分開，不會上傳任何東西。"
+  },
+  "films.camera.note.background.t": {
+    "message": "模糊、去背或替換。"
+  },
+  "films.ship.kicker": {
+    "message": "發布之前"
+  },
+  "films.ship.title": {
+    "message": "適配任何格式，模糊不該露出的內容。"
+  },
+  "films.ship.lead": {
+    "message": "一段素材可以變成{formats}，不該被看到的內容始終{blur}。"
+  },
+  "films.ship.lead.formats": {
+    "message": "橫式、方形或直式"
+  },
+  "films.ship.lead.blur": {
+    "message": "藏在模糊之下"
+  },
+  "films.ship.formats": {
+    "message": "{t} 同一段素材，可依 16:9、9:16、1:1、4:3、4:5、16:10 或 10:16 構圖。"
+  },
+  "films.ship.formats.t": {
+    "message": "任意長寬比。"
+  },
+  "films.ship.blur": {
+    "message": "{t} 高斯或馬賽克，矩形、橢圓或手繪形狀，蓋住電子郵件、金鑰或密碼。"
+  },
+  "films.ship.blur.t": {
+    "message": "模糊區域。"
+  },
+  "films.label": {
+    "message": "更多應用功能，動起來看",
+    "description": "Read by screen readers only: names the section of feature videos"
+  },
+  "demoLoop.camera-blur": {
+    "message": "螢幕錄製上的方形攝影機小窗。畫面推近小窗，同時人物身後的房間變得模糊，接著再拉遠。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "films.camera.lead.blurred": {
+    "message": "模糊化"
+  },
+  "films.camera.tab.blur": {
+    "message": "背景模糊"
+  },
+  "demoLoop.title.classic-zoom": {
+    "message": "自動放大點擊處",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.3d-camera": {
+    "message": "環繞螢幕的 3D 攝影機",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.3d-cursors": {
+    "message": "以 3D 繪製的游標套件",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.automatic-subtitles": {
+    "message": "翻譯成其他語言的字幕",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.caption-styles": {
+    "message": "五種字幕樣式",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.edit-by-transcript": {
+    "message": "在逐字稿中刪除文字來剪輯影片",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.tighten-pauses": {
+    "message": "在逐字稿中剪掉靜音",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.background-picker": {
+    "message": "更換錄製內容的背景",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.every-format": {
+    "message": "同一段錄製的 16:9、1:1 和 9:16 版本",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.sensitive-data-mask": {
+    "message": "模糊電子郵件地址和密碼",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.camera-blur": {
+    "message": "網路攝影機背景模糊",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.every-layout": {
+    "message": "網路攝影機版面配置",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.device-frames": {
+    "message": "裝置外框",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.animated-backgrounds": {
+    "message": "動態背景",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.beautiful-by-default": {
+    "message": "從原始螢幕錄製到成品示範",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.simpler-editor": {
+    "message": "OpenScreen 編輯器",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.edit-like-a-doc": {
+    "message": "像編輯文件一樣編輯影片",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.ask-the-agent": {
+    "message": "請編輯器的代理完成修改",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "home.hero.title": {
+    "message": "一次錄製，就有精美的示範。"
+  },
+  "home.hero.reassurance": {
+    "message": "免費開源。無浮水印。無須帳號。"
+  },
+  "home.hero.explore": {
+    "message": "捲動以探索編輯器"
+  },
+  "recreation.pause": {
+    "message": "暫停動畫"
+  },
+  "recreation.play": {
+    "message": "播放動畫"
+  },
+  "announcement.v2.title": {
+    "message": "OpenScreen v2 登場"
+  },
+  "announcement.v2.link": {
+    "message": "了解新功能（英文）",
+    "description": "Links to an English-only blog post. Mention English in translated labels."
+  },
+  "download.cta.mac": {
+    "message": "下載 Mac 版"
+  },
+  "download.cta.windows": {
+    "message": "下載 Windows 版"
+  },
+  "download.cta.linux": {
+    "message": "下載 Linux 版"
+  },
+  "download.cta.chooseMac": {
+    "message": "選擇你的 Mac"
+  },
+  "download.cta.otherVersions": {
+    "message": "其他版本"
   }
 }

@@ -47,10 +47,16 @@ use crate::frame_geometry::{
     tilted_screen_cb, CursorPlacement, CursorPlanInput, FrameGeometryInput, ShadowCaster,
     SpriteShape,
 };
-use crate::scene::{Scene, SceneBackground};
+use crate::scene::{Scene, SceneBackground, WallpaperMotion};
 
 const LAYER_WGSL: &str = include_str!("vk_shaders/layer.wgsl");
 const BLUR_WGSL: &str = include_str!("vk_shaders/blur.wgsl");
+
+/// `layer.wgsl` avec ou sans ses modeles 3D (modes 15 a 17) : la constante que le shader teste
+/// pour les compiler, prefixee au source (pourquoi deux pipelines : le haut de `layer.wgsl`).
+fn layer_source(models: bool) -> String {
+    format!("const LAYER_MODELS: bool = {models};\n{LAYER_WGSL}")
+}
 
 /// Budget du cache de textures image (`img_cache`), en octets.
 ///
@@ -61,10 +67,22 @@ const BLUR_WGSL: &str = include_str!("vk_shaders/blur.wgsl");
 /// en parcourant les 18 wallpapers livres) en laissant le jeu actif resident.
 const IMG_CACHE_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 
-/// `&LayerCB` -> `&[u8; 128]`. `LayerCB` est `#[repr(C, align(16))]`, son layout
-/// EST le buffer uniforme WGSL (16 vec4 + 1 vec2 + 2 f32 = 128 octets).
+/// Taille du buffer uniforme d'un calque : `LayerCB` entier (176 octets), le `struct Layer` de
+/// `layer.wgsl`. `blur.wgsl` n'en lit que les 128 premiers.
+const LAYER_BYTES: u64 = std::mem::size_of::<LayerCB>() as u64;
+
+/// `&LayerCB` -> ses octets. `LayerCB` est `#[repr(C, align(16))]`, son layout EST le buffer
+/// uniforme WGSL (dix vec4 et un vec2 + 2 f32 = 176 octets).
 fn layer_bytes(cb: &LayerCB) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(cb as *const LayerCB as *const u8, 128) }
+    unsafe { std::slice::from_raw_parts(cb as *const LayerCB as *const u8, LAYER_BYTES as usize) }
+}
+
+/// Le maillage de Prism Glow tel que le lit le WGSL (`PrismMesh`) : les triangles, les
+/// polygones, un point par vec4 (le pas d'un tableau uniform), puis les boîtes.
+fn prism_mesh_bytes() -> Vec<u8> {
+    use crate::prism_mesh::{BOXES, POLYS, TRIS};
+    let points = POLYS.iter().map(|&[x, y]| [x, y, 0.0, 0.0]);
+    TRIS.iter().copied().chain(points).chain(BOXES).flatten().flat_map(f32::to_ne_bytes).collect()
 }
 
 /// Un calque de fond deja lie, en attente de son `draw`. `_buf`/`_tex`/`_view`
@@ -77,10 +95,25 @@ fn layer_bytes(cb: &LayerCB) -> &[u8] {
 /// ET le fond de la bulle webcam sont desormais construits par les memes
 /// methodes.
 struct BgDraw {
-    _buf: wgpu::Buffer,
+    layer: LayerBind,
     _tex: Option<wgpu::Texture>,
     _view: Option<wgpu::TextureView>,
+}
+
+/// Un calque pret a dessiner : son uniforme (qui doit vivre jusqu'au draw), son bind group, et
+/// s'il est l'un des modeles 3D, que seul `pipeline_models` compile (`LayerCB::needs_models`).
+/// `draw_layer` en tire le pipeline : c'est le mode du calque qui decide, pas le site d'appel.
+struct LayerBind {
+    _buf: wgpu::Buffer,
     bind: wgpu::BindGroup,
+    models: bool,
+}
+
+/// Le fond tel que la passe 1 (et son flou) l'a laisse dans le RT, et tout ce qui l'a decide
+/// (`key`, cf. `compose_frame`).
+struct BgCache {
+    key: crate::frame_geometry::BackgroundKey,
+    tex: wgpu::Texture,
 }
 
 /// Une copie RT -> staging DEJA SOUMISE, dont le mapping est arme mais pas
@@ -241,7 +274,7 @@ struct WebcamMask {
 }
 
 /// Pyramide de profondeur de champ (cf. `Compositor::dof_pyramid`). `_tex` garde la
-/// texture en vie ; `view` porte tous les niveaux (binding 4 du mode 8), `mips` un
+/// texture en vie ; `view` porte tous les niveaux (binding 6 des modes 8 et 18), `mips` un
 /// niveau chacune (cible du remplissage puis de `generate_mips`).
 struct DofPyramid {
     _tex: wgpu::Texture,
@@ -258,16 +291,23 @@ pub struct Compositor {
 
     // Pipeline de calque (VS + FS `layer.wgsl`), sampler lineaire, bind group
     // layout (uniform + 2 textures + sampler). Immuables apres `new_sized`.
+    // `pipeline` n'a pas les modeles 3D (modes 15 a 17) : ils passent par `pipeline_models`.
     pipeline: wgpu::RenderPipeline,
     /// Meme shader et meme layout que `pipeline`, blend ADDITIF pondere par la
     /// constante de blend. Sert a sommer les copies de la trainee du curseur
     /// dans `accum` ; cf. `blend_add` cote Windows.
     pipeline_add: wgpu::RenderPipeline,
+    /// `pipeline` et `pipeline_add` avec les modeles 3D : le curseur modelise, l'impact de son
+    /// clic, l'appareil et son ombre, et rien d'autre (cf. `layer_source`, `draw_layer`).
+    pipeline_models: wgpu::RenderPipeline,
+    pipeline_add_models: wgpu::RenderPipeline,
     /// Copie plein ecran d'`accum` vers le RT en « over » premultiplie
     /// (`blur.wgsl` : `vs_fullscreen` + `fs_copy`). Utilise le layout du blur.
     pipeline_copy: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// Le maillage de Prism Glow (`prism_mesh.rs`) tel que le lit le WGSL (`PrismMesh`, binding 7).
+    prism_mesh: wgpu::Buffer,
 
     // Chaine de blur Kawase du fond (`blur.wgsl`) : layout dedie (uniform + 1
     // tex + sampler), 2 pipelines (down/up), 3 textures de pyramide (1/2, 1/4,
@@ -278,6 +318,10 @@ pub struct Compositor {
     blur_half: wgpu::TextureView,
     blur_qtr: wgpu::TextureView,
     blur_oct: wgpu::TextureView,
+    /// Rendu isole de l'ecran cadre (ombre, cadre, metrage, appareil), transparent autour, que
+    /// le mode 18 recompose le long de sa trajectoire (`FrameGeometry::screen_trail`). Taille et
+    /// format du RT : il est dessine par le meme pipeline.
+    trail_view: wgpu::TextureView,
 
     // Render target offscreen + ring de staging de la relecture (recrees au resize).
     rt: wgpu::Texture,
@@ -309,6 +353,8 @@ pub struct Compositor {
     scene: RefCell<Option<Scene>>,
     cursor: RefCell<Option<crate::cursor::CursorTrack>>,
     cursor_time: RefCell<Option<f32>>,
+    /// Le métrage dans la dernière image composée, que l'éditeur lit avec elle (`live.rs`).
+    footage: std::cell::Cell<Option<crate::frame_geometry::FootageQuad>>,
     timeline_time: RefCell<Option<f32>>,
     /// Temps programme (secondes de sortie) -- cf. `FrameGeometryInput::programme_time`.
     programme_time: RefCell<Option<f32>>,
@@ -333,8 +379,11 @@ pub struct Compositor {
     /// touche depuis appartient au jeu actif et ne peut pas etre evince -- voir
     /// `cached_image`.
     img_frame_start: std::cell::Cell<u64>,
+    /// Le dernier fond fixe compose. Un fond qui ne bouge pas est le meme a chaque frame : on le
+    /// recopie au lieu de le redessiner (passe 1 de `compose_frame`).
+    bg_cache: RefCell<Option<BgCache>>,
     /// Champs de distance des sprites de curseur (mode 15), R16F, par chemin, avec leur forme.
-    /// Pas d'eviction : seuls les seize sprites du theme par defaut y passent (~2,6 Mo en tout).
+    /// Pas d'eviction : seuls les sprites du theme en cours y passent (~2,6 Mo pour les seize).
     sdf_cache: RefCell<std::collections::HashMap<String, (wgpu::Texture, SpriteShape)>>,
 
     /// Copie mipmappee de la frame composee, lue par les annotations « flou »
@@ -402,10 +451,14 @@ impl Compositor {
             feature_level: gpu.feature_level,
         };
 
-        let module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("layer.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(LAYER_WGSL.into()),
-        });
+        let mk_module = |label: &str, models: bool| {
+            gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(layer_source(models).into()),
+            })
+        };
+        let module = mk_module("layer.wgsl", false);
+        let module_models = mk_module("layer.wgsl (modeles)", true);
         let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("layer"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -440,7 +493,7 @@ impl Compositor {
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(128),
+                            min_binding_size: wgpu::BufferSize::new(LAYER_BYTES),
                         },
                         count: None,
                     },
@@ -463,26 +516,47 @@ impl Compositor {
                     // plans, et renumeroter aurait touche tous les bind groups
                     // pour un gain nul.
                     tex_entry(5),
+                    // Pyramide de profondeur de champ (modes 8 et 18), `dummy` ailleurs : le
+                    // mode 18 lit a la fois le metrage, son rendu isole (binding 4) et elle.
+                    tex_entry(6),
+                    // Le maillage de Prism Glow (mode 15). Un uniform et non des tables dans le
+                    // shader : lavapipe les recopiait a chaque pixel de chaque calque, et une
+                    // frame sans curseur se rendait 3,4 fois plus lentement.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
+        let prism_mesh = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("prism-mesh"),
+            contents: &prism_mesh_bytes(),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
         let pipeline_layout = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("layer"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
-        // Deux pipelines pour le MEME shader de calque : seul le blend change.
-        let mk_layer = |label: &str, blend: wgpu::BlendState| {
+        // Deux pipelines par source de calque : seul le blend change.
+        let mk_layer = |label: &str, module: &wgpu::ShaderModule, blend: wgpu::BlendState| {
             gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
-                    module: &module,
+                    module,
                     entry_point: Some("vs_main"),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     buffers: &[],
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &module,
+                    module,
                     entry_point: Some("fs_main"),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
@@ -501,22 +575,23 @@ impl Compositor {
                 cache: None,
             })
         };
-        let pipeline = mk_layer("layer", wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        let over = wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING;
+        let pipeline = mk_layer("layer", &module, over);
+        let pipeline_models = mk_layer("layer-models", &module_models, over);
         // SOMME pondere : `src * constante + dst`. La constante (posee par pass
         // via `set_blend_constant`) vaut 1/taps, donc N copies d'un curseur
         // parfaitement immobile redonnent exactement ce curseur. Transcription
         // du `blend_add` D3D11 (BLEND_FACTOR / ONE / OP_ADD sur couleur ET
         // alpha) ; l'alpha doit suivre la couleur, sinon la somme n'est plus
         // premultipliee et la composition finale delave la trainee.
-        let add = wgpu::BlendComponent {
+        let sum = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::Constant,
             dst_factor: wgpu::BlendFactor::One,
             operation: wgpu::BlendOperation::Add,
         };
-        let pipeline_add = mk_layer(
-            "layer-add",
-            wgpu::BlendState { color: add, alpha: add },
-        );
+        let add = wgpu::BlendState { color: sum, alpha: sum };
+        let pipeline_add = mk_layer("layer-add", &module, add);
+        let pipeline_add_models = mk_layer("layer-add-models", &module_models, add);
 
         // --- Chaine de blur Kawase du fond (`blur.wgsl`) ---
         let blur_module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -624,29 +699,7 @@ impl Compositor {
             multiview: None,
             cache: None,
         });
-        let mk_pyr = |dw: u32, dh: u32, label: &str| {
-            gpu.device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: dw.max(1),
-                        height: dh.max(1),
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-                .create_view(&wgpu::TextureViewDescriptor::default())
-        };
-        let blur_half = mk_pyr(w / 2, h / 2, "blur-half");
-        let blur_qtr = mk_pyr(w / 4, h / 4, "blur-qtr");
-        let blur_oct = mk_pyr(w / 8, h / 8, "blur-oct");
-
+        let (blur_half, blur_qtr, blur_oct, trail_view) = Self::make_blur_targets(&gpu, w, h);
         let (rt, rt_view, accum, accum_view, readback_bpr) = Self::make_targets(&gpu, w, h);
         let (ann_copy, ann_copy_view, ann_copy_mips) = Self::make_ann_copy(&gpu, w, h);
         // Profondeur 1 par defaut = chemin synchrone historique, a l'octet et a
@@ -671,15 +724,19 @@ impl Compositor {
             render_h: h,
             pipeline,
             pipeline_add,
+            pipeline_models,
+            pipeline_add_models,
             pipeline_copy,
             bind_group_layout,
             sampler,
+            prism_mesh,
             blur_bgl,
             blur_down,
             blur_up,
             blur_half,
             blur_qtr,
             blur_oct,
+            trail_view,
             rt,
             rt_view,
             _accum: accum,
@@ -692,6 +749,7 @@ impl Compositor {
             scene: RefCell::new(None),
             cursor: RefCell::new(None),
             cursor_time: RefCell::new(None),
+            footage: std::cell::Cell::new(None),
             timeline_time: RefCell::new(None),
             programme_time: RefCell::new(None),
             text_raster: crate::text::TextRasterizer::new().ok(),
@@ -699,6 +757,7 @@ impl Compositor {
             sdf_cache: RefCell::new(std::collections::HashMap::new()),
             img_tick: std::cell::Cell::new(0),
             img_frame_start: std::cell::Cell::new(0),
+            bg_cache: RefCell::new(None),
             ann_copy,
             ann_copy_view,
             ann_copy_mips,
@@ -714,6 +773,88 @@ impl Compositor {
             seg_scratch: RefCell::new(Vec::new()),
             seg_failed: RefCell::new(false),
         })
+    }
+
+    /// Le meme compositeur, rasterisant a `w`x`h` : seules les cibles qui ont la taille du
+    /// rendu sont reallouees. Cf. `compositor_windows::Compositor::resized`. Ici, reconstruire
+    /// le compositeur entier refaisait en plus tous les shaders et pipelines wgpu.
+    ///
+    /// Les rings de relecture repartent vides a leur profondeur : leurs buffers ont l'ancienne
+    /// taille, comme les cibles YUV, reconstruites a la premiere demande. Une copie encore en
+    /// vol est perdue, comme avec la reconstruction ; la preview n'en laisse aucune
+    /// (`readback_direct` draine).
+    pub fn resized(self, w: u32, h: u32) -> Result<Compositor> {
+        let (w, h) = Self::normalize_render_size(w, h);
+        let gpu = &self.gpu;
+        let (blur_half, blur_qtr, blur_oct, trail_view) = Self::make_blur_targets(gpu, w, h);
+        let (rt, rt_view, accum, accum_view, readback_bpr) = Self::make_targets(gpu, w, h);
+        let (ann_copy, ann_copy_view, ann_copy_mips) = Self::make_ann_copy(gpu, w, h);
+        let depth = self.readback.borrow().depth;
+        let readback = RefCell::new(ReadbackRing {
+            depth,
+            free: (0..depth).map(|_| Self::make_staging(gpu, readback_bpr, h)).collect(),
+            pending: std::collections::VecDeque::new(),
+        });
+        let readback_yuv = RefCell::new(ReadbackRing {
+            depth: self.readback_yuv.borrow().depth,
+            free: Vec::new(),
+            pending: std::collections::VecDeque::new(),
+        });
+        Ok(Compositor {
+            render_w: w,
+            render_h: h,
+            blur_half,
+            blur_qtr,
+            blur_oct,
+            trail_view,
+            rt,
+            rt_view,
+            _accum: accum,
+            accum_view,
+            readback_bpr,
+            readback,
+            yuv: RefCell::new(None),
+            readback_yuv,
+            ann_copy,
+            ann_copy_view,
+            ann_copy_mips,
+            bg_cache: RefCell::new(None),
+            ..self
+        })
+    }
+
+    /// Pyramide du blur Kawase du fond (1/2, 1/4, 1/8 du rendu) et cible de la
+    /// trainee de l'ecran (pleine taille), dans cet ordre.
+    fn make_blur_targets(
+        gpu: &Gpu,
+        w: u32,
+        h: u32,
+    ) -> (wgpu::TextureView, wgpu::TextureView, wgpu::TextureView, wgpu::TextureView) {
+        let mk = |dw: u32, dh: u32, label: &str| {
+            gpu.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: dw.max(1),
+                        height: dh.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        (
+            mk(w / 2, h / 2, "blur-half"),
+            mk(w / 4, h / 4, "blur-qtr"),
+            mk(w / 8, h / 8, "blur-oct"),
+            mk(w, h, "screen-trail"),
+        )
     }
 
     /// RT RGBA8, cible d'accumulation de meme geometrie, et `bytes_per_row` de
@@ -746,7 +887,8 @@ impl Compositor {
                 view_formats: &[],
             })
         };
-        let rt = mk("rt", wgpu::TextureUsages::COPY_SRC);
+        // COPY_DST : le fond fixe y est recopie (`bg_cache`).
+        let rt = mk("rt", wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST);
         let accum = mk("accum", wgpu::TextureUsages::empty());
         let rt_view = rt.create_view(&wgpu::TextureViewDescriptor::default());
         let accum_view = accum.create_view(&wgpu::TextureViewDescriptor::default());
@@ -904,12 +1046,9 @@ impl Compositor {
 
     /// Un buffer de staging de la ring. La taille depend de `bpr` (donc de la
     /// largeur de rendu) et de la hauteur : changer la geometrie de rendu impose
-    /// de les reallouer -- ce que fait `new_sized`, puisque la preview
-    /// RECONSTRUIT le compositeur au resize (`live.rs`) au lieu de le
-    /// redimensionner a chaud. Aucune copie ne peut donc etre en vol au moment
-    /// ou la taille change : l'ancien compositeur (et sa ring) est detruit
-    /// entier, wgpu gardant ses buffers vivants jusqu'a la fin des soumissions
-    /// qui les referencent.
+    /// de les reallouer -- ce que fait `resized`, qui remplace la ring entiere.
+    /// L'ancienne est detruite avec ses buffers, wgpu les gardant vivants
+    /// jusqu'a la fin des soumissions qui les referencent.
     fn make_staging(gpu: &Gpu, bpr: u32, h: u32) -> wgpu::Buffer {
         gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
@@ -928,13 +1067,14 @@ impl Compositor {
         src: &wgpu::TextureView,
         dst: &wgpu::TextureView,
         src_px: [f32; 2],
+        off: f32,
     ) {
         let cb = LayerCB {
             mode: -1.0,
             color: [1.0, 1.0, 1.0, 1.0],
             // Convention HLSL/Metal (`compositor_windows::blur_bg`) : texel de la
-            // SOURCE en .xy, offset 2.2 en .z. Parite des trois backends.
-            fx: [1.0 / src_px[0], 1.0 / src_px[1], 2.2, 0.0],
+            // SOURCE en .xy, offset en .z. Parite des trois backends.
+            fx: [1.0 / src_px[0], 1.0 / src_px[1], off, 0.0],
             ..Default::default()
         };
         let uniform = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -979,28 +1119,30 @@ impl Compositor {
         rpass.draw(0..3, 0..1);
     }
 
-    /// Floute le RT (le fond deja dessine) : dual-Kawase 3 down (RT -> 1/2 ->
-    /// 1/4 -> 1/8) + 3 up (1/8 -> 1/4 -> 1/2 -> RT). ~gaussien a cout constant.
-    fn blur_bg(&self, encoder: &mut wgpu::CommandEncoder) {
-        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
-        let (hw, hh) = (
-            (self.render_w / 2).max(1) as f32,
-            (self.render_h / 2).max(1) as f32,
-        );
-        let (qw, qh) = (
-            (self.render_w / 4).max(1) as f32,
-            (self.render_h / 4).max(1) as f32,
-        );
-        let (ow, oh) = (
-            (self.render_w / 8).max(1) as f32,
-            (self.render_h / 8).max(1) as f32,
-        );
-        self.blur_pass(encoder, &self.blur_down, &self.rt_view, &self.blur_half, [rw, rh]);
-        self.blur_pass(encoder, &self.blur_down, &self.blur_half, &self.blur_qtr, [hw, hh]);
-        self.blur_pass(encoder, &self.blur_down, &self.blur_qtr, &self.blur_oct, [qw, qh]);
-        self.blur_pass(encoder, &self.blur_up, &self.blur_oct, &self.blur_qtr, [ow, oh]);
-        self.blur_pass(encoder, &self.blur_up, &self.blur_qtr, &self.blur_half, [qw, qh]);
-        self.blur_pass(encoder, &self.blur_up, &self.blur_half, &self.rt_view, [hw, hh]);
+    /// Floute le RT (le fond deja dessine) : dual-Kawase, `levels` down (RT -> 1/2 ->
+    /// 1/4 -> 1/8) puis autant d'up, niveaux et ecart tires de la force
+    /// (`background_blur_steps`, partage avec D3D/Metal). ~gaussien a cout borne.
+    fn blur_bg(&self, encoder: &mut wgpu::CommandEncoder, amount: f32) {
+        let Some((levels, off)) = crate::frame_geometry::background_blur_steps(amount) else {
+            return;
+        };
+        let dims = |d: u32| {
+            [(self.render_w / d).max(1) as f32, (self.render_h / d).max(1) as f32]
+        };
+        let pyramid = [
+            (&self.rt_view, dims(1)),
+            (&self.blur_half, dims(2)),
+            (&self.blur_qtr, dims(4)),
+            (&self.blur_oct, dims(8)),
+        ];
+        for i in 0..levels {
+            let (src, src_px) = pyramid[i];
+            self.blur_pass(encoder, &self.blur_down, src, pyramid[i + 1].0, src_px, off);
+        }
+        for i in (0..levels).rev() {
+            let (src, src_px) = pyramid[i + 1];
+            self.blur_pass(encoder, &self.blur_up, src, pyramid[i].0, src_px, off);
+        }
     }
 
     /// Dimensions paires (NV12 4:2:0), min 2x2. Symetrie avec les autres backends.
@@ -1125,11 +1267,14 @@ impl Compositor {
     /// `LayerCB` de l'ombre d'un ecran INCLINE (mode 12) : la penombre suit le
     /// quadrilatere projete, pas son rect englobant. Port de
     /// `compositor_macos::draw_quad_shadow`.
+    #[allow(clippy::too_many_arguments)]
     fn quad_shadow_cb(
         &self,
         corners: &[(f32, f32); 4],
         center_px: [f32; 2],
         radius: f32,
+        // Le slot d'un layout en bloc, qui rogne le plan (`shadow_mask_fields`).
+        mask: Option<crate::frame_geometry::ScreenMask>,
         spread: f32,
         offset_px: [f32; 2],
         opacity: f32,
@@ -1147,6 +1292,11 @@ impl Compositor {
         let [tr0, tr1] = local(corners[1]);
         let [br0, br1] = local(corners[2]);
         let [bl0, bl1] = local(corners[3]);
+        let (mask_rect, mask_radius) = crate::frame_geometry::shadow_mask_fields(
+            mask,
+            [center_px[0] + min_x - spread, center_px[1] + min_y - spread],
+            [rw, rh],
+        );
         LayerCB {
             dst: [
                 (center_px[0] + min_x - spread + offset_px[0]) / rw,
@@ -1160,9 +1310,28 @@ impl Compositor {
             color: [0.0, 0.0, 0.0, opacity],
             fx: [tl0, tl1, tr0, tr1],
             src_prev: [br0, br1, bl0, bl1],
+            dst_prev: mask_rect,
             // Le spread vit ici et NON dans `fx.x` : `fx` porte deja les coins.
-            mb: [0.0, spread, 1.0, 0.0],
+            mb: [0.0, spread, 1.0, mask_radius],
             ..Default::default()
+        }
+    }
+
+    /// L'ecran cadre, dans son ordre : ombre, cadre de fenetre (sous l'ecran), ecran, appareil
+    /// (devant lui). Dans la passe d'avant-plan, ou dans le rendu isole du mode 18.
+    fn draw_screen_group(
+        &self,
+        rpass: &mut wgpu::RenderPass<'_>,
+        shadow: &Option<LayerBind>,
+        window_frame: &Option<LayerBind>,
+        screen: &LayerBind,
+        device_frame: &Option<LayerBind>,
+    ) {
+        for layer in [shadow.as_ref(), window_frame.as_ref(), Some(screen), device_frame.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            self.draw_layer(rpass, layer, false);
         }
     }
 
@@ -1171,20 +1340,21 @@ impl Compositor {
         cb: &LayerCB,
         planes: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
         dummy: &wgpu::TextureView,
-    ) -> (wgpu::Buffer, wgpu::BindGroup) {
-        self.make_bind_b4(cb, planes, dummy, None)
+    ) -> LayerBind {
+        self.make_bind_b4(cb, planes, dummy, None, None)
     }
 
-    /// `make_bind`, binding 4 impose. Seul le mode 8 s'en sert, pour y lier la pyramide
-    /// de profondeur de champ a la place du masque webcam qu'il ne lit pas -- jamais le
-    /// binding 1, qui porte la luma.
+    /// `make_bind`, binding 4 impose (le rendu isole du mode 18, a la place du masque webcam
+    /// qu'il ne lit pas), et la pyramide de profondeur de champ en binding 6 (modes 8 et 18).
+    /// Le mode 15 y met le champ de son sprite et le sprite.
     fn make_bind_b4(
         &self,
         cb: &LayerCB,
         planes: Option<(&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView)>,
         dummy: &wgpu::TextureView,
         b4: Option<&wgpu::TextureView>,
-    ) -> (wgpu::Buffer, wgpu::BindGroup) {
+        dof: Option<&wgpu::TextureView>,
+    ) -> LayerBind {
         let uniform = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("layer-uniform"),
             contents: layer_bytes(cb),
@@ -1228,9 +1398,33 @@ impl Compositor {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(v),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(dof.unwrap_or(dummy)),
+                },
+                wgpu::BindGroupEntry { binding: 7, resource: self.prism_mesh.as_entire_binding() },
             ],
         });
-        (uniform, bind)
+        LayerBind { _buf: uniform, bind, models: cb.needs_models() }
+    }
+
+    /// Dessine un calque par le pipeline plat que l'appelant a lie (`pipeline`, ou `pipeline_add`
+    /// si `add`) -- sauf un modele 3D, qui passe le temps de son draw par la variante
+    /// « modeles » de ce pipeline, la seule a le compiler (pourquoi : le haut de `layer.wgsl`).
+    fn draw_layer(&self, rpass: &mut wgpu::RenderPass<'_>, layer: &LayerBind, add: bool) {
+        rpass.set_bind_group(0, &layer.bind, &[]);
+        if layer.models {
+            let (models, flat) = if add {
+                (&self.pipeline_add_models, &self.pipeline_add)
+            } else {
+                (&self.pipeline_models, &self.pipeline)
+            };
+            rpass.set_pipeline(models);
+            rpass.draw(0..4, 0..1);
+            rpass.set_pipeline(flat);
+        } else {
+            rpass.draw(0..4, 0..1);
+        }
     }
 
     /// Charge un PNG/JPEG (chemin fichier ou data URI) en texture RGBA8. Port
@@ -1283,6 +1477,7 @@ impl Compositor {
             return Ok(hit.clone());
         }
         let sdf = crate::cursor_sdf::CursorSdf::load(path)?;
+        let texels = sdf.f16_bytes();
         let size = wgpu::Extent3d { width: sdf.width, height: sdf.height, depth_or_array_layers: 1 };
         let tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("cursor-sdf"),
@@ -1301,7 +1496,7 @@ impl Compositor {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &sdf.f16_bytes(),
+            &texels,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(sdf.width * 2),
@@ -1371,6 +1566,10 @@ impl Compositor {
     ///
     /// Err plutot qu'un repli maison : chaque appelant a son propre message et
     /// son propre repli, et un echec silencieux redonnerait le noir qu'on corrige.
+    ///
+    /// `motion` anime l'image au temps programme `programme_t` ; la bulle webcam
+    /// passe `WallpaperMotion::None`.
+    #[allow(clippy::too_many_arguments)]
     fn image_bg_draw(
         &self,
         path: &str,
@@ -1378,6 +1577,8 @@ impl Compositor {
         quad_px: [f32; 2],
         radius_px: f32,
         aspect: f32,
+        motion: WallpaperMotion,
+        programme_t: f32,
         dummy: &wgpu::TextureView,
     ) -> Result<BgDraw> {
         let (tex, iw, ih) = self.cached_image(path)?;
@@ -1390,17 +1591,20 @@ impl Compositor {
             let vis = ai / aspect;
             [0.0, (1.0 - vis) * 0.5, 1.0, 1.0 - (1.0 - vis) * 0.5]
         };
+        let (anim, mb) = crate::frame_geometry::wallpaper_motion_slots(motion, programme_t, aspect);
         let cb = LayerCB {
             dst,
             src,
             quad_px,
             radius_px,
             mode: 6.0,
+            fx: [0.0, 0.0, anim[0], anim[1]],
+            mb,
             ..Default::default()
         };
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let (buf, bind) = self.make_bind(&cb, Some((&view, &view, &view)), dummy);
-        Ok(BgDraw { _buf: buf, _tex: Some(tex), _view: Some(view), bind })
+        let layer = self.make_bind(&cb, Some((&view, &view, &view)), dummy);
+        Ok(BgDraw { layer, _tex: Some(tex), _view: Some(view) })
     }
 
     /// Prepare le fond du mode « personnalise », peint DANS la bulle webcam juste
@@ -1425,10 +1629,7 @@ impl Compositor {
         dummy: &wgpu::TextureView,
     ) -> BgDraw {
         const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-        let flat = |cb: LayerCB| {
-            let (buf, bind) = self.make_bind(&cb, None, dummy);
-            BgDraw { _buf: buf, _tex: None, _view: None, bind }
-        };
+        let flat = |cb: LayerCB| BgDraw { layer: self.make_bind(&cb, None, dummy), _tex: None, _view: None };
         let solid = |color: [f32; 4]| LayerCB {
             dst,
             quad_px,
@@ -1442,29 +1643,25 @@ impl Compositor {
                 flat(solid(parse_hex(color).unwrap_or(BLACK)))
             }
             // Le mouvement ne vaut que pour le fond d'ecran : la bulle garde son degrade immobile.
-            Some(SceneBackground::Gradient { angle_deg, stops, .. }) => {
-                let c0 = stops.first().and_then(|s| parse_hex(s)).unwrap_or(BLACK);
-                let c1 = stops.last().and_then(|s| parse_hex(s)).unwrap_or(c0);
+            Some(SceneBackground::Gradient { angle_deg, stops, offsets, .. }) => {
                 // angle CSS -> direction unitaire, meme convention que le fond
                 // d'ecran (dont la direction se lit en espace SORTIE : le degrade
                 // traverse le cadre, la bulle n'en montre que sa tranche).
                 let a = angle_deg.to_radians();
                 flat(LayerCB {
                     dst,
-                    src: [c1[0], c1[1], c1[2], c1[3]],
                     quad_px,
                     radius_px,
-                    mode: 5.0,
-                    color: c0,
                     fx: [a.sin(), -a.cos(), 0.0, 0.0],
-                    ..Default::default()
+                    ..crate::frame_geometry::gradient_layer(stops, offsets, BLACK)
                 })
             }
-            Some(SceneBackground::Image { path }) => {
+            Some(SceneBackground::Image { path, .. }) => {
                 // Le cover-fit se mesure sur la BULLE, pas sur la sortie : c'est
                 // elle que l'image doit remplir sans etirement.
                 let aspect = if quad_px[1] > 0.0 { quad_px[0] / quad_px[1] } else { 1.0 };
-                match self.image_bg_draw(path, dst, quad_px, radius_px, aspect, dummy) {
+                let still = WallpaperMotion::None;
+                match self.image_bg_draw(path, dst, quad_px, radius_px, aspect, still, 0.0, dummy) {
                     Ok(d) => d,
                     Err(e) => {
                         // Meme contrat que le fond d'ecran : un chemin casse est
@@ -1569,7 +1766,7 @@ impl Compositor {
         // `color.a = 1` n'est pas decoratif : `fs_main` calcule son alpha en
         // `layer.color.a * alpha_mask`, donc le defaut (0) rendrait un quad
         // entierement transparent.
-        let (_uniform, bind) = self.make_bind(
+        let layer = self.make_bind(
             &LayerCB {
                 dst: [0.0, 0.0, 1.0, 1.0],
                 src,
@@ -1602,8 +1799,7 @@ impl Compositor {
                 occlusion_query_set: None,
             });
             rpass.set_pipeline(&self.pipeline);
-            rpass.set_bind_group(0, &bind, &[]);
-            rpass.draw(0..4, 0..1);
+            self.draw_layer(&mut rpass, &layer, false);
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -1908,6 +2104,11 @@ impl Compositor {
         *self.webcam_mask.borrow_mut() = None;
     }
 
+    /// Le métrage dans la dernière image composée : ses coins et son warp (`FootageQuad`).
+    pub fn footage_quad(&self) -> Option<crate::frame_geometry::FootageQuad> {
+        self.footage.get()
+    }
+
     /// Rend une frame dans le RT interne. Le screen `screen`/`webcam` sont des
     /// carriers `linux_frames` ; la geometrie vient de `plan_frame`. Coeur :
     /// fond uni + ecran cover-fit. `readback_direct` lit ensuite le RT.
@@ -1983,6 +2184,7 @@ impl Compositor {
             timeline_t_override: *self.timeline_time.borrow(),
             programme_time: *self.programme_time.borrow(),
         });
+        self.footage.set(Some(g.footage_quad([rw, rh])));
         // (`wtw`/`wth` sont les dims de la TEXTURE webcam, consommees par le
         // cover-crop du calque PiP plus bas.)
 
@@ -1991,32 +2193,27 @@ impl Compositor {
         // cfg.bg_blur) floute ensuite ce fond, avant l'ecran.
         enum BgLayer {
             Gradient(LayerCB),
-            Image(String),
+            Image(String, WallpaperMotion),
         }
         let (bg_clear, bg_layer) = match scene_ref.as_ref().map(|s| s.background.clone()) {
             Some(SceneBackground::Color { color }) => {
                 (parse_hex(&color).unwrap_or(lp.bg_color), None)
             }
-            Some(SceneBackground::Gradient { angle_deg, stops, motion }) => {
-                let c0 = stops.first().and_then(|s| parse_hex(s)).unwrap_or(lp.bg_color);
-                let c1 = stops.last().and_then(|s| parse_hex(s)).unwrap_or(c0);
+            Some(SceneBackground::Gradient { angle_deg, stops, offsets, motion }) => {
                 let a = angle_deg.to_radians();
                 let (anim, mb) =
-                    crate::frame_geometry::gradient_motion_slots(motion, g.programme_t, rw / rh);
+                    crate::frame_geometry::wallpaper_motion_slots(motion, g.programme_t, rw / rh);
                 let cb = LayerCB {
                     dst: [0.0, 0.0, 1.0, 1.0],
-                    src: [c1[0], c1[1], c1[2], c1[3]],
                     quad_px: [rw, rh],
-                    mode: 5.0,
-                    color: c0,
                     fx: [a.sin(), -a.cos(), anim[0], anim[1]],
                     mb,
-                    ..Default::default()
+                    ..crate::frame_geometry::gradient_layer(&stops, &offsets, lp.bg_color)
                 };
                 ([0.0, 0.0, 0.0, 1.0], Some(BgLayer::Gradient(cb)))
             }
-            Some(SceneBackground::Image { path }) => {
-                ([0.0, 0.0, 0.0, 1.0], Some(BgLayer::Image(path)))
+            Some(SceneBackground::Image { path, motion }) => {
+                ([0.0, 0.0, 0.0, 1.0], Some(BgLayer::Image(path, motion)))
             }
             None => (lp.bg_color, None),
         };
@@ -2046,20 +2243,20 @@ impl Compositor {
         // sinon. Place par plan_frame (cover-fit + coins arrondis) ;
         // `src = g.cut` (crop utilisateur + zoom en UV texture) dans les deux cas.
         //
-        // FLOU DE VELOCITE, ET POURQUOI SEULEMENT SUR LE MODE 0. `src_prev`/
-        // `dst_prev` decrivent le MEME calque a la frame precedente ; le shader
-        // remappe chaque pixel de sortie par ce couple pour retrouver l'UV qu'il
-        // occupait alors, et floute le long du segment. `src_prev = g.cut` et non
-        // un `cut` d'avant : la coupe est identique aux deux frames (`plan_frame`
-        // ne fait varier que le rect de DESTINATION entre `s_dst` et
-        // `s_dst_prev`), ce que Windows documente aussi. Le mouvement vient donc
-        // entierement de `dst_prev`.
+        // FLOU DE VELOCITE. Au mode 0, `src_prev`/`dst_prev` decrivent le MEME
+        // calque a la frame precedente ; le shader remappe chaque pixel de sortie
+        // par ce couple pour retrouver l'UV qu'il occupait alors, et floute le long
+        // du segment. `src_prev = g.cut` et non un `cut` d'avant : la coupe est
+        // identique aux deux frames (`plan_frame` ne fait varier que le rect de
+        // DESTINATION entre `s_dst` et `s_dst_prev`), ce que Windows documente
+        // aussi. Le mouvement vient donc entierement de `dst_prev`.
         //
-        // Le mode 8 n'en recoit PAS, et ce n'est pas un oubli : ces deux champs y
-        // portent deja les coins projetes du quad (BR/BL dans `src_prev`,
-        // `plane_px` dans `dst_prev`). Les deux sens ne peuvent pas cohabiter dans
-        // un meme draw. macOS et Windows sautent egalement le flou sur le chemin
-        // incline, pour la meme raison.
+        // Au mode 8, ces deux champs portent deja les coins projetes du quad
+        // (BR/BL dans `src_prev`, `plane_px` dans `dst_prev`) : le plan d'avant
+        // arrive dans ses propres champs (`trail_a`/`trail_b`/`trail_mb`,
+        // `FrameGeometry::tilt_pixel_trail`), meme flou borne a une frame.
+        // Dans les deux modes, ce flou par pixel s'efface quand l'ecran CADRE est
+        // floute en bloc (mode 18, `trail` plus bas).
         // Sous un cadre de fenetre, l'ecran garde ses coins HAUTS carres (`mb.w` au mode 0,
         // `dst_prev.z` au mode 8) ; 0 sans cadre, soit le rendu d'avant.
         let square_top = g.screen_square_top();
@@ -2067,18 +2264,23 @@ impl Compositor {
         // `color.z` au mode 8) : l'arrondi du haut se fait par le cadre. 0 sans fenetre.
         let top_lift = g.screen_top_lift_px([rw, rh]);
         let screen_layer = match tilt.as_ref() {
-            None => LayerCB {
-                dst: g.s_dst,
-                src: g.cut,
-                quad_px: s_px,
-                radius_px: g.s_radius,
-                mode: 0.0,
-                color: [1.0, 1.0, 1.0, 1.0],
-                src_prev: g.cut,
-                dst_prev: g.s_dst_prev,
-                mb: [g.mb_taps, g.mb_amount, top_lift, square_top],
-                ..Default::default()
-            },
+            None => {
+                // Sous le masque d'un layout en bloc, rogne au slot (`mask_flat_screen`).
+                let (dst, src, quad_px, radius_px) =
+                    g.mask_flat_screen(g.s_dst, g.cut, s_px, g.s_radius, [rw, rh]);
+                LayerCB {
+                    dst,
+                    src,
+                    quad_px,
+                    radius_px,
+                    mode: 0.0,
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    src_prev: g.cut,
+                    dst_prev: g.s_dst_prev,
+                    mb: [g.screen_pixel_taps([rw, rh]), g.mb_amount, top_lift, square_top],
+                    ..Default::default()
+                }
+            }
             // Mode 8, partage avec Windows et macOS (`tilted_screen_cb`).
             Some(quad) => tilted_screen_cb(
                 quad,
@@ -2090,17 +2292,20 @@ impl Compositor {
                 top_lift,
                 dof,
                 [rw, rh],
+                g.screen_mask,
+                g.tilt_pixel_trail([rw, rh]),
             ),
         };
-        // Bind group construit AVANT le pass (doit vivre pendant tout le pass) ;
-        // `_screen_uniform` garde le buffer uniforme en vie (reference par le bind).
+        // Bind group construit AVANT le pass (doit vivre pendant tout le pass) ; `LayerBind`
+        // garde le buffer uniforme en vie (reference par le bind).
         let dummy = self.dummy_view();
-        // Binding 4 EXPLICITE sur le mode 8 : la pyramide si l'effet tourne, sinon le
-        // repli habituel (`k = 0`, le shader n'y lit rien).
-        let (_screen_uniform, screen_bind) = self.make_bind_b4(
+        // Binding 6 du mode 8 : la pyramide si l'effet tourne, sinon `dummy` (`k = 0`, le
+        // shader n'y lit rien).
+        let screen_bind = self.make_bind_b4(
             &screen_layer,
             Some((&sy, &su, &sv)),
             &dummy,
+            None,
             dof_pyramid.map(|p| &p.view),
         );
         // Remplissage de la pyramide : UN draw du mode 0 en UV plein vers son niveau 0
@@ -2135,7 +2340,7 @@ impl Compositor {
         // cadre de fenetre, c'est le CADRE qui la porte (`shadow_caster`), sinon la barre de
         // titre flotterait au-dessus de l'ombre.
         let screen_shadow = cfg.shadow.then(|| {
-            let spread = crate::frame_geometry::SCREEN_SHADOW_SPREAD_FRAC * g.frame_min_px;
+            let spread = crate::frame_geometry::SCREEN_SHADOW_SPREAD_FRAC * g.screen_unit_px;
             let offset = g.screen_shadow_offset();
             let opacity = 0.45 * lp.shadow_scale;
             // Un appareil porte l'ombre de sa silhouette 3D (mode 17), pas celle d'un quad.
@@ -2145,9 +2350,8 @@ impl Compositor {
                     ShadowCaster::Upright { dst, size_px, radius } => {
                         self.shadow_cb(dst, size_px, radius, spread, offset, opacity)
                     }
-                    ShadowCaster::Tilted { corners, center_px, radius } => {
-                        self.quad_shadow_cb(&corners, center_px, radius, spread, offset, opacity)
-                    }
+                    ShadowCaster::Tilted { corners, center_px, radius, mask } => self
+                        .quad_shadow_cb(&corners, center_px, radius, mask, spread, offset, opacity),
                 },
             };
             self.make_bind(&cb, None, &dummy)
@@ -2159,19 +2363,41 @@ impl Compositor {
         // du metrage et sa lunette mord dessus. Le shader s'arrete au plan du metrage dans
         // l'ouverture, donc il ne recouvre jamais l'image.
         let device_frame = g.device_frame_cb([rw, rh]).map(|cb| self.make_bind(&cb, None, &dummy));
+        // Flou de mouvement de l'ecran CADRE (`FrameGeometry::screen_trail`) : l'ombre, le cadre,
+        // le metrage et l'appareil ci-dessus passent dans un rendu isole (`trail_view`), que le
+        // mode 18 recompose sur le fond, droit ou incline ; binding 4 = ce rendu, les plans = le
+        // metrage, binding 6 = la pyramide, pour le relire hors de la sortie comme le mode 8.
+        let trail = g.screen_trail([rw, rh]).then(|| {
+            self.make_bind_b4(
+                &g.screen_trail_cb([rw, rh], dof),
+                Some((&sy, &su, &sv)),
+                &dummy,
+                Some(&self.trail_view),
+                dof_pyramid.map(|p| &p.view),
+            )
+        });
+
+        // Le fond de la frame d'avant, s'il est celui qu'on demande (`BackgroundKey`) : la passe 1
+        // le recopie au lieu de le redessiner.
+        let bg_desc = scene_ref.as_ref().map(|s| &s.background);
+        let bg_cached = self
+            .bg_cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.key.matches(bg_desc, cfg.bg_blur, lp.bg_color, [rw, rh]));
+        let bg_wanted = bg_layer.is_some();
 
         // Fond (gradient mode 5 OU image mode 6), dessine dans la passe de fond.
-        let bg_draw = bg_layer.and_then(|bl| match bl {
+        let bg_draw = bg_layer.filter(|_| !bg_cached).and_then(|bl| match bl {
             BgLayer::Gradient(cb) => {
-                let (buf, bind) = self.make_bind(&cb, None, &dummy);
-                Some(BgDraw { _buf: buf, _tex: None, _view: None, bind })
+                Some(BgDraw { layer: self.make_bind(&cb, None, &dummy), _tex: None, _view: None })
             }
             // Le wallpaper couvre tout le cadre, donc dst plein et pas de coins :
             // `image_bg_draw` sert aussi la bulle webcam, qui elle en a.
-            BgLayer::Image(path) => {
-                match self
-                    .image_bg_draw(&path, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0], 0.0, rw / rh, &dummy)
-                {
+            BgLayer::Image(path, motion) => {
+                let full = [0.0, 0.0, 1.0, 1.0];
+                let t = g.programme_t;
+                match self.image_bg_draw(&path, full, [0.0, 0.0], 0.0, rw / rh, motion, t, &dummy) {
                     Ok(d) => Some(d),
                     Err(e) => {
                         eprintln!("[fond image] \"{path}\" : {e:#}");
@@ -2182,7 +2408,8 @@ impl Compositor {
         });
 
         // Webcam PiP (mode 0) -- placee par plan_frame (`g.w_dst`, coins
-        // `g.w_radius`), gardee par `g.shape_fade > 0` (webcam visible).
+        // `g.w_radius`). `g.shape_fade` ne regit que la bulle (coins, ombre) : il
+        // vaut 0 pendant un palier Full Camera, ou la webcam remplit le cadre.
         // `webcam_planes` garde les vues en vie pendant le pass.
         // `lp.has_webcam` is the gate Windows (`compositor_windows.rs`) and macOS
         // (`compositor_macos.rs`) both apply and this backend did not. It is false
@@ -2190,7 +2417,7 @@ impl Compositor {
         // the SCREEN video, because `open_and_seek_clip` falls back to it rather
         // than leave the pair half-open. Without this check a recording with no
         // camera drew its own screen picture inside the PiP box.
-        let webcam_planes = if lp.has_webcam && g.shape_fade > 0.0 && !webcam.is_null() {
+        let webcam_planes = if lp.has_webcam && !webcam.is_null() {
             self.nv12_srvs(webcam).ok()
         } else {
             None
@@ -2343,16 +2570,15 @@ impl Compositor {
         // replis, meme ordre. Seul le texte diverge, tinte cote shader (atlas R8)
         // au lieu d'une couleur bakee dans la texture.
         struct AnnDraw {
-            _buf: wgpu::Buffer,
+            layer: LayerBind,
             /// Gardent l'atlas / la texture image en vie jusqu'au submit. `None`
             /// pour les quads qui n'echantillonnent rien (plaque de fond, fleche).
             _glyphs: Option<crate::text::RasterizedGlyphs>,
             _tex: Option<wgpu::Texture>,
-            bind: wgpu::BindGroup,
         }
         impl AnnDraw {
-            fn plain(buf: wgpu::Buffer, bind: wgpu::BindGroup) -> AnnDraw {
-                AnnDraw { _buf: buf, _glyphs: None, _tex: None, bind }
+            fn plain(layer: LayerBind) -> AnnDraw {
+                AnnDraw { layer, _glyphs: None, _tex: None }
             }
         }
         // FENETRE TEMPORELLE. Sans ce test, TOUTES les annotations du projet sont
@@ -2370,6 +2596,8 @@ impl Compositor {
             .as_ref()
             .is_some_and(|s| s.annotations.iter().any(|a| a.kind == "blur" && visible(a)));
         let mut ann_draws: Vec<AnnDraw> = Vec::new();
+        // Les flous de confidentialite, dessines sur le metrage avant le curseur.
+        let mut privacy_draws: Vec<AnnDraw> = Vec::new();
         if let Some(scene) = scene_ref.as_ref() {
             // La liste arrive deja triee par zIndex cote app : l'ordre d'iteration
             // EST l'ordre de peinture.
@@ -2411,8 +2639,7 @@ impl Compositor {
                             mb: [1.0, half_stroke, 0.0, 0.0],
                             ..Default::default()
                         };
-                        let (buf, bind) = self.make_bind(&cb, None, &dummy);
-                        ann_draws.push(AnnDraw::plain(buf, bind));
+                        ann_draws.push(AnnDraw::plain(self.make_bind(&cb, None, &dummy)));
                     }
                     "blur" => {
                         let Some(blur) = a.blur.as_ref() else { continue };
@@ -2455,12 +2682,12 @@ impl Compositor {
                         };
                         // La copie mipmappee au binding 1 (texY), la ou le mode 10
                         // la lit.
-                        let (buf, bind) = self.make_bind(
+                        let layer = self.make_bind(
                             &cb,
                             Some((&self.ann_copy_view, &self.ann_copy_view, &self.ann_copy_view)),
                             &dummy,
                         );
-                        ann_draws.push(AnnDraw::plain(buf, bind));
+                        privacy_draws.push(AnnDraw::plain(layer));
                     }
                     "image" => {
                         let Some(src) = a.image_path.as_ref().filter(|s| !s.is_empty()) else {
@@ -2517,13 +2744,8 @@ impl Compositor {
                             fx: [0.0, 0.0, 1.0, 1.0],
                             ..Default::default()
                         };
-                        let (buf, bind) = self.make_bind(&cb, Some((&view, &view, &view)), &dummy);
-                        ann_draws.push(AnnDraw {
-                            _buf: buf,
-                            _glyphs: None,
-                            _tex: Some(tex),
-                            bind,
-                        });
+                        let layer = self.make_bind(&cb, Some((&view, &view, &view)), &dummy);
+                        ann_draws.push(AnnDraw { layer, _glyphs: None, _tex: Some(tex) });
                     }
                     "text" => {
                         let Some(raster) = self.text_raster.as_ref() else { continue };
@@ -2568,6 +2790,7 @@ impl Compositor {
                         let anim = crate::text_anim::text_animation_state(
                             text.animation.as_deref(),
                             (g.source_t - a.start_sec as f32) * 1000.0,
+                            ((a.end_sec - a.start_sec) * 1000.0) as f32,
                         );
                         let anim_px = rh / crate::text_anim::ANIMATION_REFERENCE_HEIGHT;
                         let (mut ax, mut ay, mut aw, mut ah) = (
@@ -2651,8 +2874,7 @@ impl Compositor {
                                     ),
                                     ..Default::default()
                                 };
-                                let (pbuf, pbind) = self.make_bind(&plate, None, &dummy);
-                                ann_draws.push(AnnDraw::plain(pbuf, pbind));
+                                ann_draws.push(AnnDraw::plain(self.make_bind(&plate, None, &dummy)));
                             }
                         }
 
@@ -2665,14 +2887,9 @@ impl Compositor {
                             ..Default::default()
                         };
                         // Atlas R8 au binding 1 (texY) que le mode 11 echantillonne.
-                        let (buf, bind) =
+                        let layer =
                             self.make_bind(&cb, Some((&glyphs.view, &glyphs.view, &glyphs.view)), &dummy);
-                        ann_draws.push(AnnDraw {
-                            _buf: buf,
-                            _glyphs: Some(glyphs),
-                            _tex: None,
-                            bind,
-                        });
+                        ann_draws.push(AnnDraw { layer, _glyphs: Some(glyphs), _tex: None });
                     }
                     _ => {}
                 }
@@ -2689,12 +2906,18 @@ impl Compositor {
         // sont PAS dessinees sur le RT mais dans `accum`, puis compositees en une
         // fois -- cf. le commentaire au point de dessin.
         struct CursorDraw {
-            _bufs: Vec<wgpu::Buffer>,
             /// Le sprite, et pour le curseur modelise son champ de distance.
             _tex: Vec<(wgpu::Texture, wgpu::TextureView)>,
-            binds: Vec<wgpu::BindGroup>,
+            /// Une copie par echantillon de la trainee, le sprite (modes 7 et 13) ou le curseur
+            /// modelise (mode 15).
+            binds: Vec<LayerBind>,
+            /// L'union des quads de `binds` (x0, y0, x1, y1 en fractions de la sortie) : tout ce
+            /// que la trainee peint dans `accum`, donc tout ce que sa recopie doit relire.
+            bounds: [f32; 4],
             /// L'impact des clics (mode 16), dessine SOUS le curseur, sur le RT.
-            impacts: Vec<wgpu::BindGroup>,
+            impacts: Vec<LayerBind>,
+            /// Le cristal de Prism Glow : il lit la copie de l'image composee (`CursorPlan::glass`).
+            glass: bool,
         }
         let cursor_draw: Option<CursorDraw> = (|| {
             let track = cursor_ref.as_ref()?;
@@ -2737,13 +2960,18 @@ impl Compositor {
                     })
                     .collect()
             };
-            let (mut bufs, mut binds) = (Vec::new(), Vec::new());
-            let mut impacts = Vec::new();
-            for cb in &plan.impacts {
-                let (buf, bind) = self.make_bind(cb, None, &dummy);
-                bufs.push(buf);
-                impacts.push(bind);
-            }
+            let mut binds = Vec::new();
+            let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            let mut grow = |dst: [f32; 4]| {
+                bounds = [
+                    bounds[0].min(dst[0]),
+                    bounds[1].min(dst[1]),
+                    bounds[2].max(dst[0] + dst[2]),
+                    bounds[3].max(dst[1] + dst[3]),
+                ];
+            };
+            let impacts: Vec<LayerBind> =
+                plan.impacts.iter().map(|cb| self.make_bind(cb, None, &dummy)).collect();
 
             let sprites = scene_ref
                 .as_ref()
@@ -2773,11 +3001,13 @@ impl Compositor {
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
 
             // Curseur modelise (mode 15) : ce meme sprite extrude, `plan_cursor` en a tire la
-            // pose. Sprite au binding 1 (texY), champ au binding 2 (texU). Parite Windows/macOS.
+            // pose. La copie de l'image composee au binding 1 (texY), que refracte le cristal de
+            // Prism Glow, le champ au binding 4 (texMask), le sprite au binding 6 (texDof).
+            // Parite Windows/macOS.
             if let Some(pose) = plan.model {
                 match self.cursor_sdf(&sprite.path) {
                     Ok((sdf, shape)) => {
-                        let shape = SpriteShape { hotspot, ..shape };
+                        let shape = crate::frame_geometry::model_shape(sprite, shape);
                         let sdf_view = sdf.create_view(&wgpu::TextureViewDescriptor::default());
                         for placement in placements {
                             let Some(cb) = cursor_model_cb(
@@ -2790,16 +3020,21 @@ impl Compositor {
                             ) else {
                                 continue;
                             };
-                            let (buf, bind) =
-                                self.make_bind(&cb, Some((&view, &sdf_view, &view)), &dummy);
-                            bufs.push(buf);
-                            binds.push(bind);
+                            binds.push(self.make_bind_b4(
+                                &cb,
+                                Some((&self.ann_copy_view, &dummy, &dummy)),
+                                &dummy,
+                                Some(&sdf_view),
+                                Some(&view),
+                            ));
+                            grow(cb.dst);
                         }
                         return (!binds.is_empty()).then_some(CursorDraw {
-                            _bufs: bufs,
                             _tex: vec![(tex, view), (sdf, sdf_view)],
                             binds,
+                            bounds,
                             impacts,
+                            glass: plan.glass,
                         });
                     }
                     Err(e) => eprintln!("[curseur] champ de \"{}\" : {e:#}", sprite.path),
@@ -2819,11 +3054,16 @@ impl Compositor {
                     [rw, rh],
                 );
                 // Sprite RGBA au binding 1 (texY) que le mode 7 echantillonne.
-                let (buf, bind) = self.make_bind(&cb, Some((&view, &view, &view)), &dummy);
-                bufs.push(buf);
-                binds.push(bind);
+                binds.push(self.make_bind(&cb, Some((&view, &view, &view)), &dummy));
+                grow(cb.dst);
             }
-            Some(CursorDraw { _bufs: bufs, _tex: vec![(tex, view)], binds, impacts })
+            Some(CursorDraw {
+                _tex: vec![(tex, view)],
+                binds,
+                bounds,
+                impacts,
+                glass: false,
+            })
         })();
         // Bind group de la passe de composition d'`accum` (layout du blur :
         // uniform + texture + sampler). Construit hors de la pass, comme les
@@ -2865,7 +3105,7 @@ impl Compositor {
         });
         // Passe 0 : pyramide de profondeur de champ, niveau 0 vide d'abord (le « over »
         // rend alors la source telle quelle), puis ses mips.
-        if let (Some(p), Some((_buf, bind))) = (dof_pyramid, &dof_fill) {
+        if let (Some(p), Some(fill)) = (dof_pyramid, &dof_fill) {
             {
                 let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("dof-pyramid-pass"),
@@ -2882,25 +3122,19 @@ impl Compositor {
                     occlusion_query_set: None,
                 });
                 rpass.set_pipeline(&self.pipeline);
-                rpass.set_bind_group(0, bind, &[]);
-                rpass.draw(0..4, 0..1);
+                self.draw_layer(&mut rpass, fill, false);
             }
             self.generate_mips(&mut encoder, &p.mips);
         }
-        // Passe 1 : fond (clear a `bg_clear` + gradient mode 5 eventuel).
-        {
+        // Passe 0 bis : l'ecran cadre, isole sur transparent, quand il est floute en bloc.
+        if trail.is_some() {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("bg-pass"),
+                label: Some("screen-trail-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.rt_view,
+                    view: &self.trail_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: bg_clear[0] as f64,
-                            g: bg_clear[1] as f64,
-                            b: bg_clear[2] as f64,
-                            a: bg_clear[3] as f64,
-                        }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -2908,19 +3142,77 @@ impl Compositor {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            if let Some(bg) = &bg_draw {
-                rpass.set_pipeline(&self.pipeline);
-                rpass.set_bind_group(0, &bg.bind, &[]);
-                rpass.draw(0..4, 0..1);
+            rpass.set_pipeline(&self.pipeline);
+            self.draw_screen_group(&mut rpass, &screen_shadow, &window_frame, &screen_bind, &device_frame);
+        }
+        // Passe 1 : fond (clear a `bg_clear` + gradient mode 5 eventuel) puis son flou -- ou, s'il
+        // n'a pas change (`BackgroundKey`), la copie qu'en a gardee la frame d'avant.
+        let extent = wgpu::Extent3d {
+            width: self.render_w,
+            height: self.render_h,
+            depth_or_array_layers: 1,
+        };
+        if bg_cached {
+            let cache = self.bg_cache.borrow();
+            let tex = &cache.as_ref().expect("bg_cached").tex;
+            encoder.copy_texture_to_texture(tex.as_image_copy(), self.rt.as_image_copy(), extent);
+        } else {
+            {
+                let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("bg-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.rt_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: bg_clear[0] as f64,
+                                g: bg_clear[1] as f64,
+                                b: bg_clear[2] as f64,
+                                a: bg_clear[3] as f64,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                if let Some(bg) = &bg_draw {
+                    rpass.set_pipeline(&self.pipeline);
+                    self.draw_layer(&mut rpass, &bg.layer, false);
+                }
+            }
+            // Blur du fond (avant l'ecran), si active par la scene/l'inspector.
+            self.blur_bg(&mut encoder, cfg.bg_blur);
+            // Pas de cache pour un fond anime, ni pour un fond qui n'a pas pu se charger : la frame
+            // suivante reessaie.
+            let key = (bg_draw.is_some() == bg_wanted)
+                .then(|| {
+                    crate::frame_geometry::BackgroundKey::of(bg_desc, cfg.bg_blur, lp.bg_color, [rw, rh])
+                })
+                .flatten();
+            if let Some(key) = key {
+                let mut cache = self.bg_cache.borrow_mut();
+                let tex = match cache.take() {
+                    Some(c) if c.tex.size() == extent => c.tex,
+                    _ => self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("bg-cache"),
+                        size: extent,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    }),
+                };
+                encoder.copy_texture_to_texture(self.rt.as_image_copy(), tex.as_image_copy(), extent);
+                *cache = Some(BgCache { key, tex });
             }
         }
-        // Blur du fond (avant l'ecran), si active par la scene/l'inspector.
-        if cfg.bg_blur {
-            self.blur_bg(&mut encoder);
-        }
-        // Passe 2 : avant-plan (ecran + webcam), compose par-dessus le fond
-        // (eventuellement floute) avec `LoadOp::Load`. Les annotations sont dans
-        // une passe a part, cf. plus bas.
+        // Passe 2 : l'ecran, compose par-dessus le fond (eventuellement floute) avec
+        // `LoadOp::Load`. Puis les flous de confidentialite, le curseur, la camera et les autres
+        // annotations, dans cet ordre : celui de Windows et macOS.
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("fg-pass"),
@@ -2940,54 +3232,32 @@ impl Compositor {
             // Chaque ombre est dessinee JUSTE AVANT le calque qu'elle porte :
             // elle doit passer sous lui mais au-dessus du fond (et, pour la
             // camera, au-dessus de l'ecran).
-            if let Some((_buf, bind)) = &screen_shadow {
-                rpass.set_bind_group(0, bind, &[]);
-                rpass.draw(0..4, 0..1);
-            }
-            if let Some((_buf, bind)) = &window_frame {
-                rpass.set_bind_group(0, bind, &[]);
-                rpass.draw(0..4, 0..1);
-            }
-            rpass.set_bind_group(0, &screen_bind, &[]);
-            rpass.draw(0..4, 0..1);
-            if let Some((_buf, bind)) = &device_frame {
-                rpass.set_bind_group(0, bind, &[]);
-                rpass.draw(0..4, 0..1);
-            }
-            if let Some((_buf, bind)) = &webcam_shadow {
-                rpass.set_bind_group(0, bind, &[]);
-                rpass.draw(0..4, 0..1);
-            }
-            // Fond personnalise : ENTRE l'ombre et la camera. C'est ce sandwich qui
-            // remplace la branche « mode 3 » du shader — la camera, decoupee, se
-            // fond dessus par alpha ; l'ombre reste dessous, elle appartient a la
-            // bulle et non a son contenu.
-            if let Some(bg) = &webcam_bg {
-                rpass.set_bind_group(0, &bg.bind, &[]);
-                rpass.draw(0..4, 0..1);
-            }
-            if let Some((_buf, bind)) = &webcam_draw {
-                rpass.set_bind_group(0, bind, &[]);
-                rpass.draw(0..4, 0..1);
+            match &trail {
+                Some(layer) => self.draw_layer(&mut rpass, layer, false),
+                None => self.draw_screen_group(
+                    &mut rpass,
+                    &screen_shadow,
+                    &window_frame,
+                    &screen_bind,
+                    &device_frame,
+                ),
             }
         }
         // Fige la frame composee pour les annotations « flou ». ICI et nulle part
-        // ailleurs : apres l'ecran et la camera (sinon un flou masquerait du vide)
-        // et avant la premiere annotation (sinon deux flous qui se recouvrent
+        // ailleurs : apres l'ecran (sinon un flou masquerait du vide)
+        // et avant le premier flou (sinon deux flous qui se recouvrent
         // s'echantillonnent l'un l'autre). Une passe de rendu ne peut pas lire sa
         // propre cible, d'ou la copie -- et d'ou le fait que les annotations
         // doivent avoir leur propre passe.
         if needs_ann_copy {
             self.generate_ann_mips(&mut encoder);
         }
-        // Passe 3 : annotations puis curseur net, par-dessus tout le reste. Elle
-        // existe meme sans flou : deux passes consecutives sur la MEME cible avec
-        // `LoadOp::Load` ne coutent rien de plus qu'une seule sur un GPU
-        // desktop, et un seul chemin de code vaut mieux qu'un branchement qui ne
-        // serait exerce que dans un projet sur dix.
-        {
+        // Passe 2 bis : les flous de confidentialite, sur le metrage, AVANT le curseur (parite
+        // Windows et macOS). Le curseur reste net par-dessus, et le cristal de Prism Glow, qui
+        // refracte l'image composee, n'y voit que des pixels deja floutes.
+        if !privacy_draws.is_empty() {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ann-pass"),
+                label: Some("privacy-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.rt_view,
                     resolve_target: None,
@@ -3001,21 +3271,44 @@ impl Compositor {
                 occlusion_query_set: None,
             });
             rpass.set_pipeline(&self.pipeline);
-            for a in &ann_draws {
-                rpass.set_bind_group(0, &a.bind, &[]);
-                rpass.draw(0..4, 0..1);
+            for a in &privacy_draws {
+                self.draw_layer(&mut rpass, &a.layer, false);
             }
+        }
+        // Le cristal de Prism Glow refracte l'image telle qu'elle est composee a cet instant,
+        // flous compris : sa copie dans `ann_copy` (libre, les flous l'ont deja lue ; le mip 0
+        // suffit), une fois pour toutes les copies de la trainee.
+        if cursor_draw.as_ref().is_some_and(|c| c.glass) {
+            encoder.copy_texture_to_texture(
+                self.rt.as_image_copy(),
+                self.ann_copy.as_image_copy(),
+                wgpu::Extent3d { width: self.render_w, height: self.render_h, depth_or_array_layers: 1 },
+            );
+        }
+        // Le curseur net, et l'impact des clics sous lui. La trainee, elle, a besoin de sa
+        // propre cible : elle suit.
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("cursor-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.rt_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.pipeline);
             // L'impact des clics, sous le curseur et sa trainee (dessinee plus bas).
-            for bind in cursor_draw.iter().flat_map(|c| &c.impacts) {
-                rpass.set_bind_group(0, bind, &[]);
-                rpass.draw(0..4, 0..1);
+            for layer in cursor_draw.iter().flat_map(|c| &c.impacts) {
+                self.draw_layer(&mut rpass, layer, false);
             }
-            // Curseur en dernier : au-dessus de l'ecran et des annotations.
-            // Une seule copie = curseur net, il tient dans cette pass. La
-            // trainee, elle, a besoin de sa propre cible (voir plus bas).
             if let Some(c) = cursor_draw.as_ref().filter(|c| c.binds.len() == 1) {
-                rpass.set_bind_group(0, &c.binds[0], &[]);
-                rpass.draw(0..4, 0..1);
+                self.draw_layer(&mut rpass, &c.binds[0], false);
             }
         }
         // TRAINEE DU CURSEUR : flou REEL, pas des copies discretes.
@@ -3051,11 +3344,10 @@ impl Compositor {
                     occlusion_query_set: None,
                 });
                 rpass.set_pipeline(&self.pipeline_add);
-                for (k, bind) in c.binds.iter().enumerate() {
+                for (k, layer) in c.binds.iter().enumerate() {
                     let w = crate::frame_geometry::cursor_tap_weight(k as u32, c.binds.len() as u32) as f64;
                     rpass.set_blend_constant(wgpu::Color { r: w, g: w, b: w, a: w });
-                    rpass.set_bind_group(0, bind, &[]);
-                    rpass.draw(0..4, 0..1);
+                    self.draw_layer(&mut rpass, layer, true);
                 }
             }
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -3072,9 +3364,76 @@ impl Compositor {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            rpass.set_pipeline(&self.pipeline_copy);
-            rpass.set_bind_group(0, abind, &[]);
-            rpass.draw(0..3, 0..1);
+            // Rien n'a ete peint dans `accum` hors des quads de la trainee : la recopie s'y borne
+            // au lieu de repasser sur toute la sortie, ce qui coutait 0,5 ms par frame 1080p
+            // (Radeon 610M) pour un curseur de quelques dizaines de pixels.
+            let (w, h) = (self.render_w as f32, self.render_h as f32);
+            let x0 = (c.bounds[0] * w).floor().clamp(0.0, w) as u32;
+            let y0 = (c.bounds[1] * h).floor().clamp(0.0, h) as u32;
+            let x1 = (c.bounds[2] * w).ceil().clamp(0.0, w) as u32;
+            let y1 = (c.bounds[3] * h).ceil().clamp(0.0, h) as u32;
+            if x1 > x0 && y1 > y0 {
+                rpass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
+                rpass.set_pipeline(&self.pipeline_copy);
+                rpass.set_bind_group(0, abind, &[]);
+                rpass.draw(0..3, 0..1);
+            }
+        }
+        // La camera, au-dessus de l'ecran et du curseur.
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("webcam-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.rt_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.pipeline);
+            if let Some(layer) = &webcam_shadow {
+                self.draw_layer(&mut rpass, layer, false);
+            }
+            // Fond personnalise : ENTRE l'ombre et la camera. C'est ce sandwich qui
+            // remplace la branche « mode 3 » du shader — la camera, decoupee, se
+            // fond dessus par alpha ; l'ombre reste dessous, elle appartient a la
+            // bulle et non a son contenu.
+            if let Some(bg) = &webcam_bg {
+                self.draw_layer(&mut rpass, &bg.layer, false);
+            }
+            if let Some(layer) = &webcam_draw {
+                self.draw_layer(&mut rpass, layer, false);
+            }
+        }
+        // Passe 3 : les autres annotations, par-dessus tout le reste (les flous sont passes avant
+        // le curseur). Elle existe meme sans annotation : deux passes consecutives sur la MEME
+        // cible avec `LoadOp::Load` ne coutent rien de plus qu'une seule sur un GPU desktop, et un
+        // seul chemin de code vaut mieux qu'un branchement qui ne serait exerce que dans un projet
+        // sur dix.
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ann-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.rt_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.pipeline);
+            for a in &ann_draws {
+                self.draw_layer(&mut rpass, &a.layer, false);
+            }
         }
         self.gpu.context.submit(std::iter::once(encoder.finish()));
         Ok(())
@@ -3829,6 +4188,29 @@ mod tests {
         assert_eq!(got, pattern, "la memoire exportee ne porte pas ce que wgpu y a ecrit");
     }
 
+    /// Un cran de padding en format Auto change la taille de rendu de la preview. `resized`
+    /// realloue les cibles et garde le reste : le masque webcam, et la boite aux lettres ou le
+    /// worker de segmentation depose les suivants.
+    #[test]
+    fn resizing_keeps_the_segmentation_and_reads_back_at_the_new_size() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        let (w, h) = (crate::segmentation::MODEL_WIDTH, crate::segmentation::MODEL_HEIGHT);
+        comp.set_webcam_mask(&vec![255u8; (w * h) as usize], w, h).expect("masque");
+        let inbox = std::sync::Arc::clone(&comp.seg_inbox);
+
+        let comp = comp.resized(181, 321).expect("resized");
+
+        assert_eq!(comp.render_size(), (182, 322), "arrondi au pair, comme new_sized");
+        assert!(comp.webcam_mask.borrow().is_some(), "le masque webcam s'est perdu");
+        assert!(
+            std::sync::Arc::ptr_eq(&inbox, &comp.seg_inbox),
+            "le worker deposerait ses masques dans une boite que plus personne ne lit",
+        );
+        let (rw, rh, rgba) = unsafe { comp.readback_direct() }.expect("readback");
+        assert_eq!((rw, rh, rgba.len()), (182, 322, 182 * 322 * 4));
+    }
+
     /// La disposition NV12 doit etre EXACTEMENT celle que le pilote produit pour
     /// une image NV12 lineaire, parce que c'est elle qu'on decrira a VAAPI dans
     /// un `AVDRMFrameDescriptor`. Les valeurs ci-dessous ne sont pas devinees :
@@ -3869,7 +4251,7 @@ mod tests {
         planes: (&wgpu::TextureView, &wgpu::TextureView, &wgpu::TextureView),
     ) -> (u32, u32, Vec<u8>) {
         let dummy = comp.dummy_view();
-        let (_buf, bind) = comp.make_bind(cb, Some(planes), &dummy);
+        let layer = comp.make_bind(cb, Some(planes), &dummy);
         let mut encoder = comp.gpu.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor { label: Some("test-layer") },
         );
@@ -3889,8 +4271,7 @@ mod tests {
                 occlusion_query_set: None,
             });
             rpass.set_pipeline(&comp.pipeline);
-            rpass.set_bind_group(0, &bind, &[]);
-            rpass.draw(0..4, 0..1);
+            comp.draw_layer(&mut rpass, &layer, false);
         }
         comp.gpu.context.submit(std::iter::once(encoder.finish()));
         unsafe { comp.readback_direct().expect("readback_direct") }
@@ -4009,8 +4390,9 @@ mod tests {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("test-blur") });
-        comp.blur_pass(&mut encoder, &comp.pipeline_copy, &src_view, &comp.rt_view, [w as f32, h as f32]);
-        comp.blur_bg(&mut encoder);
+        comp.blur_pass(&mut encoder, &comp.pipeline_copy, &src_view, &comp.rt_view, [w as f32, h as f32], 0.0);
+        // 0,5 = l'ancien interrupteur : trois niveaux, ecart 2,2 (`HP` ci-dessous).
+        comp.blur_bg(&mut encoder, 0.5);
         gpu.context.submit(std::iter::once(encoder.finish()));
         let (_, _, px) = unsafe { comp.readback_direct().expect("readback_direct") };
 
@@ -4381,6 +4763,11 @@ mod tests {
         shadow: bool,
     ) -> Vec<u8> {
         let scene = Scene::from_json(&pip_scene_json(effect)).expect("scene json");
+        compose_pip_scene(comp, gpu, scene, shadow)
+    }
+
+    /// `compose_pip` sur une scene deja construite, pour les tests qui la retouchent.
+    fn compose_pip_scene(comp: &Compositor, gpu: &Gpu, scene: Scene, shadow: bool) -> Vec<u8> {
         comp.set_live_params(live_params_from_scene(&scene));
         comp.set_has_webcam(true);
         comp.set_scene(Some(scene));
@@ -4388,7 +4775,7 @@ mod tests {
         let screen = FakeFrame::new(gpu, 128, 128, |_, _| 126);
         let webcam = FakeFrame::new(gpu, 64, 64, |_, _| Y_WHITE);
         let mut cfg = Cfg::c8();
-        cfg.bg_blur = false;
+        cfg.bg_blur = 0.0;
         cfg.zoom = false;
         cfg.layout_anim = false;
         cfg.cursor = false;
@@ -4485,6 +4872,30 @@ mod tests {
             compose_pip(&comp, &gpu, CUTOUT, true),
             compose_pip(&comp, &gpu, CUTOUT, false),
             "en detourage, l'ombre est encore dessinee"
+        );
+    }
+
+    /// Pendant le palier d'une region Full Camera, la camera remplit le cadre.
+    /// `shape_fade` y vaut 0, ce qui ne doit retirer que la bulle (coins, ombre) :
+    /// le gate de `webcam_planes` le lisait aussi et ne dessinait plus la webcam
+    /// du tout, si bien que le plein cadre montrait le fond et l'ecran.
+    #[test]
+    fn a_full_camera_hold_fills_the_frame_with_the_camera() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 320, 180).expect("Compositor::new_sized");
+        let mut scene = Scene::from_json(&pip_scene_json(NO_EFFECT)).expect("scene json");
+        scene.camera_fullscreen_regions.push(crate::scene::SceneCameraFullscreenRegion {
+            clip_index: None,
+            start_sec: 2.0,
+            end_sec: 8.0,
+        });
+        // 5 s : la montee (~1 s) est finie, le retour (~1,5 s) n'a pas commence.
+        comp.set_timeline_time(Some(5.0));
+        let camera = camera_pixels(&compose_pip_scene(&comp, &gpu, scene, true));
+        let frame = 320 * 180;
+        assert!(
+            camera > frame * 95 / 100,
+            "palier Full Camera : {camera} pixels de camera sur {frame}"
         );
     }
 
@@ -4713,12 +5124,23 @@ mod tests {
     /// Ecran gris sur fond gris moyen, avec ou sans cadre de fenetre (`frame` est insere tel
     /// quel dans `effects`), droit ou incline (`rotation`, JSON).
     fn compose_framed(comp: &Compositor, gpu: &Gpu, frame: &str, rotation: &str) -> Vec<u8> {
+        compose_framed_shadow(comp, gpu, frame, rotation, 0.6)
+    }
+
+    /// `compose_framed`, avec l'ombre de l'ecran `shadow` (0 l'eteint).
+    fn compose_framed_shadow(
+        comp: &Compositor,
+        gpu: &Gpu,
+        frame: &str,
+        rotation: &str,
+        shadow: f32,
+    ) -> Vec<u8> {
         let json = format!(
             r##"{{"clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
                 "layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rounded",
                            "webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false,
                            "screenRect":{{"x":0.1,"y":0.1,"width":0.8,"height":0.8}}}},
-                "effects":{{"padding":0.2,"blur":false,"shadow":0.6,"roundnessFrac":0.03,"motionBlur":0{frame}}},
+                "effects":{{"padding":0.2,"blur":false,"shadow":{shadow},"roundnessFrac":0.03,"motionBlur":0{frame}}},
                 "background":{{"kind":"color","color":"#6070a0"}},
                 "zoomRegions":[{{"clipIndex":0,"startSec":0,"endSec":10,"scale":1,"focusX":0.5,"focusY":0.5,"rotation":{rotation}}}],
                 "annotations":[],
@@ -4734,7 +5156,7 @@ mod tests {
         let screen = FakeFrame::new(gpu, 640, 360, |_, _| 60);
         let webcam = FakeFrame::new(gpu, 64, 64, |_, _| 60);
         let mut cfg = Cfg::c8();
-        cfg.bg_blur = false;
+        cfg.bg_blur = 0.0;
         cfg.zoom = false;
         cfg.layout_anim = false;
         cfg.cursor = false;
@@ -4747,6 +5169,318 @@ mod tests {
             let (_, _, rgba) = comp.readback_direct().expect("readback_direct");
             rgba
         }
+    }
+
+    /// Ecran sous chrome de fenetre clair, zoome x1,3 de 1 s a 6 s sous `rotation` (JSON), a
+    /// l'instant `t` de la timeline, avec le flou de mouvement `blur` (0..1).
+    fn compose_zooming_window(comp: &Compositor, gpu: &Gpu, rotation: &str, t: f32, blur: f32) -> Vec<u8> {
+        let json = format!(
+            r##"{{"clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
+                "layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rounded",
+                           "webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false,
+                           "screenRect":{{"x":0.1,"y":0.1,"width":0.8,"height":0.8}}}},
+                "effects":{{"padding":0.3,"blur":false,"shadow":0.6,"roundnessFrac":0.03,"motionBlur":{blur},"frame":"window-light"}},
+                "background":{{"kind":"color","color":"#6070a0"}},
+                "zoomRegions":[{{"clipIndex":0,"startSec":1,"endSec":6,"scale":1.3,"focusX":0.5,"focusY":0.5,"rotation":{rotation}}}],
+                "annotations":[],
+                "cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,
+                           "clipToBounds":false,"theme":"default"}},
+                "cropByClip":[null],
+                "output":{{"width":1280,"height":720,"fps":30}}}}"##
+        );
+        let scene = Scene::from_json(&json).expect("scene json");
+        comp.set_live_params(live_params_from_scene(&scene));
+        comp.set_has_webcam(false);
+        comp.set_scene(Some(scene));
+        let screen = FakeFrame::new(gpu, 640, 360, |_, _| 60);
+        let webcam = FakeFrame::new(gpu, 64, 64, |_, _| 60);
+        let mut cfg = Cfg::c8();
+        cfg.bg_blur = 0.0;
+        cfg.cursor = false;
+        cfg.mblur_n = 1;
+        cfg.shadow = true;
+        unsafe {
+            comp.set_timeline_time(Some(t));
+            comp.compose_frame(screen.as_ptr(), webcam.as_ptr(), 0.0, &cfg)
+                .expect("compose_frame");
+            let (_, _, rgba) = comp.readback_direct().expect("readback_direct");
+            rgba
+        }
+    }
+
+    /// Le flou de mouvement prend l'ecran CADRE en bloc, droit comme incline : pendant la rampe
+    /// du zoom, la barre de titre claire file avec le metrage au lieu de rester nette (elle perd
+    /// des pixels francs, etales sur le fond et l'ecran). Immobile, au palier du zoom comme
+    /// apres lui, le rendu flou est celui du rendu net, a l'octet.
+    #[test]
+    fn the_window_frame_trails_with_the_screen_under_motion_blur() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 1280, 720).expect("Compositor::new_sized");
+        let bright = |rgba: &[u8]| {
+            rgba.chunks_exact(4).filter(|p| p[0] > 215 && p[1] > 215 && p[2] > 215).count()
+        };
+        let out_dir = std::env::var("OPENSCREEN_FRAME_OUT").ok();
+        for (label, rotation) in [("flat", "null"), ("iso", r#""iso""#)] {
+            for still in [3.5, 9.0] {
+                assert!(
+                    compose_zooming_window(&comp, &gpu, rotation, still, 0.0)
+                        == compose_zooming_window(&comp, &gpu, rotation, still, 1.0),
+                    "{label} a t={still} : immobile, le flou ne doit rien changer"
+                );
+            }
+            let mut best = (0.0f32, 0.0f32);
+            // La rampe de sortie du zoom, ~6,0 s -> 6,8 s.
+            for k in 0..=9 {
+                let t = 5.9 + k as f32 * 0.1;
+                let sharp = compose_zooming_window(&comp, &gpu, rotation, t, 0.0);
+                let blurred = compose_zooming_window(&comp, &gpu, rotation, t, 1.0);
+                // Encore zoome, la barre est hors champ : rien a mesurer a cet instant.
+                if bright(&sharp) < 1000 {
+                    continue;
+                }
+                let drop = 1.0 - bright(&blurred) as f32 / bright(&sharp) as f32;
+                if drop > best.0 {
+                    best = (drop, t);
+                    if let Some(dir) = &out_dir {
+                        for (name, rgba) in [("sharp", sharp), ("blurred", blurred)] {
+                            let path = format!("{dir}/linux-trail-{label}-{name}.png");
+                            image::RgbaImage::from_raw(1280, 720, rgba)
+                                .expect("dimensions du readback")
+                                .save(&path)
+                                .unwrap_or_else(|e| panic!("ecriture {path} : {e}"));
+                        }
+                    }
+                }
+            }
+            eprintln!("{label} : barre de titre -{:.1} % de pixels francs a t={}", best.0 * 100.0, best.1);
+            let best = best.0;
+            assert!(best > 0.05, "{label} : la barre de titre reste nette pendant le zoom (au mieux {best:.3})");
+        }
+    }
+
+    /// Un seul ecran dans `rect` (fractions de la sortie `out`), zoome x`scale` sous `iso` de 2 a
+    /// 6 s, fond uni sans ombre ni padding. Meme scene que `tests/screen_trail_render.rs` (D3D11).
+    fn trail_scene_json(rect: [f32; 4], out: (u32, u32), scale: f32, blur: f32, dof: bool) -> String {
+        let [x, y, w, h] = rect;
+        let (ow, oh) = out;
+        format!(
+            r##"{{"clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
+                "layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rounded","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false,
+                           "screenRect":{{"x":{x},"y":{y},"width":{w},"height":{h}}}}},
+                "effects":{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0.02,"motionBlur":{blur},"depthOfField":{dof}}},
+                "background":{{"kind":"color","color":"#6070a0"}},
+                "zoomRegions":[{{"clipIndex":0,"startSec":2,"endSec":6,"scale":{scale},"focusX":0.5,"focusY":0.5,"focusMode":"manual","rotation":"iso"}}],
+                "annotations":[],
+                "cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},
+                "cropByClip":[null],
+                "output":{{"width":{ow},"height":{oh},"fps":30}}}}"##
+        )
+    }
+
+    fn compose_trail(comp: &Compositor, screen: &FakeFrame, json: &str, t: f32) -> Vec<u8> {
+        let scene = Scene::from_json(json).expect("scene json");
+        comp.set_live_params(live_params_from_scene(&scene));
+        comp.set_has_webcam(false);
+        comp.set_scene(Some(scene));
+        let mut cfg = Cfg::c8();
+        cfg.bg_blur = 0.0;
+        cfg.zoom = false;
+        cfg.layout_anim = false;
+        cfg.cursor = false;
+        cfg.mblur_n = 1;
+        cfg.shadow = false;
+        unsafe {
+            comp.set_timeline_time(Some(t));
+            comp.compose_frame(screen.as_ptr(), screen.as_ptr(), 0.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback_direct").2
+        }
+    }
+
+    /// Un tap du mode 18 dont le warp inverse n'a PAS de solution (au-dela du pli du warp
+    /// bilineaire d'`iso`) est ecarte : il valait l'origine du plan, renvoyee sur le coin
+    /// haut-gauche de l'ecran courant, et le fond loin de l'ecran prenait la couleur de ce coin
+    /// (un repere masque par l'arrondi y reparaissait). Petit ecran centre (15 %), zoom x1,6 :
+    /// loin de l'ecran, le rendu floute reste le fond, au bit pres. Pendant D3D11 :
+    /// `tests/screen_trail_render.rs`.
+    #[test]
+    fn unsolvable_trail_taps_leave_the_background_alone() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 1280, 720).expect("Compositor::new_sized");
+        // Metrage rouge, repere vert dans son coin haut-gauche.
+        let (w, h) = (640u32, 360u32);
+        let marker = |col: u32, row: u32| col < 48 && row < 48;
+        let y: Vec<u8> = (0..w * h).map(|i| if marker(i % w, i / w) { 173 } else { 63 }).collect();
+        let uv: Vec<u8> = (0..w * (h / 2))
+            .map(|i| {
+                let [u, v] = if marker(i % w & !1, i / w * 2) { [42, 26] } else { [102, 240] };
+                if i % 2 == 0 { u } else { v }
+            })
+            .collect();
+        let screen = FakeFrame::from_planes(&gpu, w, h, &y, &uv);
+        let json = |blur| trail_scene_json([0.425, 0.425, 0.15, 0.15], (1280, 720), 1.6, blur, false);
+        let far = |x: u32, y: u32| !(320..960).contains(&x) || !(180..540).contains(&y);
+        let mut leaks = 0;
+        for t in [1.5, 1.7, 1.9, 6.1] {
+            let sharp = compose_trail(&comp, &screen, &json(0.0), t);
+            let blurred = compose_trail(&comp, &screen, &json(1.0), t);
+            let n = (0..1280 * 720u32)
+                .filter(|&i| far(i % 1280, i / 1280))
+                .filter(|&i| sharp[i as usize * 4..][..3] != blurred[i as usize * 4..][..3])
+                .count();
+            eprintln!("t={t} : {n} px du fond changent avec le flou");
+            leaks += n;
+        }
+        assert_eq!(leaks, 0, "le flou de mouvement a peint loin de l'ecran");
+    }
+
+    /// Hors de la sortie, le mode 18 relit le metrage comme le mode 8 l'a dessine, profondeur de
+    /// champ comprise : le meme ecran physique, zoome x2 sous `iso`, rendu sur la sortie et au
+    /// centre d'une sortie deux fois plus grande (ou rien ne sort du cadre), coincide aux bords de
+    /// la sortie. Le repli lisait le metrage NET. Pendant D3D11 : `tests/screen_trail_render.rs`.
+    #[test]
+    fn off_canvas_trail_taps_keep_the_depth_of_field() {
+        let Some(gpu) = gpu() else { return };
+        let (w, h) = (640u32, 360u32);
+        // Rayures noires et blanches de 2 px : la profondeur de champ les grise.
+        let screen = FakeFrame::new(&gpu, w, h, |col, _| if col / 2 % 2 == 0 { Y_BLACK } else { Y_WHITE });
+        let (ow, oh) = (1280u32, 720u32);
+        let normal = Compositor::new_sized(&gpu, ow, oh).expect("Compositor::new_sized");
+        let padded = Compositor::new_sized(&gpu, 2 * ow, 2 * oh).expect("Compositor::new_sized");
+        let json = |k: f32, dof| {
+            let r = [0.5 - 0.4 / k, 0.5 - 0.4 / k, 0.8 / k, 0.8 / k];
+            trail_scene_json(r, ((ow as f32 * k) as u32, (oh as f32 * k) as u32), 2.0, 1.0, dof)
+        };
+        let edges: Vec<(u32, u32)> =
+            (oh / 4..oh * 3 / 4).flat_map(|y| (0..24).chain(ow - 24..ow).map(move |x| (x, y))).collect();
+        let at = |rgba: &[u8], w: u32, (x, y): (u32, u32)| rgba[((y * w + x) * 4) as usize];
+        for t in [1.5, 1.7] {
+            let a = compose_trail(&normal, &screen, &json(1.0, true), t);
+            let b = compose_trail(&padded, &screen, &json(2.0, true), t);
+            let net = compose_trail(&normal, &screen, &json(1.0, false), t);
+            let crop = |(x, y): (u32, u32)| (x + ow / 2, y + oh / 2);
+            let diffs: Vec<u8> = edges.iter().map(|&p| at(&a, ow, p).abs_diff(at(&b, 2 * ow, crop(p)))).collect();
+            let mean = diffs.iter().map(|&d| d as f32).sum::<f32>() / diffs.len() as f32;
+            let max = diffs.iter().copied().max().unwrap_or(0);
+            let dof = edges.iter().map(|&p| at(&a, ow, p).abs_diff(at(&net, ow, p))).max().unwrap_or(0);
+            // La pyramide est bien liee : elle grise les rayures sans les assombrir.
+            let level = |rgba: &[u8]| edges.iter().map(|&p| at(rgba, ow, p) as f32).sum::<f32>() / edges.len() as f32;
+            let (lit, flat) = (level(&a), level(&net));
+            eprintln!("t={t} : bord de la sortie, ecart moyen {mean:.2}, max {max} (profondeur de champ : {dof}, niveau {lit:.1} / {flat:.1})");
+            assert!(dof > 60, "t={t} : la profondeur de champ n'agit pas au bord, le test ne prouve rien");
+            assert!((lit - flat).abs() < 4.0, "t={t} : la profondeur de champ assombrit le bord ({lit:.1} / {flat:.1})");
+            assert!(mean < 1.0 && max <= 16, "t={t} : le bord perd la profondeur de champ ({mean:.2}, {max})");
+        }
+    }
+
+    /// Un degrade de fond est opaque et montre chacun de ses stops, meme quand le premier est a
+    /// 0. `gradient_layer` range la position du premier stop dans `color.a` ; la queue commune
+    /// du WGSL la prenait pour une opacite, et le fond disparaissait sous la couleur de clear
+    /// (#807). Rouge / vert / bleu a 0, 0.5, 1 de gauche a droite : chaque tiers doit porter sa
+    /// couleur, pas le noir du clear.
+    #[test]
+    fn a_gradient_whose_first_stop_is_at_zero_stays_opaque() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 1280, 720).expect("Compositor::new_sized");
+        let json = r##"{"clips":[{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}],
+            "layout":{"preset":"no-webcam","webcamSize":1,"webcamShape":"rounded",
+                      "webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false,
+                      "screenRect":{"x":0.3,"y":0.3,"width":0.4,"height":0.4}},
+            "effects":{"padding":0.4,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0},
+            "background":{"kind":"gradient","angleDeg":90,
+                          "stops":["rgb(255, 0, 0)","rgb(0, 255, 0)","rgb(0, 0, 255)"],
+                          "offsets":[0,0.5,1]},
+            "zoomRegions":[],"annotations":[],
+            "cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,
+                      "clipToBounds":false,"theme":"default"},
+            "cropByClip":[null],
+            "output":{"width":1280,"height":720,"fps":30}}"##;
+        let scene = Scene::from_json(json).expect("scene json");
+        comp.set_live_params(live_params_from_scene(&scene));
+        comp.set_has_webcam(false);
+        comp.set_scene(Some(scene));
+        let screen = FakeFrame::new(&gpu, 640, 360, |_, _| 60);
+        let webcam = FakeFrame::new(&gpu, 64, 64, |_, _| 60);
+        let mut cfg = Cfg::c8();
+        cfg.bg_blur = 0.0;
+        cfg.zoom = false;
+        cfg.layout_anim = false;
+        cfg.cursor = false;
+        cfg.shadow = false;
+        cfg.mblur_n = 1;
+        let rgba = unsafe {
+            comp.compose_frame(screen.as_ptr(), webcam.as_ptr(), 0.0, &cfg)
+                .expect("compose_frame");
+            comp.readback_direct().expect("readback_direct").2
+        };
+        // Rangee du haut, hors de l'ecran : que du fond.
+        let px = |x: usize| {
+            let i = (4 * 1280 + x) * 4;
+            [rgba[i], rgba[i + 1], rgba[i + 2]]
+        };
+        let (left, mid, right) = (px(8), px(640), px(1271));
+        assert!(left[0] > 200 && left[1] < 60 && left[2] < 60, "gauche {left:?} : rouge attendu");
+        assert!(mid[1] > 200 && mid[0] < 60 && mid[2] < 60, "milieu {mid:?} : vert attendu");
+        assert!(right[2] > 200 && right[0] < 60 && right[1] < 60, "droite {right:?} : bleu attendu");
+    }
+
+    /// Le fond fixe est recopie d'une frame a l'autre (`bg_cache`) au lieu d'etre redessine, et
+    /// un fond qui change ne laisse rien du precedent : un compositeur qui a rendu A, A, B puis A
+    /// rend chacun a l'octet comme un compositeur neuf. Un fond anime n'est jamais repris.
+    #[test]
+    fn a_static_background_is_reused_and_a_changed_one_redrawn() {
+        let Some(gpu) = gpu() else { return };
+        let screen = FakeFrame::new(&gpu, 640, 360, |_, _| 60);
+        let webcam = FakeFrame::new(&gpu, 64, 64, |_, _| 60);
+        let render = |comp: &Compositor, background: &str| {
+            let json = format!(
+                r##"{{"clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
+                    "layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rounded",
+                               "webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false,
+                               "screenRect":{{"x":0.3,"y":0.3,"width":0.4,"height":0.4}}}},
+                    "effects":{{"padding":0.4,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0}},
+                    "background":{background},
+                    "zoomRegions":[],"annotations":[],
+                    "cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,
+                               "clipToBounds":false,"theme":"default"}},
+                    "cropByClip":[null],
+                    "output":{{"width":640,"height":360,"fps":30}}}}"##
+            );
+            let scene = Scene::from_json(&json).expect("scene json");
+            comp.set_live_params(live_params_from_scene(&scene));
+            comp.set_has_webcam(false);
+            comp.set_scene(Some(scene));
+            let mut cfg = Cfg::c8();
+            cfg.bg_blur = 0.0;
+            cfg.zoom = false;
+            cfg.layout_anim = false;
+            cfg.cursor = false;
+            cfg.shadow = false;
+            cfg.mblur_n = 1;
+            unsafe {
+                comp.compose_frame(screen.as_ptr(), webcam.as_ptr(), 0.0, &cfg)
+                    .expect("compose_frame");
+                comp.readback_direct().expect("readback_direct").2
+            }
+        };
+        let fresh = || Compositor::new_sized(&gpu, 640, 360).expect("Compositor::new_sized");
+        let a = r##"{"kind":"gradient","angleDeg":90,"stops":["rgb(255, 0, 0)","rgb(0, 0, 255)"],"offsets":[0,1]}"##;
+        let b = r##"{"kind":"color","color":"#00ff00"}"##;
+
+        let comp = fresh();
+        let a1 = render(&comp, a);
+        assert!(comp.bg_cache.borrow().is_some(), "un fond fixe doit etre garde");
+        let a2 = render(&comp, a);
+        let b1 = render(&comp, b);
+        let a3 = render(&comp, a);
+        assert!(a1 == a2, "le fond recopie doit etre celui qui a ete dessine");
+        assert!(b1 == render(&fresh(), b), "un autre fond ne doit rien garder du precedent");
+        assert!(a3 == a1, "revenir au premier fond doit le redessiner a l'identique");
+        assert!(a1 != b1, "garde : les deux fonds different");
+
+        let aurora = r##"{"kind":"gradient","angleDeg":90,"stops":["rgb(255, 0, 0)","rgb(0, 0, 255)"],"offsets":[0,1],"motion":"aurora"}"##;
+        let comp = fresh();
+        render(&comp, aurora);
+        assert!(comp.bg_cache.borrow().is_none(), "un fond anime ne doit pas etre garde");
     }
 
     /// Le cadre de fenetre (mode 14) se dessine sur Linux comme ailleurs : `"none"` rend
@@ -4859,6 +5593,22 @@ mod tests {
         }
     }
 
+    /// L'ombre d'un appareil est un modele elle aussi (mode 17, `device_shadow_cb`) : comme
+    /// l'appareil, elle n'existe que dans `pipeline_models`, et le pipeline plat n'en peindrait
+    /// rien. Elle doit donc changer l'image, a plat comme incline.
+    #[test]
+    fn a_device_frame_casts_its_shadow() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 1280, 720).expect("Compositor::new_sized");
+        let laptop = r#","frame":"laptop""#;
+        for (name, rotation) in [("flat", "null"), ("iso", r#""iso""#)] {
+            let lit = compose_framed_shadow(&comp, &gpu, laptop, rotation, 0.6);
+            let bare = compose_framed_shadow(&comp, &gpu, laptop, rotation, 0.0);
+            let shaded = lit.chunks_exact(4).zip(bare.chunks_exact(4)).filter(|(a, b)| a != b).count();
+            assert!(shaded > 2_000, "{name} : l'ombre de l'appareil ne change que {shaded} px");
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Curseur modélisé (mode 15) : pendant de `tests/cursor_model_render.rs` (Windows).
     // -----------------------------------------------------------------------
@@ -4866,11 +5616,11 @@ mod tests {
     /// Les états que le rendu passe en revue (hotspots de `DEFAULT_CURSOR_SPRITES`), et s'ils
     /// sont centrés : ni tangage ni lacet.
     const MODEL_STATES: [(&str, [f32; 2], bool); 6] = [
-        ("arrow", [0.119, 0.0874], false),
-        ("pointer", [0.3893, 0.0032], false),
-        ("text", [0.4375, 0.5333], true),
-        ("open-hand", [0.4375, 0.1781], false),
-        ("resize-ew", [0.4881, 0.4706], true),
+        ("arrow", [0.1205, 0.0881], false),
+        ("pointer", [0.3874, 0.0032], false),
+        ("text", [0.4355, 0.5369], true),
+        ("open-hand", [0.4375, 0.1724], false),
+        ("resize-ew", [0.485, 0.4706], true),
         ("not-allowed", [0.5, 0.5], true),
     ];
 
@@ -4890,7 +5640,7 @@ mod tests {
                            "screenRect":{{"x":0.1,"y":0.1,"width":0.8,"height":0.8}}}},
                 "effects":{{"padding":0.2,"blur":false,"shadow":0,"roundnessFrac":0.03,"motionBlur":0}},
                 "background":{{"kind":"gradient","angleDeg":135,"stops":["#5b6ee1","#e8a0bf"]}},
-                "zoomRegions":[{{"clipIndex":0,"startSec":0,"endSec":10,"scale":1,"focusX":0.5,"focusY":0.5,"focusMode":"manual","rotation":{rotation}}}],
+                "zoomRegions":[{{"clipIndex":0,"startSec":0,"endSec":10,"scale":1,"focusX":0.5,"focusY":0.5,"rotation":{rotation}}}],
                 "annotations":[],
                 "cursor":{{"show":{show},"size":{size},"smoothing":0,"motionBlur":0,"clickBounce":2.5{model3d},"clipToBounds":false,"theme":"{theme}",
                            "cursorSprites":{{{sprites}}}}},
@@ -4928,16 +5678,52 @@ mod tests {
         comp.set_cursor(track.clone());
         comp.set_cursor_time(Some(2.0));
         comp.set_timeline_time(Some(2.0));
+        let cfg = model_cfg();
+        unsafe {
+            comp.compose_frame(screen.as_ptr(), screen.as_ptr(), 0.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback_direct").2
+        }
+    }
+
+    fn model_cfg() -> crate::config::Cfg {
         let mut cfg = crate::config::Cfg::c8();
-        cfg.bg_blur = false;
+        cfg.bg_blur = 0.0;
         cfg.zoom = false;
         cfg.layout_anim = false;
         cfg.cursor = true;
         cfg.mblur_n = 1;
         cfg.shadow = false;
-        unsafe {
-            comp.compose_frame(screen.as_ptr(), screen.as_ptr(), 0.0, &cfg).expect("compose_frame");
-            comp.readback_direct().expect("readback_direct").2
+        cfg
+    }
+
+    /// Le pixel du hotspot et l'unité du modèle (px) que `plan_cursor` donne à la scène que
+    /// `compose_model` rend.
+    fn model_tip(json: &str, track: &crate::cursor::CursorTrack) -> ([f32; 2], f32) {
+        let scene = crate::scene::Scene::from_json(json).expect("scene json");
+        let (cfg, live, render_px, src) = (model_cfg(), live_params_from_scene(&scene), [1280.0, 720.0], [640.0, 360.0]);
+        let g = plan_frame(&FrameGeometryInput {
+            render_px,
+            screen_tex_px: src,
+            screen_visible_px: src,
+            webcam_visible_px: src,
+            u_max: 1.0,
+            v_max: 1.0,
+            frame: 0.0,
+            cfg: &cfg,
+            live,
+            scene: Some(&scene),
+            cursor: Some(track),
+            timeline_t_override: Some(2.0),
+            programme_time: None,
+        });
+        let input = CursorPlanInput { render_px, u_max: 1.0, v_max: 1.0, cfg: &cfg, live, scene: Some(&scene), track, t: 2.0 };
+        let plan = plan_cursor(&g, &input).expect("un curseur a dessiner");
+        match plan.placement {
+            CursorPlacement::Tilted { plane_pt, quad, center_px, .. } => {
+                let (x, y) = quad.point_px(plane_pt[0], plane_pt[1]);
+                ([center_px[0] + x, center_px[1] + y], plan.size_px * quad.scale)
+            }
+            CursorPlacement::Upright { center } => ([center[0] * render_px[0], center[1] * render_px[1]], plan.size_px),
         }
     }
 
@@ -5033,6 +5819,22 @@ mod tests {
             .collect()
     }
 
+    /// Les pixels que couvre un curseur de VERRE (le cristal de Prism Glow, qui laisse voir le
+    /// contenu et le réfracte) : opaques, ou changés sur les deux teintes sans y être plus sombres
+    /// (une ombre ne fait qu'assombrir ; le verre réfracte, reflète et luit).
+    fn model_covered(on_blue: &[u8], on_orange: &[u8], bare: &[u8], bare_orange: &[u8]) -> Vec<bool> {
+        let opaque = model_opaque(on_blue, on_orange, bare);
+        (0..1280 * 720)
+            .map(|i| {
+                let lit = |on: &[u8], under: &[u8]| {
+                    let (a, b) = (&on[i * 4..i * 4 + 3], &under[i * 4..i * 4 + 3]);
+                    a != b && model_luma(a) >= model_luma(b) - 2.0
+                };
+                opaque[i] || (lit(on_blue, bare) && lit(on_orange, bare_orange))
+            })
+            .collect()
+    }
+
     fn model_iou(a: &[bool], b: &[bool]) -> f32 {
         let inter = a.iter().zip(b).filter(|(x, y)| **x && **y).count();
         let union = a.iter().zip(b).filter(|(x, y)| **x || **y).count();
@@ -5085,8 +5887,9 @@ mod tests {
             let touch = compose_model(&comp, &screen, &json(Some(true), "default", true), &clicked);
             model_save(&format!("{name}-hover"), &hover);
             model_save(&format!("{name}-touch"), &touch);
-            assert!(absent == off && absent == other, "{name}: le chemin plat a change");
+            assert!(absent == off, "{name}: le chemin plat a change");
             assert!(absent != hover, "{name}: le reglage allume ne change rien");
+            assert!(other == hover, "{name}: le libelle du theme a change le rendu natif");
             let (a, b) = (model_split(&hover, &bare), model_split(&touch, &bare));
             println!(
                 "{name} : blanc {}, noir {}, ombre {} (apex a {:.1} px, posee {:.1} px), centroides {:?} / {:?}",
@@ -5101,9 +5904,37 @@ mod tests {
         }
     }
 
+    /// La trainee du curseur modelise s'accumule par `pipeline_add_models` : le pipeline plat ne
+    /// compile pas le mode 15 et n'en peindrait rien. En mouvement, flou du curseur au maximum,
+    /// le modele doit donc bien apparaitre.
+    #[test]
+    fn the_modelled_cursor_draws_its_trail() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 1280, 720).expect("Compositor::new_sized");
+        let (y, uv) = model_screen_planes(false);
+        let screen = FakeFrame::from_planes(&gpu, 640, 360, &y, &uv);
+        // Traverse 60 % de la largeur en une seconde autour de t = 2 s : ~13 px par frame, donc
+        // plusieurs copies dans `accum`.
+        let moving = crate::cursor::CursorTrack::new(
+            vec![(1.5, 0.2, 0.45), (2.5, 0.8, 0.45)],
+            vec![],
+            vec![(0.0, "arrow".to_string())],
+        );
+        let json = |show: bool| {
+            model_scene_json("null", Some(true), "default", show, 3.0)
+                .replace(r#""motionBlur":0,"clickBounce""#, r#""motionBlur":1,"clickBounce""#)
+        };
+        assert!(json(true).contains(r#""motionBlur":1,"clickBounce""#), "garde : le flou du curseur");
+        let bare = compose_model(&comp, &screen, &json(false), &moving);
+        let trail = compose_model(&comp, &screen, &json(true), &moving);
+        let drawn = bare.chunks_exact(4).zip(trail.chunks_exact(4)).filter(|(a, b)| a != b).count();
+        // Taille 3 : ~1000 px de silhouette a l'arret, etales ici par la trainee.
+        assert!(drawn > 1000, "trainee du curseur modelise : {drawn} px dessines");
+    }
+
     /// Chaque état garde son art et sa silhouette : posé au centre de l'écran (vu de face), le
     /// modèle couvre ce que couvre le sprite plat, avec ses couleurs ; il porte une ombre en
-    /// l'air, suit l'inclinaison du plan, et un autre thème (ou le réglage éteint) reste plat.
+    /// l'air et suit l'inclinaison du plan. Le réglage éteint garde le sprite plat.
     #[test]
     fn every_modelled_state_keeps_its_art_footprint_and_shadow() {
         let Some(gpu) = gpu() else { return };
@@ -5122,15 +5953,26 @@ mod tests {
             let touch = compose_model(&comp, &blue, &on, &clicked);
             let touch_b = compose_model(&comp, &orange, &on, &clicked);
             let hover = compose_model(&comp, &blue, &on, &still);
-            let tilted = compose_model(&comp, &blue, &json(r#""iso""#, Some(true), "default", true), &still);
+            let iso = json(r#""iso""#, Some(true), "default", true);
+            let tilted = compose_model(&comp, &blue, &iso, &still);
+            // Le modèle incliné posé en `x` sur la ligne du focus : le préset iso (`left`) amène le
+            // bord droit du plan vers la caméra.
+            let across = |x: f32| {
+                let track = crate::cursor::CursorTrack::new(vec![(0.0, x, 0.5), (9.0, x, 0.5)], vec![], vec![(0.0, key.to_string())]);
+                compose_model(&comp, &blue, &iso, &track)
+            };
+            let (near, far) = (across(0.8), across(0.2));
             let sprite = compose_model(&comp, &blue, &flat, &still);
             let sprite_b = compose_model(&comp, &orange, &flat, &still);
             let absent = compose_model(&comp, &blue, &json("null", None, "default", true), &still);
             let other = compose_model(&comp, &blue, &json("null", Some(true), "other", true), &still);
             model_save(&format!("art-{key}-touch"), &touch);
             model_save(&format!("art-{key}-iso"), &tilted);
-            if absent != sprite || other != sprite {
+            if absent != sprite {
                 failures.push(format!("{key}: le sprite plat a change"));
+            }
+            if other != hover {
+                failures.push(format!("{key}: le libelle du theme a change le rendu natif"));
             }
 
             let (m3d, m2d) = (model_opaque(&touch, &touch_b, &bare), model_opaque(&sprite, &sprite_b, &bare));
@@ -5147,9 +5989,10 @@ mod tests {
                 .count() as f32;
             let body = |rgba: &[u8]| (0..1280 * 720).filter(|&i| model_neutral(&rgba[i * 4..i * 4 + 3]) && differs(rgba, i)).count() as f32;
             let (flat_body, tilted_body) = (body(&hover), body(&tilted));
+            let (near_body, far_body) = (body(&near), body(&far));
             println!(
                 "{key} : IoU {overlap:.3}, a 2 px pres {near3d:.3} / {near2d:.3}, sprite {area} px, palette 3D {pal3d:?} / sprite {pal2d:?}, \
-                 ombre {shadow} px, corps a plat {flat_body} / incline {tilted_body}"
+                 ombre {shadow} px, corps a plat {flat_body} / incline {tilted_body}, proche {near_body} / lointain {far_body}"
             );
             let (min_iou, min_near, palette_tol) = if centred { (0.75, 0.98, 0.07) } else { (0.6, 0.9, 0.2) };
             if overlap <= min_iou || near3d < min_near || near2d < min_near {
@@ -5163,9 +6006,200 @@ mod tests {
             if shadow <= 0.3 * area {
                 failures.push(format!("{key}: pas d'ombre en l'air ({shadow} px)"));
             }
-            // Le préset iso réduit le plan (unité 51,5 contre 62,6 px) et incline le modèle.
-            if !(tilted_body < 0.9 * flat_body && tilted_body > 0.3 * flat_body) {
-                failures.push(format!("{key}: le modele ne suit pas le plan ({tilted_body} / {flat_body})"));
+            // Au focus du zoom, l'angle fixe garde au modèle sa taille à plat (`plan_cursor`) ;
+            // ailleurs, le plan l'emporte avec lui : sa perspective le grossit du côté proche et le
+            // réduit du côté lointain. Mesuré : ×1,5 de l'un à l'autre ; un modèle resté de face sur
+            // le même plan n'y gagne que ×1,0 à 1,1.
+            if !((0.85..1.15).contains(&(tilted_body / flat_body)) && near_body > 1.25 * far_body) {
+                failures.push(format!(
+                    "{key}: le modele ne suit pas le plan ({tilted_body} / {flat_body}, proche {near_body} / lointain {far_body})"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Pendant de `the_sculpted_cursors_stand_at_the_hotspot` (Windows) : la flèche et la main
+    /// sculptées des thèmes d'origine (`sculpt.rs`) passent par le WGSL, tiennent au hotspot, en
+    /// bas à droite de lui, et portent leur ombre en l'air. Le cristal de Prism Glow est de verre :
+    /// son corps compte ce qu'il couvre, et une bonne part de lui change avec la teinte de l'écran.
+    #[test]
+    fn the_sculpted_cursors_stand_at_the_hotspot() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 1280, 720).expect("Compositor::new_sized");
+        let (y, uv) = model_screen_planes(false);
+        let blue = FakeFrame::from_planes(&gpu, 640, 360, &y, &uv);
+        let (y, uv) = model_screen_planes(true);
+        let orange = FakeFrame::from_planes(&gpu, 640, 360, &y, &uv);
+        let extruded = model_scene_json("null", Some(true), "default", true, 5.0);
+        let hidden = model_scene_json("null", Some(true), "default", false, 5.0);
+        let bare = compose_model(&comp, &blue, &hidden, &model_track("arrow", false, 0.5));
+        let bare_orange = compose_model(&comp, &orange, &hidden, &model_track("arrow", false, 0.5));
+        let mut failures = Vec::new();
+        for state in ["arrow", "pointer"] {
+            let still = model_track(state, false, 0.5);
+            let sprite = compose_model(&comp, &blue, &extruded, &still);
+            for theme in ["studio-ink", "prism-glow", "pop-coral", "pixel-candy", "star-sprout"] {
+                // Le sprite reste celui du theme par defaut : seul le nom pose le modele.
+                let json = extruded
+                    .replace(&format!(r#"/{state}.png","#), &format!(r#"/{state}.png","sculpt":"{theme}/{state}","#));
+                let (hover, hover_b) = (compose_model(&comp, &blue, &json, &still), compose_model(&comp, &orange, &json, &still));
+                model_save(&format!("sculpt-{theme}-{state}"), &hover);
+                if hover == sprite {
+                    failures.push(format!("{theme}/{state}: le sprite extrude au lieu du modele"));
+                }
+                let (tip, u) = model_tip(&json, &still);
+                let glass = theme == "prism-glow";
+                let mask = if glass {
+                    model_covered(&hover, &hover_b, &bare, &bare_orange)
+                } else {
+                    model_opaque(&hover, &hover_b, &bare)
+                };
+                let (mut body, mut c, mut near) = (0usize, [0.0f32; 2], f32::MAX);
+                for (i, _) in mask.iter().enumerate().filter(|(_, m)| **m) {
+                    let (x, y) = ((i % 1280) as f32, (i / 1280) as f32);
+                    body += 1;
+                    c = [c[0] + x, c[1] + y];
+                    near = near.min((x - tip[0]).hypot(y - tip[1]));
+                }
+                let c = [c[0] / body.max(1) as f32, c[1] / body.max(1) as f32];
+                let shadow = (0..1280 * 720)
+                    .filter(|&i| {
+                        let (a, b) = (&hover[i * 4..i * 4 + 3], &bare[i * 4..i * 4 + 3]);
+                        !mask[i] && a != b && model_luma(a) < model_luma(b) - 6.0
+                    })
+                    .count();
+                println!("{theme}/{state} : unite {u:.1} px, corps {body} px, a {near:.1} px du hotspot {tip:?}, centroide {c:?}, ombre {shadow} px");
+                if (body as f32) < 0.12 * u * u {
+                    failures.push(format!("{theme}/{state}: {body} px de corps pour {u:.0} px d'unite"));
+                }
+                if near > 0.08 * u {
+                    failures.push(format!("{theme}/{state}: le modele est a {near:.1} px du hotspot"));
+                }
+                if !(c[0] > tip[0] && c[1] > tip[1] + 0.2 * u) {
+                    failures.push(format!("{theme}/{state}: corps en {c:?}, pas en bas a droite de {tip:?}"));
+                }
+                if shadow * 10 < body * 3 {
+                    failures.push(format!("{theme}/{state}: pas d'ombre en l'air ({shadow} px)"));
+                }
+                if glass {
+                    let through = (0..1280 * 720).filter(|&i| mask[i] && hover[i * 4..i * 4 + 3] != hover_b[i * 4..i * 4 + 3]).count();
+                    println!("{theme}/{state} : {through} px du corps laissent voir l'ecran");
+                    if through * 10 < body * 3 {
+                        failures.push(format!("{theme}/{state}: le cristal ne laisse voir l'ecran que sur {through} px"));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Le métrage, puis ses flous de confidentialité, puis le curseur, net par-dessus (parité
+    /// Windows et macOS) : le cristal de Prism Glow réfracte l'image déjà floutée. Sous le flou,
+    /// des rayures fines décalées d'une colonne donnent la même image floutée ; si le verre lisait
+    /// la vidéo brute, il montrerait les rayures, et les deux rendus différeraient à travers lui.
+    #[test]
+    fn the_crystal_refracts_the_blurred_picture() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 1280, 720).expect("Compositor::new_sized");
+        // Moitié gauche grise, moitié droite (la zone floutée) rayée une colonne sur deux.
+        let (w, h) = (640u32, 360u32);
+        let stripes = |phase: u32| {
+            let y: Vec<u8> = (0..w * h)
+                .map(|i| if i % w < w / 2 { 150 } else if (i % w + phase) % 2 == 0 { 40 } else { 220 })
+                .collect();
+            FakeFrame::from_planes(&gpu, w, h, &y, &vec![128; (w * (h / 2)) as usize])
+        };
+        let (a, b) = (stripes(0), stripes(1));
+        let blur = r#""annotations":[{"id":"b","startSec":0,"endSec":10,"kind":"blur","x":0.5,"y":0.0,"w":0.5,"h":1.0,"blur":{"style":"blur","shape":"rectangle","color":"white","intensity":24,"blockSize":16}}]"#;
+        let json = |show: bool| {
+            model_scene_json("null", Some(true), "default", show, 5.0)
+                .replace(r#"/arrow.png","#, r#"/arrow.png","sculpt":"prism-glow/arrow","#)
+                .replace(r#""annotations":[]"#, blur)
+        };
+        let mut failures = Vec::new();
+        // Tout entier dans la zone, puis à cheval sur son bord.
+        for x in [0.7f32, 0.48] {
+            let track = crate::cursor::CursorTrack::new(vec![(0.0, x, 0.45), (9.0, x, 0.45)], vec![], vec![(0.0, "arrow".to_string())]);
+            let (ra, rb) = (compose_model(&comp, &a, &json(true), &track), compose_model(&comp, &b, &json(true), &track));
+            let bare = compose_model(&comp, &a, &json(false), &track);
+            model_save(&format!("glass-over-blur-{x}"), &ra);
+            let px = |img: &[u8], i: usize, c: usize| img[i * 4 + c] as i32;
+            let hidden = (0..1280 * 720).filter(|&i| (0..3).any(|c| (px(&ra, i, c) - px(&rb, i, c)).abs() > 24)).count();
+            // Le serti net du curseur : des sauts francs, entre voisins, de ce qu'il change.
+            let d = |i: usize, c: usize| px(&ra, i, c) - px(&bare, i, c);
+            let sharp = (0..1280 * 720 - 1)
+                .filter(|&i| i % 1280 < 1279 && (0..3).any(|c| (d(i, c) - d(i + 1, c)).abs() > 60))
+                .count();
+            println!("cristal en x = {x} : {sharp} bords francs, {hidden} px qui suivent les rayures cachées");
+            if sharp < 50 {
+                failures.push(format!("x = {x} : {sharp} bords francs, le curseur n'est pas net par-dessus le flou"));
+            }
+            if hidden > 0 {
+                failures.push(format!("x = {x} : {hidden} px montrent les rayures cachées sous le flou"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Les thèmes cerclés gardent le trait de leur dessin (`design/cursors/<thème>`) : sur la
+    /// fleche comme sur la main, le modele est pour une bonne part de la couleur du trait (le
+    /// plateau, le jonc, les rainures entre les doigts), autour de la couleur du corps, et montre
+    /// ce qu'il porte devant : l'etoile jaune de Star Sprout, le calque et les tirets jaunes de la
+    /// fleche de Pop Coral, les tirets corail de sa main. Les parts comptent les pixels francs :
+    /// ceux que l'antialiasing mêle aux bords n'entrent dans aucune.
+    #[test]
+    fn the_rimmed_models_keep_the_outline_of_their_art() {
+        type Rgb = [i32; 3];
+        let navy = |[r, g, b]: Rgb| b > r + 20 && r < 110 && g < 130;
+        let black = |[r, g, b]: Rgb| r.max(g).max(b) < 70;
+        let mint = |[r, g, b]: Rgb| g > 200 && g > r + 15 && b > 150;
+        let ivory = |[r, g, b]: Rgb| r > 200 && g > 190 && b > 160 && r - b < 70;
+        let coral = |[r, g, b]: Rgb| r > 200 && g < 150 && b < 140;
+        let yellow = |[r, g, b]: Rgb| r > 200 && g > 150 && b < 120;
+        // (thème, état, trait, corps, ornement, parts minimales du trait, du corps, de l'ornement)
+        let cases: [(&str, &str, &dyn Fn(Rgb) -> bool, &dyn Fn(Rgb) -> bool, &dyn Fn(Rgb) -> bool, [f32; 3]); 6] = [
+            ("studio-ink", "arrow", &black, &ivory, &|_| false, [0.3, 0.15, 0.0]),
+            ("studio-ink", "pointer", &black, &ivory, &|_| false, [0.2, 0.3, 0.0]),
+            ("pop-coral", "arrow", &navy, &coral, &yellow, [0.2, 0.2, 0.05]),
+            ("pop-coral", "pointer", &navy, &yellow, &coral, [0.18, 0.3, 0.02]),
+            ("star-sprout", "arrow", &navy, &mint, &yellow, [0.25, 0.2, 0.03]),
+            ("star-sprout", "pointer", &navy, &ivory, &yellow, [0.25, 0.2, 0.03]),
+        ];
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 1280, 720).expect("Compositor::new_sized");
+        let (y, uv) = model_screen_planes(false);
+        let blue = FakeFrame::from_planes(&gpu, 640, 360, &y, &uv);
+        let (y, uv) = model_screen_planes(true);
+        let orange = FakeFrame::from_planes(&gpu, 640, 360, &y, &uv);
+        let extruded = model_scene_json("null", Some(true), "default", true, 5.0);
+        let hidden = model_scene_json("null", Some(true), "default", false, 5.0);
+        let bare = compose_model(&comp, &blue, &hidden, &model_track("arrow", false, 0.5));
+        let mut failures = Vec::new();
+        for (theme, state, rim, body, extra, [min_rim, min_body, min_extra]) in cases {
+            let still = model_track(state, false, 0.5);
+            let json = extruded
+                .replace(&format!(r#"/{state}.png","#), &format!(r#"/{state}.png","sculpt":"{theme}/{state}","#));
+            let (hover, hover_b) = (compose_model(&comp, &blue, &json, &still), compose_model(&comp, &orange, &json, &still));
+            let mask = model_opaque(&hover, &hover_b, &bare);
+            let (mut total, mut counts) = (0usize, [0usize; 3]);
+            for (i, _) in mask.iter().enumerate().filter(|(_, m)| **m) {
+                let p = [hover[i * 4] as i32, hover[i * 4 + 1] as i32, hover[i * 4 + 2] as i32];
+                total += 1;
+                for (k, class) in [rim, body, extra].iter().enumerate() {
+                    counts[k] += usize::from(class(p));
+                }
+            }
+            let [rim_share, body_share, extra_share] = counts.map(|k| k as f32 / total.max(1) as f32);
+            println!("{theme}/{state} : {total} px, trait {rim_share:.3}, corps {body_share:.3}, ornement {extra_share:.3}");
+            if !(min_rim..0.7).contains(&rim_share) {
+                failures.push(format!("{theme}/{state}: {rim_share:.3} de trait, il a disparu ou tout mange"));
+            }
+            if body_share < min_body {
+                failures.push(format!("{theme}/{state}: {body_share:.3} de couleur du corps"));
+            }
+            if extra_share < min_extra {
+                failures.push(format!("{theme}/{state}: {extra_share:.3} d'ornement"));
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
@@ -5248,11 +6282,12 @@ mod tests {
             let touch = compose_model(&comp, &screen, &json, &contact);
             model_save(&format!("tap-{}", if rotation == "null" { "flat" } else { "iso" }), &touch);
             assert!(!is_red(px(&touch, m[0] as i32, (m[1] + 2.0) as i32)), "{rotation}: la pointe manque la pastille");
+            // Au-dela du bord de la pointe, que le geste du clic deplace ('quiet' reste au repos).
             // L'ecart du a l'impact, le long de deux demi-droites (haut, gauche) : meme rayon, a la
             // perspective pres sous `iso` (l'anneau y est une ellipse).
             let (on, off) = (compose_model(&comp, &screen, &json, &ring), compose_model(&comp, &screen, &quiet, &ring));
             let peak = |dx: i32, dy: i32| {
-                (4..45)
+                (8..45)
                     .map(|r| {
                         let (a, b) = (px(&on, m[0] as i32 + dx * r, m[1] as i32 + dy * r), px(&off, m[0] as i32 + dx * r, m[1] as i32 + dy * r));
                         ((0..3).map(|c| (a[c] - b[c]).abs()).sum::<i32>(), r)
@@ -5262,14 +6297,20 @@ mod tests {
             };
             let (up, left) = (peak(0, -1), peak(-1, 0));
             println!("{rotation} : pastille en {m:?}, anneau haut {up:?}, gauche {left:?}");
-            assert!(up.0 > 60 && left.0 > 60, "{rotation}: anneau absent ({up:?} {left:?})");
+            // Le preset incliné projette le trait plus obliquement sur un bord; son contraste
+            // mesuré est inférieur à celui du cas plat, sans que l'anneau disparaisse.
+            let min_delta = if rotation == "null" { 60 } else { 40 };
+            assert!(
+                up.0 > min_delta && left.0 > min_delta,
+                "{rotation}: anneau absent ({up:?} {left:?})"
+            );
             let tol = if rotation == "null" { 1 } else { 2 };
             assert!((up.1 - left.1).abs() <= tol, "{rotation}: anneau decentre ({up:?} {left:?})");
         }
     }
 
     // -----------------------------------------------------------------------
-    // Camera reelle (`follow-cursor`) : pendant de `tests/follow_camera_render.rs` (Windows).
+    // Camera reelle (`orbit`, focus auto) : pendant de `tests/follow_camera_render.rs` (Windows).
     // -----------------------------------------------------------------------
 
     /// Le warp projectif du WGSL pose chaque ligne verticale d'une grille la ou la camera la
@@ -5286,7 +6327,7 @@ mod tests {
         let screen = FakeFrame::from_planes(&gpu, w, h, &y, &uv);
         // Profondeur de champ coupee (allumee par defaut) : l'orbite a une vraie profondeur, et un
         // trait floute ne se mesure plus a +-8 px.
-        let json = model_scene_json(r#""follow-cursor""#, None, "none", true, 0.05)
+        let json = model_scene_json(r#""orbit","focusMode":"auto""#, None, "none", true, 0.05)
             .replace(r#""scale":1,"#, r#""scale":2.2,"#)
             .replace(r#""roundnessFrac":0.03"#, r#""roundnessFrac":0,"depthOfField":false"#);
         let scene = crate::scene::Scene::from_json(&json).expect("scene json");

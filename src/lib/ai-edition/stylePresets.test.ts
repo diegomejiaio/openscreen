@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { CURSOR_KIND_IDS } from "../cursor/cursorThemes";
+import { DEFAULT_PROJECT_APPEARANCE } from "../projectDefaults";
 import {
 	parseStylePresetAppearance,
 	parseStylePresetFile,
@@ -20,13 +22,14 @@ function appearance(overrides: Partial<StylePresetAppearance> = {}): StylePreset
 		frameTheme: "dark",
 		aspectRatio: "16:9",
 		shadowIntensity: 0.2,
-		showBlur: false,
+		backgroundBlur: 0,
 		motionBlurAmount: 0.2,
 		depthOfField: true,
 		borderRadius: 40,
 		padding: 50,
 		webcamLayoutPreset: "picture-in-picture",
-		webcamMaskShape: "circle",
+		webcamMaskShape: "square",
+		webcamRoundness: 1,
 		webcamMirrored: true,
 		webcamReactiveZoom: true,
 		webcamSizePreset: 25,
@@ -37,9 +40,10 @@ function appearance(overrides: Partial<StylePresetAppearance> = {}): StylePreset
 			size: 3,
 			smoothing: 0.67,
 			motionBlur: 0.35,
-			clickBounce: 2.5,
+			clickBounce: 1,
 			model3d: false,
-			clipToBounds: false,
+			asArrow: [],
+			clickImpact: false,
 		},
 		cursorShow: true,
 		cursorAutoHide: false,
@@ -69,6 +73,21 @@ describe("parseStylePresetAppearance", () => {
 		).toThrow(/wallpaperMotion/);
 	});
 
+	// `circle` and `rounded` were a proportion and a rounding in one value.
+	it("reads a preset saved before the camera roundness existed", () => {
+		const { webcamRoundness: _roundness, ...older } = appearance();
+		const read = (webcamMaskShape: string) => {
+			const parsed = parseStylePresetAppearance({ ...older, webcamMaskShape });
+			return [parsed.webcamMaskShape, parsed.webcamRoundness];
+		};
+		expect(read("circle")).toEqual(["square", 1]);
+		expect(read("rounded")).toEqual(["rectangle", 0.6]);
+		expect(read("rectangle")).toEqual(["rectangle", 0.3]);
+		expect(
+			parseStylePresetAppearance({ ...appearance(), webcamRoundness: 2 }).webcamRoundness,
+		).toBe(1);
+	});
+
 	it("keeps depth of field on for a preset saved before the setting existed", () => {
 		const { depthOfField: _dof, ...older } = appearance({ depthOfField: false });
 		expect(parseStylePresetAppearance(older).depthOfField).toBe(true);
@@ -80,19 +99,29 @@ describe("parseStylePresetAppearance", () => {
 		);
 	});
 
-	it("rejects out-of-range numbers, wrong types and unknown enum values", () => {
-		expect(() => parseStylePresetAppearance(appearance({ padding: 101 }))).toThrow(TypeError);
-		expect(() => parseStylePresetAppearance(appearance({ borderRadius: -1 }))).toThrow(
-			/borderRadius/,
-		);
-		expect(() => parseStylePresetAppearance(appearance({ webcamSizePreset: 5 }))).toThrow(
-			/webcamSizePreset/,
-		);
+	it("reads out-of-range numbers into the editor's bounds", () => {
+		const read = (patch: Record<string, unknown>) =>
+			parseStylePresetAppearance({ ...appearance(), ...patch });
+		expect(read({ padding: 101 }).padding).toBe(100);
+		expect(read({ borderRadius: -1 }).borderRadius).toBe(0);
+		expect(read({ webcamSizePreset: 10 }).webcamSizePreset).toBe(15);
+		// Every preset saved with the old defaults carries a 2.5 bounce: it still applies.
+		const cursor = read({ cursor: { ...appearance().cursor, size: 10, clickBounce: 2.5 } }).cursor;
+		expect([cursor.size, cursor.clickBounce]).toEqual([6, 2]);
+	});
+
+	it("reads a preset saved with the old background blur switch", () => {
+		const { backgroundBlur: _amount, ...rest } = appearance();
+		expect(parseStylePresetAppearance({ ...rest, showBlur: true }).backgroundBlur).toBe(0.5);
+		expect(parseStylePresetAppearance({ ...rest, showBlur: false }).backgroundBlur).toBe(0);
+	});
+
+	it("rejects non-numbers, wrong types and unknown enum values", () => {
 		expect(() =>
 			parseStylePresetAppearance({ ...appearance(), shadowIntensity: Number.NaN }),
 		).toThrow(/shadowIntensity/);
-		expect(() => parseStylePresetAppearance({ ...appearance(), showBlur: "yes" })).toThrow(
-			/showBlur/,
+		expect(() => parseStylePresetAppearance({ ...appearance(), backgroundBlur: "yes" })).toThrow(
+			/backgroundBlur/,
 		);
 		expect(() => parseStylePresetAppearance({ ...appearance(), webcamMaskShape: "star" })).toThrow(
 			/webcamMaskShape/,
@@ -103,7 +132,7 @@ describe("parseStylePresetAppearance", () => {
 		expect(() =>
 			parseStylePresetAppearance({
 				...appearance(),
-				cursor: { ...appearance().cursor, size: 11 },
+				cursor: { ...appearance().cursor, size: "11" },
 			}),
 		).toThrow(/cursor\.size/);
 	});
@@ -133,6 +162,38 @@ describe("parseStylePresetAppearance", () => {
 				cursor: { ...appearance().cursor, model3d: 1 },
 			}),
 		).toThrow(/cursor\.model3d/);
+	});
+
+	it("reads a preset written before the click impact as without one, and type-checks it", () => {
+		const { clickImpact: _clickImpact, ...older } = appearance().cursor;
+		const read = (cursor: unknown) =>
+			parseStylePresetAppearance({ ...appearance(), cursor }).cursor;
+		expect(read(older).clickImpact).toBe(false);
+		expect(read({ ...older, clickImpact: true }).clickImpact).toBe(true);
+		expect(() => read({ ...older, clickImpact: "yes" })).toThrow(/cursor\.clickImpact/);
+	});
+
+	it("reads the cursor kinds drawn as the arrow, and type-checks them", () => {
+		const read = (cursor: Record<string, unknown>) =>
+			parseStylePresetAppearance({ ...appearance(), cursor: { ...appearance().cursor, ...cursor } })
+				.cursor.asArrow;
+		// A newer build's kind is dropped, the way an unknown theme falls back to the default.
+		expect(read({ asArrow: ["text", "sparkles", "pointer"] })).toEqual(["pointer", "text"]);
+		expect(() => read({ asArrow: "text" })).toThrow(/cursor\.asArrow/);
+		expect(() => read({ asArrow: [1] })).toThrow(/cursor\.asArrow/);
+	});
+
+	// Before the kinds, one switch drew every cursor as the arrow. Off was its default, so a preset
+	// with it off chose nothing and gets today's default: the arrow and the hand.
+	it("reads a preset saved before the cursor kinds from its always-arrow switch", () => {
+		const { asArrow: _asArrow, ...older } = appearance().cursor;
+		const read = (cursor: Record<string, unknown>) =>
+			parseStylePresetAppearance({ ...appearance(), cursor }).cursor.asArrow;
+		const byDefault = DEFAULT_PROJECT_APPEARANCE.cursor.asArrow;
+		expect(read(older)).toEqual(byDefault);
+		expect(read({ ...older, alwaysArrow: false })).toEqual(byDefault);
+		expect(read({ ...older, alwaysArrow: true })).toEqual(CURSOR_KIND_IDS);
+		expect(() => read({ ...older, alwaysArrow: "yes" })).toThrow(/cursor\.alwaysArrow/);
 	});
 
 	it("reads a preset saved before the frame existed as frameless, and rejects an unknown frame", () => {

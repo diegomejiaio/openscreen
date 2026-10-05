@@ -25,3 +25,18 @@ export function getPlatform(): NodeJS.Platform {
  * Detects if the current platform is macOS.
  */
 export const isMac = (): boolean => getPlatform() === "darwin";
+
+/**
+ * Whether a take can record the microphone on this machine.
+ *
+ * Every macOS take goes through the ScreenCaptureKit helper, which records the
+ * microphone with `captureMicrophone`: macOS 15 API. On 13 and 14 the take came
+ * out without the voice and without a word (#700), so the microphone is not
+ * offered there. A version that does not parse keeps it: the helper still says
+ * when it records without the microphone.
+ */
+export function canRecordMicrophone(): boolean {
+	if (getPlatform() !== "darwin") return true;
+	const major = Number.parseInt(window.electronAPI?.getSystemVersion?.() ?? "", 10);
+	return Number.isNaN(major) || major >= 15;
+}

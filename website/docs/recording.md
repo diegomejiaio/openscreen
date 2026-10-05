@@ -25,7 +25,7 @@ The source picker button shows the currently selected screen or window (truncate
 - **Screens** — one card per display.
 - **Windows** — one card per open window, with its app icon.
 
-Pick a thumbnail and hit **Share**. If no source is selected when you hit record, OpenScreen opens the picker first and starts recording automatically once you choose one.
+Pick a thumbnail and hit **Select**. On macOS 15.2 and later, the button opens Apple's system picker instead. If no source is selected when you hit record, OpenScreen opens the picker first and starts recording automatically once you choose one.
 
 There is no region capture: you record a whole screen or a window, and crop the frame afterwards, clip by clip, in the editor.
 
@@ -49,7 +49,7 @@ On Windows, macOS, and Linux, a cursor-mode toggle switches between:
 
 What the editable overlay captures depends on the platform:
 - **Windows** — the real cursor shape and clicks.
-- **macOS** — the cursor shape and clicks, which need the Accessibility permission. In this mode, pressing record without it opens a prompt linking to the setting instead of starting (see [macOS installation](./installation.md#macos)).
+- **macOS** — the cursor shape and clicks, which need the Accessibility permission. In this mode, pressing record without it opens the permissions window instead of starting (see [macOS installation](./installation.md#macos)).
 - **Linux** — position and shape through the ScreenCast portal, plus left clicks when your user is in the `input` group (see [Mouse clicks on Wayland](./installation.md#mouse-clicks-on-wayland)).
 
 A Linux take that falls back to [browser capture](#native-vs-browser-capture) records the system cursor, whichever mode you picked.
@@ -74,13 +74,13 @@ Hitting record triggers a 3‑2‑1 countdown, rendered as a full-desktop overla
 - **Language** — a locale picker (13 languages) that only affects the OpenScreen UI, not your recording.
 - Window controls to hide the HUD or quit the app.
 
-## Recording from the editor (Rec mode)
+## Recording from the editor (Record mode) {#recording-from-the-editor-rec-mode}
 
-You don't have to start from the HUD. In the editor, switch the top bar to **Rec** to get a full-size pre-flight page instead of a pill:
+You don't have to start from the HUD. In the editor, switch the top bar to **Record** to get a full-size pre-flight page instead of a pill:
 
-- **Source** — same screen/window picker, in a modal. On Linux this row also reads *Your system will ask what to share*, and the portal dialog does the choosing.
+- **Source** — same screen/window picker, in a modal, or Apple's system picker on macOS 15.2 and later. On Linux this row also reads *Your system will ask what to share*, and the portal dialog does the choosing.
 - **System audio**, **Microphone**, **Camera** — each an on/off row; mic and camera expand to a device list, and the camera shows a live preview so you can frame yourself before going live.
-- **Cursor highlight** — on means the editable overlay cursor, off means the plain system cursor.
+- **Editable cursor** — on means the editable overlay cursor, off means the plain system cursor.
 
 **Start recording** opens the recording widget and closes the editor window; cancelling drops you back into Edit mode. This is also the starting point **New project → Screen recording** takes you to.
 

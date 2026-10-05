@@ -28,9 +28,9 @@ OpenScreen 是支援 Linux、Windows 與 macOS、以 MIT 授權釋出的免費 L
 | 上傳速度 | 不是問題。擷取與匯出都在你的電腦上執行 | 其疑難排解指南要求至少 5 Mbps 上傳速度才能成功錄製 |
 | 轉錄 | 裝置端 Whisper，一個約 264 MB 的模型，下載一次。自動偵測語言，或從 100 種語言中選擇 | 在 Loom 端處理，使用自行架設的 Whisper 與 Speechmatics 等提供者。每個方案都支援 50 種以上語言（截至 2026 年 9 月） |
 | 字幕 | 燒錄進影片 | Loom 播放器中的隱藏式字幕，下載的 MP4 不包含字幕 |
-| 自動縮放 | 是，根據錄下的游標放置 | 其剪輯指南中沒有自動縮放功能 |
+| 自動縮放 | 是，放置在錄下的點擊處 | 其剪輯指南中沒有自動縮放功能 |
 | 剪輯 | 多片段時間軸、剪切、變速、縮放、標註與依逐字稿剪輯，全部免費 | Business 方案提供修剪與拼接。Business + AI 提供依逐字稿剪輯與疊加圖層（截至 2026 年 9 月） |
-| 匯出 | MP4（H.264 或 H.265），720p、1080p 或原始尺寸，或 GIF。無浮水印 | 付費方案可下載 MP4。Business 及以上方案可錄製至 4K（截至 2026 年 9 月） |
+| 匯出 | MP4（H.264），720p、1080p 或原始尺寸，或 GIF。無浮水印 | 付費方案可下載 MP4。Business 及以上方案可錄製至 4K（截至 2026 年 9 月） |
 
 ## 兩者共通的功能 {#what-both-apps-do}
 
@@ -53,14 +53,14 @@ OpenScreen 是支援 Linux、Windows 與 macOS、以 MIT 授權釋出的免費 L
 
 ### 預設留在本機 {#local-by-default}
 
-- **從一開始檔案就屬於你。** 錄影會存到你的磁碟，匯出時會產生 H.264 或 H.265 編碼、720p、1080p 或原始尺寸、最高 60 fps 的 MP4 或 GIF，且不含浮水印。Loom 則把影片留在其雲端。下載的 MP4 會保留你的修剪結果，但不包含隱藏式字幕、章節、行動呼籲，以及贅字與靜音移除。詳見[匯出](/docs/export/)。
+- **從一開始檔案就屬於你。** 錄影會存到你的磁碟，匯出時會產生 H.264 編碼、720p、1080p 或原始尺寸、最高 60 fps 的 MP4 或 GIF，且不含浮水印。Loom 則把影片留在其雲端。下載的 MP4 會保留你的修剪結果，但不包含隱藏式字幕、章節、行動呼籲，以及贅字與靜音移除。詳見[匯出](/docs/export/)。
 - **上傳速度無關緊要。** Loom 的疑難排解指南要求至少 5 Mbps 的上傳速度才能成功錄製。OpenScreen 沒有帳號、沒有自己的伺服器，也不會做任何分析追蹤。[常見問題](/docs/faq/#does-openscreen-work-offline)列出了它仍會連線的少數幾種情況。
 - **在你自己的電腦上轉錄。** Whisper 在本機執行，使用一個約 264 MB、下載一次的模型，之後即可離線運作。它會自動偵測語言，你也可以從 100 種語言中選擇。字幕會燒錄進影片。詳見[字幕](/features/captions/)。
 - **只有在你連接時才會使用 AI。** 聊天剪輯是可選功能，需使用你自己的金鑰，支援 Claude、OpenAI、Gemini、Mistral、OpenRouter、MiniMax，或任何相容 OpenAI 介面的服務。在你連接提供者之前，這項功能是關閉的，而每項變更都會成為一般可復原的編輯。Loom 的 AI 功能會把逐字稿以文字形式傳給 OpenAI，Google Gemini 則會收到影片與音訊，用來為 AI 代理建立行動計畫。詳見 [AI 剪輯](/docs/ai-editing/)。
 
 ### 示範影片的潤飾 {#demo-polish}
 
-- **自動縮放。** **自動加強 → 自動縮放**會根據錄下的游標移動放置縮放，不需要連線，也不需要模型。游標會以資料形式錄下，所以你可以在錄完後調整大小、使其平滑，並加上點擊彈跳效果。Loom 的剪輯指南沒有記載自動縮放功能。詳見[自動縮放](/features/auto-zoom/)。
+- **自動縮放。** **自動加強 → 自動縮放**會在錄下的點擊處放置縮放，不需要連線，也不需要模型。游標會以資料形式錄下，所以你可以在錄完後調整大小、使其平滑，並加上點擊彈跳效果。Loom 的剪輯指南沒有記載自動縮放功能。詳見[自動縮放](/features/auto-zoom/)。
 - **編輯工具不會被鎖在方案之後。** Loom 依方案區分剪輯功能。在 OpenScreen 中，一次安裝就擁有含每個片段裁切設定的多片段時間軸、0.1× 到 100× 的變速、六種動畫效果的文字、八個方向的箭頭、圖片、模糊區域、旁白與音樂軌道，以及含內邊距與陰影的背景，並可輸出 16:9、9:16、1:1 等多種長寬比。詳見[剪輯與時間軸](/docs/editing-timeline/)。
 - **命令列介面。** 指令碼與程式碼代理都能透過[命令列](/docs/cli/)操作 OpenScreen。
 
@@ -76,7 +76,7 @@ OpenScreen 是支援 Linux、Windows 與 macOS、以 MIT 授權釋出的免費 L
 ## 開始使用 {#getting-started}
 
 1. 從[下載頁面](/download/)下載 OpenScreen。在 Linux 上，選擇 AppImage、`.deb`、`.rpm` 或 `.pacman`，或使用 Nix flake。
-2. 依照[安裝](/docs/installation/)步驟進行。在 macOS 上，請在第一次錄影前授予「螢幕錄製」與「輔助使用」權限。在 Linux 上，錄影需要 PipeWire 與 `xdg-desktop-portal`，而 [Wayland 上的滑鼠點擊](/docs/installation/#mouse-clicks-on-wayland)需要你的使用者屬於 `input` 群組。
+2. 依照[安裝](/docs/installation/)步驟進行。在 macOS 上，請在首次啟動時開啟的視窗中授予權限。在 Linux 上，錄影需要 PipeWire 與 `xdg-desktop-portal`，而 [Wayland 上的滑鼠點擊](/docs/installation/#mouse-clicks-on-wayland)需要你的使用者屬於 `input` 群組。
 3. 依照[快速入門](/docs/quick-start/)錄下第一段影片，匯出為 MP4，再把檔案分享到你的團隊已經在使用的地方。
 
 也想比較其他工具嗎？請見[取代 Screen Studio](/alternatives/screen-studio/)、[OpenScreen 與 Cap 比較](/compare/openscreen-vs-cap/)、[OpenScreen 與 OBS Studio 比較](/compare/openscreen-vs-obs/)與[取代 Camtasia](/alternatives/camtasia/)，或回到 [OpenScreen 首頁](/)。

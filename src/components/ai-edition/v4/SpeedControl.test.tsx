@@ -33,11 +33,11 @@ describe("SpeedControl", () => {
 
 	it("commits a free-typed speed above the preset ceiling", () => {
 		// The regression this control exists for: the V4 shell only offered presets up to 3×,
-		// while the underlying capability reaches 100×.
+		// while the underlying capability reaches 16× (`SETTING_BOUNDS.playbackSpeed`).
 		const { updateSpeedValue, field } = renderControl(1);
-		fireEvent.change(field, { target: { value: "25" } });
+		fireEvent.change(field, { target: { value: "12" } });
 		fireEvent.blur(field);
-		expect(updateSpeedValue).toHaveBeenCalledWith("sp1", 25);
+		expect(updateSpeedValue).toHaveBeenCalledWith("sp1", 12);
 	});
 
 	it("commits on Enter as well as on blur, and only once", () => {
@@ -54,7 +54,7 @@ describe("SpeedControl", () => {
 		fireEvent.change(field, { target: { value: "500" } });
 		fireEvent.blur(field);
 		expect(updateSpeedValue).not.toHaveBeenCalled();
-		expect(toastError).toHaveBeenCalledWith("speed.maxSpeedError:100");
+		expect(toastError).toHaveBeenCalledWith("speed.maxSpeedError:16");
 	});
 
 	it("ignores an unparseable draft without touching the region", () => {
@@ -72,12 +72,23 @@ describe("SpeedControl", () => {
 		expect(field).toHaveValue("");
 	});
 
-	it("surfaces a custom speed as its own option instead of misreporting a preset", () => {
-		// 25× matches no preset. Without an injected <option> the select would fall back to
-		// rendering its first entry, telling the user the region runs at 0.25×.
-		renderControl(25);
-		const select = screen.getByRole("combobox") as HTMLSelectElement;
-		expect(select.value).toBe("25");
-		expect(Array.from(select.options).map((o) => o.value)).toContain("25");
+	it("picks a preset in one click, and leaves the current one alone", () => {
+		const { updateSpeedValue } = renderControl(1);
+		expect(screen.getByRole("button", { name: "1×" })).toHaveAttribute("aria-pressed", "true");
+		fireEvent.click(screen.getByRole("button", { name: "2×" }));
+		expect(updateSpeedValue).toHaveBeenCalledWith("sp1", 2);
+		// Re-pressing the current speed is not an edit: no save, no undo entry.
+		updateSpeedValue.mockClear();
+		fireEvent.click(screen.getByRole("button", { name: "1×" }));
+		expect(updateSpeedValue).not.toHaveBeenCalled();
+	});
+
+	it("does not misreport a custom speed as a preset", () => {
+		// 12× matches no preset: no button may claim it, and the field reads it back instead.
+		renderControl(12);
+		for (const button of screen.getAllByRole("button")) {
+			expect(button).toHaveAttribute("aria-pressed", "false");
+		}
+		expect(screen.getByPlaceholderText("12×")).toBeInTheDocument();
 	});
 });

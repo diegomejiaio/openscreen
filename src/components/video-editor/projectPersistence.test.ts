@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
+import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
+import { DEFAULT_WALLPAPER } from "@/lib/wallpaper";
 import {
 	createProjectData,
 	createProjectSnapshot,
 	hasProjectUnsavedChanges,
 	normalizeProjectEditor,
 	PROJECT_VERSION,
+	type ProjectEditorState,
 	resolveProjectMedia,
 	validateProjectData,
 } from "./projectPersistence";
@@ -34,7 +38,7 @@ describe("projectPersistence media compatibility", () => {
 				wallpaper: "/wallpapers/wallpaper1.jpg",
 				wallpaperMotion: "none",
 				shadowIntensity: 0,
-				showBlur: false,
+				backgroundBlur: 0,
 				motionBlurAmount: 0,
 				depthOfField: true,
 				borderRadius: 0,
@@ -81,11 +85,49 @@ describe("projectPersistence media compatibility", () => {
 		);
 	});
 
+	it("passes cursor tuning keys through so the CLI export can read them", () => {
+		const editor = normalizeProjectEditor({
+			cursorSize: 0.3,
+			cursorSmoothing: 0.5,
+			cursorMotionBlur: 0.1,
+			cursorClickBounce: 1.5,
+		});
+		expect(editor).toMatchObject({
+			cursorSize: 0.3,
+			cursorSmoothing: 0.5,
+			cursorMotionBlur: 0.1,
+			cursorClickBounce: 1.5,
+		});
+	});
+
+	it("passes the format fill choice through, and leaves it unset when absent", () => {
+		expect(normalizeProjectEditor({ formatFollowCursor: true }).formatFollowCursor).toBe(true);
+		expect(normalizeProjectEditor({ formatFollowCursor: false }).formatFollowCursor).toBe(false);
+		expect("formatFollowCursor" in normalizeProjectEditor({})).toBe(false);
+	});
+
+	it("omits cursor tuning keys that are absent or malformed", () => {
+		const editor = normalizeProjectEditor({
+			cursorSize: Number.NaN,
+			cursorClickBounce: "big" as never,
+		});
+		expect("cursorSize" in editor).toBe(false);
+		expect("cursorSmoothing" in editor).toBe(false);
+		expect("cursorMotionBlur" in editor).toBe(false);
+		expect("cursorClickBounce" in editor).toBe(false);
+	});
+
+	it("omits a frame or frame theme it does not know", () => {
+		const editor = normalizeProjectEditor({ frame: "holo-visor", frameTheme: "neon" } as never);
+		expect("frame" in editor).toBe(false);
+		expect("frameTheme" in editor).toBe(false);
+	});
+
 	it("normalizes webcam mask shape values safely", () => {
 		expect(normalizeProjectEditor({ webcamMaskShape: "rounded" }).webcamMaskShape).toBe("rounded");
 		expect(
 			normalizeProjectEditor({ webcamMaskShape: "not-a-real-shape" as never }).webcamMaskShape,
-		).toBe("rectangle");
+		).toBe("square");
 	});
 
 	it("normalizes webcam mirroring safely", () => {
@@ -163,18 +205,16 @@ describe("projectPersistence media compatibility", () => {
 		expect(editor.annotationRegions[1].blurData?.blockSize).toBe(4);
 	});
 
-	it("keeps clickImpact only when it is exactly true", () => {
+	it("reads the retired iso camera as Left, which kept its look", () => {
 		const zoom = { startMs: 0, endMs: 1000, depth: 3 as const, focus: { cx: 0.5, cy: 0.5 } };
-		const [on, off, junk] = normalizeProjectEditor({
+		const [iso, unknown] = normalizeProjectEditor({
 			zoomRegions: [
-				{ ...zoom, id: "on", rotationPreset: "iso", clickImpact: true },
-				{ ...zoom, id: "off" },
-				{ ...zoom, id: "junk", clickImpact: "yes" as never },
+				{ ...zoom, id: "iso", rotationPreset: "iso" as never },
+				{ ...zoom, id: "unknown", rotationPreset: "swing-clicks" as never },
 			],
 		}).zoomRegions;
-		expect(on.clickImpact).toBe(true);
-		expect("clickImpact" in off).toBe(false);
-		expect("clickImpact" in junk).toBe(false);
+		expect(iso.rotationPreset).toBe("left");
+		expect("rotationPreset" in unknown).toBe(false);
 	});
 
 	it("accepts the dual frame webcam layout preset", () => {
@@ -210,7 +250,7 @@ it("creates stable snapshots for identical project state", () => {
 	const editor = normalizeProjectEditor({
 		wallpaper: "/wallpapers/wallpaper1.jpg",
 		shadowIntensity: 0,
-		showBlur: false,
+		backgroundBlur: 0,
 		motionBlurAmount: 0,
 		depthOfField: true,
 		borderRadius: 0,
@@ -294,6 +334,37 @@ describe("wallpaper legacy normalization", () => {
 		const normalized = normalizeProjectEditor({
 			wallpaper: "file:///opt/Openscreen/resources/wallpapers/wallpaper99.jpg",
 		});
-		expect(normalized.wallpaper).toBe("/wallpapers/wallpaper1.jpg");
+		expect(normalized.wallpaper).toBe(DEFAULT_WALLPAPER);
+	});
+});
+
+// The CLI export's own path: normalize the v2 editor, migrate it into `legacyEditor`, then read
+// it back the way the editor and the scene builder do. A key dropped on the way is a frame the
+// project asks for and the export does not draw.
+describe("recording frame through the CLI export path", () => {
+	const migrate = (editor: Partial<ProjectEditorState>) =>
+		migrateProjectDataToAxcutDocument({
+			version: PROJECT_VERSION,
+			media: { screenVideoPath: "/tmp/screen.mp4" },
+			editor: normalizeProjectEditor(editor),
+		});
+
+	it("carries the frame and its theme into legacyEditor", () => {
+		for (const frame of ["window", "laptop", "phone", "monitor"] as const) {
+			const doc = migrate({ frame, frameTheme: "dark" });
+			expect(doc.legacyEditor).toMatchObject({ frame, frameTheme: "dark" });
+			expect(getEditorSettings(doc)).toMatchObject({ frame, frameTheme: "dark" });
+		}
+	});
+
+	it("keeps the old window-light / window-dark for the editor to split", () => {
+		const doc = migrate({ frame: "window-dark" });
+		expect(doc.legacyEditor?.frame).toBe("window-dark");
+		expect(getEditorSettings(doc)).toMatchObject({ frame: "window", frameTheme: "dark" });
+	});
+
+	it("exports no frame when the project names none, or one this build does not know", () => {
+		expect(getEditorSettings(migrate({})).frame).toBe("none");
+		expect(getEditorSettings(migrate({ frame: "holo-visor" } as never)).frame).toBe("none");
 	});
 });

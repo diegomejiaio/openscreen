@@ -25,7 +25,7 @@ El botón del selector de fuente muestra la pantalla o ventana seleccionada (con
 - **Pantallas**: una tarjeta por monitor.
 - **Ventanas**: una tarjeta por ventana abierta, con el ícono de su app.
 
-Elige una miniatura y haz clic en **Compartir**. Si no hay ninguna fuente seleccionada cuando presionas grabar, OpenScreen abre primero el selector y empieza a grabar automáticamente en cuanto eliges una.
+Elige una miniatura y haz clic en **Compartir**. En macOS 15.2 y posteriores, el botón abre en su lugar el selector del sistema de Apple. Si no hay ninguna fuente seleccionada cuando presionas grabar, OpenScreen abre primero el selector y empieza a grabar automáticamente en cuanto eliges una.
 
 No existe la captura de una región: grabas una pantalla completa o una ventana, y después encuadras la imagen, clip por clip, en el editor.
 
@@ -49,7 +49,7 @@ En Windows, macOS y Linux, un interruptor de modo de cursor alterna entre:
 
 Lo que captura el cursor editable depende de la plataforma:
 - **Windows**: la forma real del cursor y los clics.
-- **macOS**: la forma del cursor y los clics, que necesitan el permiso de Accesibilidad. En este modo, si presionas grabar sin ese permiso, en lugar de empezar se abre un aviso con un enlace al ajuste (consulta la [instalación en macOS](./installation.md#macos)).
+- **macOS**: la forma del cursor y los clics, que necesitan el permiso de Accesibilidad. En este modo, si presionas grabar sin ese permiso, en lugar de empezar se abre la ventana de permisos (consulta la [instalación en macOS](./installation.md#macos)).
 - **Linux**: la posición y la forma mediante el portal ScreenCast, más los clics izquierdos cuando tu usuario está en el grupo `input` (consulta [Clics del mouse en Wayland](./installation.md#mouse-clicks-on-wayland)).
 
 Una toma en Linux que recurre a la [captura por navegador](#native-vs-browser-capture) graba el cursor del sistema, sea cual sea el modo que elegiste.
@@ -78,9 +78,9 @@ Al presionar grabar se inicia una cuenta regresiva 3‑2‑1, que se muestra sup
 
 No tienes que empezar desde el HUD. En el editor, cambia la barra superior a **Grabar** para obtener una página de preparación a tamaño completo en lugar de una píldora:
 
-- **Fuente**: el mismo selector de pantalla o ventana, en una ventana modal. En Linux, esta fila también dice *El sistema te preguntará qué compartir*, y el cuadro de diálogo del portal es el que elige.
+- **Fuente**: el mismo selector de pantalla o ventana, en una ventana modal, o el selector del sistema de Apple en macOS 15.2 y posteriores. En Linux, esta fila también dice *El sistema te preguntará qué compartir*, y el cuadro de diálogo del portal es el que elige.
 - **Audio del sistema**, **Micrófono**, **Cámara**: cada uno es una fila que se activa o desactiva; el micrófono y la cámara se despliegan en una lista de dispositivos, y la cámara muestra una vista previa en vivo para que te encuadres antes de empezar.
-- **Resaltar cursor**: activado significa el cursor editable; desactivado, el cursor normal del sistema.
+- **Cursor editable**: activado significa el cursor editable; desactivado, el cursor normal del sistema.
 
 **Iniciar grabación** abre el widget de grabación y cierra la ventana del editor; si cancelas, vuelves al modo Editar. Este es también el punto de partida al que te lleva **Nuevo proyecto → Grabación de pantalla**.
 

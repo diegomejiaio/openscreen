@@ -27,7 +27,7 @@ Esta página la publica el proyecto OpenScreen. Los datos sobre Screen Studio y 
 | Audio del sistema | El monitor del sink de PipeWire, mezclado con el micrófono |
 | Cursor | Posición y forma del portal. Clics izquierdos con el grupo `input` |
 | Subtítulos | Whisper local en Vulkan, con respaldo en CPU. Incrustados en el video |
-| Exportación | MP4 (H.264 o H.265) o GIF, sin marca de agua. H.264 en la GPU mediante VAAPI cuando el controlador lo permite |
+| Exportación | MP4 (H.264) o GIF, sin marca de agua. H.264 en la GPU mediante VAAPI cuando el controlador lo permite |
 | Actualizaciones integradas | AppImage, `.deb`, `.rpm` y `.pacman`. No Nix |
 
 ## Wayland y PipeWire {#wayland-and-pipewire}
@@ -46,13 +46,13 @@ OpenScreen graba la pantalla en Linux con su propio módulo auxiliar nativo, no 
 
 Screen Studio solo es compatible con macOS (a septiembre de 2026). OpenScreen ofrece el mismo tipo de acabado en Linux, y sus herramientas de edición son las mismas en Windows, macOS y Linux.
 
-- **Zooms automáticos.** **Mejora automática → Zooms automáticos** coloca los zooms a partir del movimiento del cursor grabado, sin llamadas de red ni modelo. Los zooms manuales tienen seis profundidades. Más en [zoom automático](/features/auto-zoom/).
+- **Zooms automáticos.** **Mejora automática → Zooms automáticos** coloca los zooms en los clics grabados, sin llamadas de red ni modelo. Los zooms manuales tienen seis profundidades. Más en [zoom automático](/features/auto-zoom/).
 - **Estilo del cursor.** Muestra u oculta el cursor, redimensiónalo y suavízalo, y agrega desenfoque de movimiento y rebote al clic. Los efectos de clic necesitan clics grabados, así que de nuevo el grupo `input`.
 - **Fondos y encuadre.** 18 fondos de pantalla incluidos, un color sólido, un degradado o tu propia imagen, con relleno, esquinas redondeadas y sombra. Exporta en 16:9, 9:16, 1:1 y otras relaciones de aspecto.
 - **Subtítulos locales.** whisper.cpp se ejecuta en tu equipo, en Vulkan con respaldo en CPU. Usa un modelo Whisper Small de unos 264 MB, descargado una vez. Los subtítulos se incrustan en el video, y eliminar palabras en la transcripción las corta del video. Más en [subtítulos](/features/captions/).
 - **Disposiciones de cámara web.** Imagen en imagen y otras disposiciones, con el fondo de la cámara quitado, desenfocado o reemplazado sin pantalla verde.
 - **Una línea de tiempo multiclip.** Varios clips por proyecto, cortes, regiones de velocidad, anotaciones de texto, flecha, imagen y desenfoque, una pista de voz en off y música. Consulta [Edición y línea de tiempo](/docs/editing-timeline/).
-- **Exportación sin marca de agua.** MP4 en H.264 o H.265 hasta 60 fps, o GIF. En Linux el compositor renderiza mediante Vulkan, y el H.264 va a la GPU mediante `h264_vaapi` cuando el controlador expone VAAPI y el dispositivo Vulkan puede entregar fotogramas. Consulta [Exportación](/docs/export/).
+- **Exportación sin marca de agua.** MP4 en H.264 hasta 60 fps, o GIF. En Linux el compositor renderiza mediante Vulkan, y el H.264 va a la GPU mediante `h264_vaapi` cuando el controlador expone VAAPI y el dispositivo Vulkan puede entregar fotogramas. Consulta [Exportación](/docs/export/).
 - **Edición por chat opcional con tu propia clave.** Describe cortes, zooms o anotaciones en lenguaje natural. Está desactivada hasta que conectas un proveedor, y cada cambio se aplica como una edición común que se puede deshacer. Consulta [Edición con IA](/docs/ai-editing/).
 
 ## Paquetes {#packages}
@@ -72,7 +72,7 @@ Screen Studio solo es compatible con macOS (a septiembre de 2026). OpenScreen of
 
 1. Descarga el paquete para tu distribución desde la [página de descargas](/download/), o usa el flake de Nix.
 2. Sigue los [pasos de instalación para Linux](/docs/installation/#linux). Agrega tu usuario al grupo `input` si quieres que se graben los clics, y acepta lo que ese grupo permite.
-3. Haz una primera grabación con el [inicio rápido](/docs/quick-start/), responde al cuadro de diálogo del portal cuando se abra, y luego ejecuta **Mejora automática → Zooms automáticos** sobre la toma.
+3. Haz una primera grabación con el [inicio rápido](/docs/quick-start/) y responde al cuadro de diálogo del portal cuando se abra. La toma se abre en el editor con los zooms automáticos ya colocados.
 
 ¿En otro sistema? Consulta las páginas de [Windows](/screen-recorder-windows/) y [macOS](/screen-recorder-mac/). ¿Vienes de una app de Mac? Consulta la [alternativa a Screen Studio](/alternatives/screen-studio/). O vuelve a la [página de inicio de OpenScreen](/).
 

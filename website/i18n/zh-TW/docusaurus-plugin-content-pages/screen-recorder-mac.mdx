@@ -28,7 +28,7 @@ OpenScreen 是免費、MIT 授權的 Mac 螢幕錄影軟體，在 macOS 13 或�
 | 攝影機 | 錄成獨立檔案，再於編輯器中放置 |
 | 游標 | 錄成資料，錄完後可編輯。形狀與點擊需要「輔助使用」權限 |
 | 字幕 | 裝置端 Whisper，Apple Silicon 上使用 Metal，Intel 上使用 CPU。燒錄進影片 |
-| 匯出 | 透過 VideoToolbox 輸出 MP4（H.264 或 H.265），或 GIF。最高 60 fps，無浮水印 |
+| 匯出 | 透過 VideoToolbox 輸出 MP4（H.264），或 GIF。最高 60 fps，無浮水印 |
 
 ## OpenScreen 在 Mac 上的錄製方式 {#how-openscreen-records-on-a-mac}
 
@@ -36,7 +36,7 @@ OpenScreen 是免費、MIT 授權的 Mac 螢幕錄影軟體，在 macOS 13 或�
 
 - **螢幕畫面或單一視窗。** 在錄影器中選取來源。以 60 fps 擷取，最高 3840×2160。之後可在編輯器中裁切畫面。
 - **能撐過當機的檔案。** 該輔助程式使用 AVAssetWriter 以 H.264 編碼，寫入以每秒一段的方式分段的 MP4。如果錄影器在錄製過程中被中止，檔案仍可播放到最後一個完整片段為止。
-- **系統音訊。** ScreenCaptureKit 會擷取 Mac 播放的聲音，OpenScreen 自身發出的音效則不會被收錄。在 macOS 14.2 及更新版本上，系統會詢問是否允許擷取音訊。
+- **系統音訊。** OpenScreen 會錄製 Mac 播放的聲音。在 macOS 15.2 及更新版本上，系統會詢問是否允許；在較舊的版本上，則由「螢幕錄製」權限涵蓋。
 - **麥克風。** 選擇裝置，並在錄製控制項中查看五格音量表。
 - **可編輯的游標。** 預設情況下，系統游標不會出現在畫面像素中，而是以資料形式錄下。錄完後可以更改大小、平滑度與主題，並加上點擊彈跳效果。也可以切換為系統游標，直接燒錄進畫面中。
 - **攝影機。** 攝影機畫面會在錄製時錄成獨立檔案。編輯器可將其放置為子母畫面、直向堆疊或雙畫面，並可在不使用綠幕的情況下移除、模糊或替換背景。應用程式支援 Apple 用來把 iPhone 當作攝影機使用的 Continuity Camera（接續互通相機）功能。
@@ -48,7 +48,7 @@ OpenScreen 是免費、MIT 授權的 Mac 螢幕錄影軟體，在 macOS 13 或�
 編輯器在 macOS、Windows 與 Linux 上都是同一套。在 Mac 上改變的是它所使用的硬體。
 
 - **以 Metal 算繪。** 即時預覽與 MP4 匯出共用同一個原生合成器，在 macOS 上以 Metal 執行。
-- **以 VideoToolbox 編碼。** H.264 與 H.265 匯出都交由 Apple 的 VideoToolbox 編碼器處理。對於 H.264，會先嘗試零拷貝路徑，讓合成完成的影格不需要再回傳到 CPU。如果 VideoToolbox 無法使用，則改用軟體編碼器。MP4 匯出支援 24、30 或 60 fps，解析度從 720p 到原始尺寸皆可。GIF 匯出也可使用。詳見[匯出](/docs/export/)。
+- **以 VideoToolbox 編碼。** H.264 匯出都交由 Apple 的 VideoToolbox 編碼器處理，並會先嘗試零拷貝路徑，讓合成完成的影格不需要再回傳到 CPU。如果 VideoToolbox 無法使用，則改用軟體編碼器。MP4 匯出支援 24、30 或 60 fps，解析度從 720p 到原始尺寸皆可。GIF 匯出也可使用。詳見[匯出](/docs/export/)。
 - **在 Mac 自己的晶片上產生字幕。** 轉錄由 whisper.cpp 執行，使用一個約 264 MB 的 Whisper Small 模型，下載一次即可。Apple Silicon 上使用 Metal，Intel Mac 上使用 CPU。字幕會燒錄進影片。詳見[字幕](/features/captions/)。
 - **編輯器的其他功能。** 根據錄下的游標放置的[自動縮放](/features/auto-zoom/)、背景、多片段時間軸、文字與箭頭標註、模糊區域，以及旁白與音樂軌道。詳見[剪輯與時間軸](/docs/editing-timeline/)。
 - **可選用的聊天剪輯。** 使用你自己的金鑰連接提供者，並用一般語言描述剪切、縮放或變速。在你連接提供者之前，這項功能是關閉的，而每項變更都會成為一般可復原的編輯。詳見 [AI 剪輯](/docs/ai-editing/)。
@@ -65,8 +65,8 @@ OpenScreen 的匯出速度是如何與其他工具比較的，請見[打造難�
 ## 開始使用 {#getting-started}
 
 1. 從[下載頁面](/download/)下載 Apple Silicon 或 Intel 版的 `.dmg`（約 210 MB），並將 OpenScreen 拖曳到「應用程式」資料夾。此版本已簽署並經過公證，不需要任何終端機操作。
-2. 在**系統設定 → 隱私權與安全性**中，將**螢幕錄製**與**輔助使用**權限授予 OpenScreen。[安裝指南](/docs/installation/#macos)說明了這兩項權限。
-3. 依照[快速入門](/docs/quick-start/)錄下第一段影片，然後執行**自動加強 → 自動縮放**。[螢幕錄影](/docs/recording/)頁面說明了錄影器的各項選項。
+2. 在首次啟動時開啟的視窗中授予權限。[安裝指南](/docs/installation/#macos)說明了各個 macOS 版本需要哪些權限。
+3. 依照[快速入門](/docs/quick-start/)錄下第一段影片。影片會在編輯器中開啟，自動縮放已經放好。[螢幕錄影](/docs/recording/)頁面說明了錄影器的各項選項。
 
 使用其他系統嗎？請見 OpenScreen 的 [Windows](/screen-recorder-windows/) 與 [Linux](/screen-recorder-linux/) 版本。正在權衡其他 Mac 錄影軟體嗎？請閱讀[取代 Screen Studio](/alternatives/screen-studio/)、[OpenScreen 與 Cap 比較](/compare/openscreen-vs-cap/)與[取代 Loom](/alternatives/loom/)頁面。授權、網路使用與簽署相關問題請見[常見問題](/docs/faq/)，[OpenScreen 首頁](/)則有完整介紹。
 

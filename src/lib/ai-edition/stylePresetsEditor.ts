@@ -20,13 +20,14 @@ export function stylePresetAppearanceFromSettings(
 		frameTheme: settings.frameTheme,
 		aspectRatio: settings.aspectRatio,
 		shadowIntensity: settings.shadowIntensity,
-		showBlur: settings.showBlur,
+		backgroundBlur: settings.backgroundBlur,
 		motionBlurAmount: settings.motionBlurAmount,
 		depthOfField: settings.depthOfField,
 		borderRadius: settings.borderRadius,
 		padding: settings.padding,
 		webcamLayoutPreset: settings.webcamLayoutPreset,
 		webcamMaskShape: settings.webcamMaskShape,
+		webcamRoundness: settings.webcamRoundness,
 		webcamMirrored: settings.webcamMirrored,
 		webcamReactiveZoom: settings.webcamReactiveZoom,
 		webcamSizePreset: settings.webcamSizePreset,
@@ -39,12 +40,33 @@ export function stylePresetAppearanceFromSettings(
 			motionBlur: settings.cursor.motionBlur,
 			clickBounce: settings.cursor.clickBounce,
 			model3d: settings.cursor.model3d,
-			clipToBounds: settings.cursor.clipToBounds,
+			asArrow: [...settings.cursor.asArrow],
+			clickImpact: settings.cursor.clickImpact,
 		},
 		cursorShow: settings.cursorShow,
 		cursorAutoHide: settings.cursorAutoHide,
 		cursorTheme: settings.cursorTheme,
 	};
+}
+
+/** Whether two appearances look the same. The output format is part of the look: left out of
+ *  this, two presets saved at different formats match at once and switching between them
+ *  applies an identical patch — nothing moves, and two rows read as active. */
+export function sameStylePresetLook(a: StylePresetAppearance, b: StylePresetAppearance): boolean {
+	return sameValue(a, b);
+}
+
+/** Structural equality over plain JSON-shaped values. A preset read from disk carries its
+ *  keys in file order, so a key-order-sensitive comparison would never light a row. */
+function sameValue(a: unknown, b: unknown): boolean {
+	if (a === b) return true;
+	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+	const aKeys = Object.keys(a);
+	const bKeys = Object.keys(b);
+	if (aKeys.length !== bKeys.length) return false;
+	return aKeys.every((key) =>
+		sameValue((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+	);
 }
 
 export function factoryStylePresetAppearance(): StylePresetAppearance {
@@ -58,6 +80,10 @@ export function factoryStylePresetAppearance(): StylePresetAppearance {
  * `EditorSettingsPatch` has no top-level `cursorTheme` or `cursorShow`: both travel inside
  * `cursor` as `theme` and `show`. Auto-hide is written both ways (`cursor.autoHide` and
  * `cursorAutoHide`) because `nextLegacy` accepts either and they land on the same key.
+ *
+ * `aspectRatio` travels with the look: a preset saved at 16:9 restores 16:9, and a look is
+ * only ever active at the one format it was saved at. `aspectRatio` stays out of what a NEW
+ * project takes from a preset (`stylePresetLegacyEditor`) — the format belongs to the take.
  */
 export function stylePresetPatch(appearance: StylePresetAppearance): EditorSettingsPatch {
 	return {
@@ -67,13 +93,14 @@ export function stylePresetPatch(appearance: StylePresetAppearance): EditorSetti
 		frameTheme: appearance.frameTheme,
 		aspectRatio: appearance.aspectRatio,
 		shadowIntensity: appearance.shadowIntensity,
-		showBlur: appearance.showBlur,
+		backgroundBlur: appearance.backgroundBlur,
 		motionBlurAmount: appearance.motionBlurAmount,
 		depthOfField: appearance.depthOfField,
 		borderRadius: appearance.borderRadius,
 		padding: appearance.padding,
 		webcamLayoutPreset: appearance.webcamLayoutPreset,
 		webcamMaskShape: appearance.webcamMaskShape,
+		webcamRoundness: appearance.webcamRoundness,
 		webcamMirrored: appearance.webcamMirrored,
 		webcamReactiveZoom: appearance.webcamReactiveZoom,
 		webcamSizePreset: appearance.webcamSizePreset,

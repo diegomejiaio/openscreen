@@ -16,6 +16,7 @@ import {
 	FIXED_SHORTCUTS,
 	findConflict,
 	formatBinding,
+	formatFixedShortcut,
 	SHORTCUT_ACTIONS,
 	type ShortcutAction,
 	type ShortcutBinding,
@@ -148,7 +149,7 @@ export function ShortcutsConfigDialog() {
 
 				<div className="flex-1 min-h-0 overflow-y-auto pr-1 -mr-1">
 					<div className="space-y-0.5">
-						<p className="text-[10px] text-[var(--muted)] mb-2 uppercase tracking-wide font-semibold">
+						<p className="mb-2 text-[13px] font-semibold leading-[1.3] text-[var(--fg-2)]">
 							{t("configurable")}
 						</p>
 						{SHORTCUT_ACTIONS.map((action) => {
@@ -166,7 +167,7 @@ export function ShortcutsConfigDialog() {
 											}}
 											title={isCapturing ? t("pressEscToCancel") : t("clickToChange")}
 											className={[
-												"px-2 py-1 rounded text-xs font-mono border transition-all min-w-[90px] text-center select-none",
+												"px-2 py-1.5 rounded-[8px] text-xs font-mono border transition-all min-w-[90px] text-center select-none",
 												isCapturing
 													? "bg-[var(--brand-soft)] border-[var(--brand)] text-[var(--brand)] animate-pulse"
 													: hasConflict
@@ -209,25 +210,25 @@ export function ShortcutsConfigDialog() {
 					</div>
 
 					<div className="space-y-0.5 mt-2">
-						<p className="text-[10px] text-[var(--muted)] mb-2 uppercase tracking-wide font-semibold">
+						<p className="mb-2 text-[13px] font-semibold leading-[1.3] text-[var(--fg-2)]">
 							{t("fixed")}
 						</p>
-						{FIXED_SHORTCUTS.map(({ i18nKey, label, display }) => (
+						{FIXED_SHORTCUTS.map((shortcut) => (
 							<div
-								key={i18nKey}
+								key={shortcut.i18nKey}
 								className="flex items-center justify-between py-1.5 px-1 border-b border-[var(--border-soft)] last:border-0"
 							>
 								<span className="text-sm text-[var(--muted)]">
-									{t(`fixedActions.${i18nKey}`, { defaultValue: label })}
+									{t(`fixedActions.${shortcut.i18nKey}`, { defaultValue: shortcut.label })}
 								</span>
-								<kbd className="px-2 py-1 bg-[var(--surface-2)] border border-[var(--border)] rounded text-xs font-mono text-[var(--muted)] min-w-[90px] text-center">
-									{display}
+								<kbd className="px-2 py-1.5 bg-[var(--surface-2)] border border-[var(--border)] rounded-[8px] text-xs font-mono text-[var(--muted)] min-w-[90px] text-center">
+									{formatFixedShortcut(shortcut, isMac)}
 								</kbd>
 							</div>
 						))}
 					</div>
 
-					<p className="text-[10px] text-[var(--muted)] mt-1">{t("helpText")}</p>
+					<p className="mt-2 text-xs leading-normal text-[var(--muted)]">{t("helpText")}</p>
 				</div>
 
 				<DialogFooter className="shrink-0 flex gap-2 sm:justify-between mt-2">

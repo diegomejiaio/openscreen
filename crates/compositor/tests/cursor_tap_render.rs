@@ -164,11 +164,11 @@ fn scene_json(rotation: &str, hide: bool, click_bounce: f32) -> String {
                        "screenRect":{{"x":0.1,"y":0.1,"width":0.8,"height":0.8}}}},
             "effects":{{"padding":0.2,"blur":false,"shadow":0.5,"roundnessFrac":0.03,"motionBlur":0}},
             "background":{{"kind":"gradient","angleDeg":135,"stops":["#5b6ee1","#e8a0bf"]}},
-            "zoomRegions":[{{"clipIndex":0,"startSec":0,"endSec":10,"scale":1,"focusX":0.5,"focusY":0.5,"focusMode":"manual","rotation":{rotation},"hideCursor":{hide}}}],
+            "zoomRegions":[{{"clipIndex":0,"startSec":0,"endSec":10,"scale":1,"focusX":0.5,"focusY":0.5,"rotation":{rotation},"hideCursor":{hide}}}],
             "annotations":[],
             "cursor":{{"show":true,"size":4,"smoothing":0.5,"motionBlur":0.5,"clickBounce":{click_bounce},"model3d":true,"clipToBounds":false,"theme":"default",
-                       "cursorSprites":{{"arrow":{{"path":"{dir}/arrow.png","hotspotX":0.119,"hotspotY":0.0874}},
-                                        "pointer":{{"path":"{dir}/pointer.png","hotspotX":0.3893,"hotspotY":0.0032}}}}}},
+                       "cursorSprites":{{"arrow":{{"path":"{dir}/arrow.png","hotspotX":0.1205,"hotspotY":0.0881}},
+                                        "pointer":{{"path":"{dir}/pointer.png","hotspotX":0.3874,"hotspotY":0.0032}}}}}},
             "cropByClip":[null],
             "output":{{"width":1280,"height":720,"fps":30}}}}"##
     )
@@ -222,7 +222,7 @@ fn gesture(name: &str) -> CursorTrack {
 
 fn cfg() -> Cfg {
     let mut cfg = Cfg::c8();
-    cfg.bg_blur = false;
+    cfg.bg_blur = 0.0;
     cfg.zoom = false;
     cfg.layout_anim = false;
     cfg.cursor = true;
@@ -310,7 +310,7 @@ fn the_tip_lands_on_the_marked_click_target() {
     let comp = Compositor::new_sized(&gpu, OUT.0, OUT.1).expect("compositor");
     let screen = MockFrame::new(&gpu);
     let track = gesture("contact");
-    for (name, rotation) in [("flat", "null"), ("iso", r#""iso""#), ("follow", r#""follow-cursor""#)] {
+    for (name, rotation) in [("flat", "null"), ("iso", r#""iso""#), ("orbit", r#""orbit","focusMode":"auto""#)] {
         for (target, tc) in TARGETS {
             let t = tc + CONTACT_S;
             // La pastille, lue sans curseur au même instant (la caméra suit la même piste).
@@ -350,9 +350,11 @@ fn the_impact_ring_is_centred_on_the_click() {
     let (ring, tip) = render(&comp, &screen, &scene_json("null", false, 2.5), &track, t);
     let (quiet, _) = render(&comp, &screen, &scene_json("null", false, 0.0), &track, t);
     let m = marker(&bare, tip.expect("curseur"));
-    // Le profil de l'écart dû à l'impact le long d'une demi-droite partant du clic.
+    // Le profil de l'écart dû à l'impact le long d'une demi-droite partant du clic, au-delà du
+    // bord de la pointe : le geste du clic y déplace le curseur, que `quiet` (« None ») laisse au
+    // repos.
     let peak = |dx: i32, dy: i32| -> (i32, i32) {
-        (4..45)
+        (8..45)
             .map(|r| {
                 let (x, y) = (m[0] as i32 + dx * r, m[1] as i32 + dy * r);
                 let (a, b) = (px(&ring, x, y), px(&quiet, x, y));
@@ -368,6 +370,72 @@ fn the_impact_ring_is_centred_on_the_click() {
     let (late, _) = render(&comp, &screen, &scene_json("null", false, 2.5), &track, tc + 0.5);
     let (late_quiet, _) = render(&comp, &screen, &scene_json("null", false, 0.0), &track, tc + 0.5);
     assert!(late == late_quiet, "l'anneau survit à sa fenêtre");
+}
+
+/// Planche des niveaux du clic (opt-in, `OPENSCREEN_CURSOR_TAP_OUT`) : None, Light et Strong en
+/// lignes, des instants autour du clic de la flèche en colonnes, agrandis ×2 autour de la pointe.
+/// Et la même chose en mouvement, les trois niveaux côte à côte, à 30 i/s puis ralentie ×4.
+#[test]
+fn cursor_press_levels() {
+    let Ok(dir) = std::env::var("OPENSCREEN_CURSOR_TAP_OUT") else {
+        eprintln!("OPENSCREEN_CURSOR_TAP_OUT absent — saute");
+        return;
+    };
+    let Some(gpu) = gpu() else { return };
+    let comp = Compositor::new_sized(&gpu, OUT.0, OUT.1).expect("compositor");
+    let screen = MockFrame::new(&gpu);
+    let track = gesture("levels");
+    let frames = format!("{dir}/levels");
+    std::fs::create_dir_all(&frames).expect("dossier des frames");
+    let ([_, _], tc) = TARGETS[0];
+    let levels = [0.0, 1.0, 2.0];
+    let img = |rgba: Vec<u8>| image::RgbaImage::from_raw(OUT.0, OUT.1, rgba).expect("readback");
+    let (_, tip) = render(&comp, &screen, &scene_json("null", false, 1.0), &track, tc + CONTACT_S);
+    let tip = tip.expect("curseur");
+    const CELL: u32 = 180;
+    let cell = |rgba: Vec<u8>| {
+        let (x, y) = ((tip[0] - CELL as f32 * 0.35) as u32, (tip[1] - CELL as f32 * 0.3) as u32);
+        image::imageops::crop_imm(&img(rgba), x, y, CELL, CELL).to_image()
+    };
+    let offsets = [-0.3, -0.2, -0.12, -0.08, -0.04, 0.0, 0.05, 0.1, 0.16, 0.25, 0.42];
+    let mut sheet = image::RgbaImage::new(offsets.len() as u32 * 2 * CELL, levels.len() as u32 * 2 * CELL);
+    for (row, level) in levels.iter().enumerate() {
+        for (col, dt) in offsets.iter().enumerate() {
+            let (rgba, _) = render(&comp, &screen, &scene_json("null", false, *level), &track, tc + dt);
+            let big = image::imageops::resize(&cell(rgba), 2 * CELL, 2 * CELL, image::imageops::FilterType::Nearest);
+            image::imageops::overlay(&mut sheet, &big, (col as u32 * 2 * CELL) as i64, (row as u32 * 2 * CELL) as i64);
+        }
+    }
+    sheet.save(format!("{dir}/press-levels.png")).expect("planche");
+    println!("planche des niveaux : lignes {levels:?}, colonnes {offsets:?} s après le clic");
+    for (speed, name) in [(1.0, "press-levels.mp4"), (0.25, "press-levels-slow.mp4")] {
+        let n = (0.9 / speed * 30.0) as u32;
+        for k in 0..n {
+            let t = tc - 0.4 + k as f32 / 30.0 * speed;
+            let mut row = image::RgbaImage::new(levels.len() as u32 * 2 * CELL, 2 * CELL);
+            for (i, level) in levels.iter().enumerate() {
+                let (rgba, _) = render(&comp, &screen, &scene_json("null", false, *level), &track, t);
+                let big = image::imageops::resize(&cell(rgba), 2 * CELL, 2 * CELL, image::imageops::FilterType::Triangle);
+                image::imageops::overlay(&mut row, &big, (i as u32 * 2 * CELL) as i64, 0);
+            }
+            row.save(format!("{frames}/{k:03}.png")).expect("frame");
+        }
+        let ffmpeg = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared/bin/ffmpeg.exe");
+        let status = std::process::Command::new(ffmpeg)
+            .args(["-y", "-loglevel", "error", "-framerate", "30", "-i"])
+            .arg(format!("{frames}/%03d.png"))
+            .args(["-c:v", "h264_mf", "-b:v", "8M", "-pix_fmt", "nv12"])
+            .arg(format!("{dir}/{name}"))
+            .status();
+        // Un échec garde les images, pour relancer ou comprendre.
+        let status = status.expect("lancement de ffmpeg");
+        assert!(status.success(), "ffmpeg a échoué pour {name} : {status}");
+        println!("ffmpeg : {status:?} -> {dir}/{name}");
+        for k in 0..n {
+            let _ = std::fs::remove_file(format!("{frames}/{k:03}.png"));
+        }
+    }
 }
 
 /// Vidéo et planche à regarder (opt-in, `OPENSCREEN_CURSOR_TAP_OUT`).

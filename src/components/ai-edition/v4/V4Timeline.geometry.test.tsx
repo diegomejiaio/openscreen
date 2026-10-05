@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -10,8 +10,16 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 const VIEWPORT_PX = 900;
 const TOTAL_SEC = 1800; // a 30-minute recording, as in the report
 
+// Every string renders as its bare key, except in the lane-hint tests, which swap in the real
+// English copy to read the key interpolated into it.
+const i18n = vi.hoisted(() => ({
+	translate: null as
+		| null
+		| ((namespace: string, key: string, vars?: Record<string, string | number>) => string),
+}));
 vi.mock("@/contexts/I18nContext", () => ({
-	useScopedT: () => (key: string) => key,
+	useScopedT: (namespace: string) => (key: string, vars?: Record<string, string | number>) =>
+		i18n.translate ? i18n.translate(namespace, key, vars) : key,
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
 // The audio lane's pill renders a ClipWaveform; no decode in this geometry suite.
@@ -25,6 +33,8 @@ vi.mock("@/hooks/useAudioPeaks", () => ({ useAudioPeaks: () => null }));
 const measureText = vi.fn((text: string) => ({ width: text.length * 6 }));
 
 import { ShortcutsProvider } from "@/contexts/ShortcutsContext";
+import type { I18nNamespace } from "@/i18n/config";
+import { getAvailableLocales, translate } from "@/i18n/loader";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { DEFAULT_SHORTCUTS, formatBinding } from "@/lib/shortcuts";
 import { V4Timeline } from "./V4Timeline";
@@ -85,13 +95,20 @@ function clip(startSec: number, endSec: number) {
 /** The asset every clip above points at. No `cameraTrack`: this recording has no webcam,
  *  which is what the Full Camera button is gated on. */
 const NO_CAMERA_ASSET = { id: "a1", label: "rec", durationSec: TOTAL_SEC };
+/** The same recording, with a camera track: the Full Camera button is offered. */
+const CAMERA_ASSET = {
+	...NO_CAMERA_ASSET,
+	cameraTrack: { sourcePath: "/tmp/cam.webm", startMs: 0, offsetMs: 0, visible: true },
+};
 
-/** By default one 30-minute clip carrying a single one-second annotation. */
+/** By default one 30-minute clip carrying a single one-second annotation, and a store that
+ *  holds an edit region (so Clear timeline shows); `overrides` replaces any `tl` member. */
 function renderTimeline(
 	clips = [clip(0, TOTAL_SEC)],
 	annotation = { id: "ann1", startMs: 10_000, endMs: 11_000 },
 	assets: Array<Record<string, unknown>> = [NO_CAMERA_ASSET],
 	onRender?: ProfilerOnRenderCallback,
+	overrides: Record<string, unknown> = {},
 ) {
 	const tl = {
 		clips,
@@ -104,6 +121,8 @@ function renderTimeline(
 		cameraFullscreenRegions: [],
 		zoomRegions: [],
 		trimRanges: [],
+		hasEditRegions: true,
+		...overrides,
 		selection: null,
 		multiSelection: [],
 		clipSelection: null,
@@ -119,6 +138,9 @@ function renderTimeline(
 		addZoom: vi.fn(async () => {
 			/* the toolbar only awaits it */
 		}),
+		clearTimeline: vi.fn(async () => {
+			/* the toolbar only awaits it */
+		}),
 	};
 	const setCurrentTime = vi.fn();
 	const timeline = (
@@ -130,8 +152,6 @@ function renderTimeline(
 				setCurrentTime={setCurrentTime}
 				playing={false}
 				onTogglePlay={vi.fn()}
-				onPrevClip={vi.fn()}
-				onNextClip={vi.fn()}
 				onEditClip={vi.fn()}
 				onAddVoiceover={vi.fn()}
 			/>
@@ -147,7 +167,11 @@ function renderTimeline(
 		),
 	);
 	return {
-		pill: screen.getByTitle("toolbar.newAnnotation"),
+		// A getter: a test that empties `annotationRegions` renders no such pill, and an eager
+		// lookup would throw before its own assertions ran.
+		get pill() {
+			return screen.getByTitle("toolbar.newAnnotation");
+		},
 		clipEls: Array.from(document.querySelectorAll<HTMLElement>("[data-clip-id]")),
 		tl,
 		setCurrentTime,
@@ -405,22 +429,58 @@ describe("V4Timeline create-from-toolbar", () => {
 		expect(durationOf(tl)).toBeCloseTo(0.25, 3);
 	});
 
+	// Clear timeline (#723) follows the STORED edit regions (`tl.hasEditRegions`), never the
+	// pills the lanes draw: a trim whose clip is gone is stored, cleared, and has no pill.
+	// Absent, never greyed out, when there is nothing to clear.
+	const toolbarOf = () => screen.getByRole("toolbar", { name: "toolbar.timelineTools" });
+	const dividersIn = (toolbar: HTMLElement) =>
+		Array.from(toolbar.querySelectorAll("[class*=tlToolSep]"));
+
+	it("shows no Clear timeline button while the store holds no edit region, and no divider for it", () => {
+		// A pill is drawn, and the button still follows the store.
+		renderTimeline(undefined, undefined, undefined, undefined, { hasEditRegions: false });
+		expect(screen.queryByLabelText("buttons.clearTimeline")).not.toBeInTheDocument();
+		// Only the divider after the auto-enhance button: none is left dangling at the end.
+		expect(dividersIn(toolbarOf())).toHaveLength(1);
+	});
+
+	it("shows it for a stored region no lane draws, and one click asks the store to clear", () => {
+		const { tl } = renderTimeline(undefined, undefined, undefined, undefined, {
+			annotationRegions: [],
+			hasEditRegions: true,
+		});
+		expect(document.querySelector("[class*=lanePill]")).toBeNull();
+		fireEvent.click(screen.getByLabelText("buttons.clearTimeline"));
+		expect(tl.clearTimeline).toHaveBeenCalledTimes(1);
+	});
+
+	it("puts Clear timeline last, behind a divider, after the Add Full Camera button", () => {
+		renderTimeline(undefined, undefined, [CAMERA_ASSET]);
+		const toolbar = toolbarOf();
+		const buttons = Array.from(toolbar.querySelectorAll("button"));
+		const clear = screen.getByLabelText("buttons.clearTimeline");
+		expect(buttons.at(-1)).toBe(clear);
+
+		const divider = clear.previousElementSibling;
+		expect(divider?.className).toContain("tlToolSep");
+		expect(divider?.previousElementSibling).toBe(
+			screen.getByLabelText("buttons.addCameraFullscreen"),
+		);
+		expect(dividersIn(toolbar)).toHaveLength(2);
+	});
+
 	// #353. A camera-fullscreen region grows the webcam overlay, so with no webcam on the
 	// timeline it renders nothing in the preview and nothing in the export — the region is
 	// stored and forgotten. `addCameraFullscreen` now refuses to write one; the button says
-	// so before it is clicked instead of looking like it worked.
-	it("disables Add Full Camera when no clip on the timeline has a camera", () => {
+	// so before it is clicked instead of looking like it worked. Absent, not greyed out: an
+	// inoperative control is hidden, and a greyed one with no reason is a puzzle.
+	it("shows no Add Full Camera button when no clip on the timeline has a camera", () => {
 		renderTimeline();
-		expect(screen.getByLabelText("buttons.addCameraFullscreen")).toBeDisabled();
+		expect(screen.queryByLabelText("buttons.addCameraFullscreen")).not.toBeInTheDocument();
 	});
 
-	it("enables Add Full Camera as soon as a clip's asset carries one", () => {
-		renderTimeline(undefined, undefined, [
-			{
-				...NO_CAMERA_ASSET,
-				cameraTrack: { sourcePath: "/tmp/cam.webm", startMs: 0, offsetMs: 0, visible: true },
-			},
-		]);
+	it("shows Add Full Camera as soon as a clip's asset carries one", () => {
+		renderTimeline(undefined, undefined, [CAMERA_ASSET]);
 		expect(screen.getByLabelText("buttons.addCameraFullscreen")).toBeEnabled();
 	});
 
@@ -487,7 +547,7 @@ describe("V4Timeline clip row", () => {
 
 	it("withholds the duration from a card too small to hold it", () => {
 		// 250s at this zoom is a 125px card: past the narrow gate, so it still shows
-		// its name and pencil, but not wide enough for the timecode — which would
+		// its edit button, but not wide enough for the timecode — which would
 		// otherwise escape the label pill and sit on the delete button. Measured in
 		// the running window, not derived here.
 		renderTimeline([clip(0, 250), clip(250, TOTAL_SEC)]);
@@ -498,26 +558,41 @@ describe("V4Timeline clip row", () => {
 	});
 
 	it("asks for the room this card's own timecode needs, not the shortest one", () => {
-		// 600s of 3965s is a ~130px card. `0:12.0` would fit there; `10:00.0` is a
-		// character wider and does not, and `formatSec` has no hour field to stop
-		// the string growing — a clip past a hundred minutes reads `100:00.0`. A
-		// single fixed width would have let those through onto the delete button.
-		renderTimeline([clip(0, 600), clip(600, 3965)]);
+		// 600s of 4000s is a 129px card. `0:12.0` would fit there (50 + 38 + 6×6 =
+		// 124); `10:00.0` is a character wider and does not (130), and `formatSec`
+		// has no hour field to stop the string growing — a clip past a hundred
+		// minutes reads `100:00.0`. A single fixed width would have let those
+		// through onto the delete button.
+		renderTimeline([clip(0, 600), clip(600, 4000)]);
 
 		expect(screen.queryByText("10:00.0")).not.toBeInTheDocument();
-		expect(screen.getByText("56:05.0")).toBeInTheDocument();
+		expect(screen.getByText("56:40.0")).toBeInTheDocument();
 	});
 
 	it("measures the timecode where a canvas exists, rather than averaging its length", () => {
-		// The stubbed face costs 9px a character against the 6px the jsdom fallback
-		// assumes. A 700s clip of this 3965s span is a ~159px card — roomy enough
-		// by the count (50 + 47 + 7×6 = 139) and too tight once the face is read
-		// (50 + 47 + 7×9 = 160) — so only a measured gate withholds it.
+		// The stubbed face costs 9px a character against the 6px the default stub
+		// charges. A 700s clip of this 4315s span is a 140px card — roomy enough by
+		// the count (50 + 38 + 7×6 = 130) and too tight once the face is read
+		// (50 + 38 + 7×9 = 151) — so only a measured gate withholds it.
 		measureText.mockImplementation((text: string) => ({ width: text.length * 9 }));
-		renderTimeline([clip(0, 700), clip(700, 3965)]);
+		renderTimeline([clip(0, 700), clip(700, 4315)]);
 
 		expect(screen.queryByText("11:40.0")).not.toBeInTheDocument();
-		expect(screen.getByText("54:25.0")).toBeInTheDocument();
+		expect(screen.getByText("60:15.0")).toBeInTheDocument();
+	});
+
+	it("counts every digit at the widest digit's width, as tabular numerals render", () => {
+		// The card shows its timecode in tabular numerals, where a "1" is as wide as a "0"; canvas
+		// measures proportional ones. Here "1" is a third of the other digits: measured as drawn,
+		// `1:11.1` would seem to fit this ~118px card (50 + 38 + 18) and then overflow it
+		// (50 + 38 + 42 once each digit takes the widest advance).
+		measureText.mockImplementation((text: string) => ({
+			width: [...text].reduce((w, ch) => w + ("1:.".includes(ch) ? 3 : 9), 0),
+		}));
+		renderTimeline([clip(0, 71.1), clip(71.1, 516)]);
+
+		expect(screen.queryByText("1:11.1")).not.toBeInTheDocument();
+		expect(screen.getByText("7:24.9")).toBeInTheDocument();
 	});
 
 	it("takes the card gutter out of each clip's own width", () => {
@@ -528,9 +603,10 @@ describe("V4Timeline clip row", () => {
 		const { clipEls } = renderTimeline(CLIPS);
 		const widths = clipEls.map((el) => el.style.width);
 		// (jsdom re-serialises the percentage to 4 decimals, hence the numeric read)
-		expect(widths.map((w) => w.endsWith("- 6px)"))).toEqual([true, true, true]);
+		// The last card has nothing to be separated from, so it reaches the end.
+		expect(widths.map((w) => w.endsWith("- 6px)"))).toEqual([true, true, false]);
 		for (const [i, durSec] of [600, 300, 900].entries()) {
-			expect(Number.parseFloat(widths[i].slice("calc(".length))).toBeCloseTo(
+			expect(Number.parseFloat(widths[i].replace("calc(", ""))).toBeCloseTo(
 				(durSec / TOTAL_SEC) * 100,
 				3,
 			);
@@ -607,8 +683,6 @@ describe("V4Timeline audio lane drag", () => {
 					setCurrentTime={vi.fn()}
 					playing={false}
 					onTogglePlay={vi.fn()}
-					onPrevClip={vi.fn()}
-					onNextClip={vi.fn()}
 					onEditClip={vi.fn()}
 					onAddVoiceover={props.onAddVoiceover ?? vi.fn()}
 				/>
@@ -777,5 +851,187 @@ describe("V4Timeline audio lane drag", () => {
 		// The head is pinned; only the tail comes in, so the span gets shorter.
 		expect(placement.startMs).toBe(100_000);
 		expect(placement.endMs - placement.startMs).toBeLessThan(60_000);
+	});
+});
+
+// #966. An empty lane advertises the shortcut that fills it. The letter used to be written into
+// the string, so after a rebind the hint kept teaching a key that did nothing while the toolbar
+// chip, read off the live binding, showed the right one.
+describe("V4Timeline empty-lane hints", () => {
+	afterEach(() => {
+		i18n.translate = null;
+		(window as unknown as { electronAPI?: unknown }).electronAPI = undefined;
+	});
+
+	function useEnglish() {
+		i18n.translate = (namespace, key, vars) =>
+			translate("en", namespace as I18nNamespace, key, vars);
+	}
+
+	it("names the default keys", () => {
+		useEnglish();
+		renderTimeline(undefined, { id: "ann1", startMs: 10_000, endMs: 11_000 }, [CAMERA_ASSET]);
+		expect(screen.getByText("Press Z to add zoom")).toBeInTheDocument();
+		expect(screen.getByText("Press T to add trim")).toBeInTheDocument();
+		expect(screen.getByText("Press S to add speed")).toBeInTheDocument();
+		expect(screen.getByText("Press C to add a Full Camera segment")).toBeInTheDocument();
+		expect(screen.getByText("Press M to add audio, V to record a voiceover")).toBeInTheDocument();
+	});
+
+	it("names the key the user rebound, formatted like the toolbar chip", async () => {
+		useEnglish();
+		const getShortcuts = vi.fn(async () => ({
+			addZoom: { key: "x" },
+			addTrim: { key: "t", ctrl: true, shift: true },
+			addAnnotation: { key: "n" },
+			addSpeed: { key: "j" },
+			addCameraFullscreen: { key: "k" },
+			addAudio: { key: "u" },
+			addVoiceover: { key: "r", alt: true },
+		}));
+		(window as unknown as { electronAPI?: unknown }).electronAPI = { getShortcuts };
+		renderTimeline(
+			undefined,
+			{ id: "ann1", startMs: 10_000, endMs: 11_000 },
+			[CAMERA_ASSET],
+			undefined,
+			{
+				annotationRegions: [],
+			},
+		);
+		expect(await screen.findByText("Press X to add zoom")).toBeInTheDocument();
+		expect(screen.getByText("Press Ctrl + Shift + T to add trim")).toBeInTheDocument();
+		expect(screen.getByText("Press N to add annotation")).toBeInTheDocument();
+		expect(screen.getByText("Press J to add speed")).toBeInTheDocument();
+		expect(screen.getByText("Press K to add a Full Camera segment")).toBeInTheDocument();
+		expect(
+			screen.getByText("Press U to add audio, Alt + R to record a voiceover"),
+		).toBeInTheDocument();
+		expect(screen.queryByText("Press Z to add zoom")).not.toBeInTheDocument();
+	});
+
+	// The component test reads English only; a locale that renamed or dropped a placeholder
+	// would render the raw `{{key}}`, or the stale letter, with every key set still matching.
+	it.each(getAvailableLocales())("%s interpolates the key into every hint", (locale) => {
+		const vars = { key: "⌘ + X", audioKey: "⌘ + U", voiceoverKey: "⌥ + R" };
+		for (const key of [
+			"hints.pressZoom",
+			"hints.pressTrim",
+			"hints.pressAnnotation",
+			"hints.pressSpeed",
+			"hints.pressCameraFullscreen",
+		]) {
+			const text = translate(locale, "timeline", key, vars);
+			expect(text, key).toContain("⌘ + X");
+			expect(text, key).not.toContain("{{");
+		}
+		const audio = translate(locale, "timeline", "hints.pressAudio", vars);
+		expect(audio).toContain("⌘ + U");
+		expect(audio).toContain("⌥ + R");
+		expect(audio).not.toContain("{{");
+	});
+});
+
+describe("V4Timeline toolbar tooltips", () => {
+	afterEach(() => {
+		(window as unknown as { electronAPI?: unknown }).electronAPI = undefined;
+	});
+
+	const toolbarOf = () => screen.getByRole("toolbar", { name: "toolbar.timelineTools" });
+
+	/** Opens a toolbar button's tooltip the way the keyboard does (focus opens it at once), and
+	 *  returns the text and the chip of the visible copy. */
+	async function tooltipOn(name: string) {
+		const control = screen.getByLabelText(name);
+		act(() => control.focus());
+		await screen.findByRole("tooltip");
+		const visible = document.querySelector('[data-slot="tooltip-content"]');
+		const result = {
+			text: screen.getByRole("tooltip").textContent,
+			chip: visible?.querySelector("kbd")?.textContent ?? null,
+		};
+		act(() => control.blur());
+		return result;
+	}
+
+	it("shows each creator's default key as a chip, and no key in its name", async () => {
+		renderTimeline(undefined, undefined, [CAMERA_ASSET]);
+		const chips: Record<string, string | null> = {};
+		for (const name of [
+			"buttons.addZoom",
+			"buttons.addTrim",
+			"buttons.addSpeed",
+			"buttons.addAnnotation",
+			"buttons.addCameraFullscreen",
+		]) {
+			chips[name] = (await tooltipOn(name)).chip;
+			// The name is the string alone: a "(Z)" in it would be a second, stale copy of the key.
+			expect(screen.getByLabelText(name)).toHaveAccessibleName(name);
+		}
+		expect(chips).toEqual({
+			"buttons.addZoom": "Z",
+			"buttons.addTrim": "T",
+			"buttons.addSpeed": "S",
+			"buttons.addAnnotation": "A",
+			"buttons.addCameraFullscreen": "C",
+		});
+	});
+
+	// The five creators are remappable, so the chip must follow the saved binding, not the default.
+	it("shows the key the user remapped, not the default", async () => {
+		const getShortcuts = vi.fn(async () => ({
+			addZoom: { key: "q" },
+			addTrim: { key: "t", ctrl: true, shift: true },
+		}));
+		(window as unknown as { electronAPI?: unknown }).electronAPI = { getShortcuts };
+		renderTimeline();
+		await vi.waitFor(() => expect(getShortcuts).toHaveBeenCalled());
+		await act(() => Promise.resolve());
+		expect((await tooltipOn("buttons.addZoom")).chip).toBe("Q");
+		expect((await tooltipOn("buttons.addTrim")).chip).toBe("Ctrl + Shift + T");
+		// Unset actions keep their default.
+		expect((await tooltipOn("buttons.addSpeed")).chip).toBe("S");
+	});
+
+	it("gives Auto-Focus one name and one tip for both states, with the state in aria-pressed", async () => {
+		renderTimeline();
+		const button = screen.getByLabelText("buttons.autoFocusAll");
+		expect(button).toHaveAttribute("aria-pressed");
+		const before = await tooltipOn("buttons.autoFocusAll");
+		fireEvent.click(button);
+		expect(screen.getByLabelText("buttons.autoFocusAll")).toBe(button);
+		const after = await tooltipOn("buttons.autoFocusAll");
+		expect(before.text).toBe("buttons.autoFocusAllTip");
+		expect(after.text).toBe(before.text);
+		expect(before.chip).toBeNull();
+	});
+
+	it("says what Clear timeline removes in its tooltip, without a chip", async () => {
+		renderTimeline();
+		const clear = await tooltipOn("buttons.clearTimeline");
+		expect(clear.text).toBe("buttons.clearTimeline");
+		expect(clear.chip).toBeNull();
+	});
+
+	// A native `title` next to the shared tooltip is a second, slower tooltip on the same button.
+	it("uses no native title on the toolbar buttons that have the shared tooltip", () => {
+		renderTimeline(undefined, undefined, [CAMERA_ASSET]);
+		const buttons = Array.from(toolbarOf().querySelectorAll("button"));
+		expect(buttons.length).toBeGreaterThanOrEqual(8);
+		for (const button of buttons) expect(button).not.toHaveAttribute("title");
+	});
+
+	it("names a pill on hover only when it cannot draw its own label", () => {
+		// A hairline pill draws nothing, so the title is the only place its name is.
+		renderTimeline();
+		const hairline = screen.getByTitle("toolbar.newAnnotation");
+		expect(hairline.textContent).toBe("");
+
+		// One that fills the timeline draws its label, and a title would repeat it.
+		cleanup();
+		renderTimeline(undefined, { id: "ann1", startMs: 0, endMs: TOTAL_SEC * 1000 });
+		const wide = document.querySelector("[class*=lanePill]") as HTMLElement;
+		expect(wide).toHaveTextContent("toolbar.newAnnotation");
+		expect(wide).not.toHaveAttribute("title");
 	});
 });

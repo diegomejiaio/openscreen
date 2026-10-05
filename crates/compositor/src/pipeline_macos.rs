@@ -410,6 +410,25 @@ impl Decoder {
         }
     }
 
+    /// `seek_to`, mais une cible au-delà de la dernière image se pose sur cette dernière image au
+    /// lieu de ne rien rendre. L'audio d'un enregistrement dure souvent un peu plus que sa vidéo
+    /// (de 12 ms à près d'une demi-seconde mesurés) : son clip finit alors après la dernière
+    /// image, et y entrer par la fin, en scrubant de droite à gauche, demandait une image qui
+    /// n'existe pas. Le changement de clip échouait sans bruit, et la vue gardait la scène du
+    /// clip qu'on quittait.
+    pub unsafe fn seek_to_or_last(&mut self, seconds: f64) -> Result<*mut crate::ffi::AVFrame> {
+        let frame = self.seek_to(seconds)?;
+        if !frame.is_null() {
+            return Ok(frame);
+        }
+        // Le seek a décodé jusqu'à l'EOF : `cur_pts` est celui de la dernière image. L'EOF a vidé
+        // la frame courante, donc il faut le seek complet : `take` écarte le chemin rapide.
+        match self.cur_pts.take() {
+            Some(last) => self.seek_to(last as f64 * self.tb_sec()),
+            None => Ok(frame),
+        }
+    }
+
     /// Déroule le décodeur en avant jusqu'à la première frame à `seconds` ou après, SANS
     /// jeter son état. Symétrique de `pipeline_windows::Decoder::decode_forward_to`.
     unsafe fn decode_forward_to(&mut self, seconds: f64, tb_sec: f64) -> Result<*mut crate::ffi::AVFrame> {
@@ -722,12 +741,13 @@ pub struct EncoderCandidate {
     pub pix_fmt: crate::ffi::AVPixelFormat::Type,
 }
 
-/// Paramètres d'export. Identiques à `pipeline_windows::ExportParams`.
+/// Paramètres d'export. Identiques à `pipeline_windows::ExportParams`, `bit_rate` compris.
 pub struct ExportParams {
     pub width: u32,
     pub height: u32,
     pub fps: Option<u32>,
     pub codec: ExportCodec,
+    pub bit_rate: Option<i64>,
 }
 
 impl Default for ExportParams {
@@ -737,6 +757,7 @@ impl Default for ExportParams {
             height: 1080,
             fps: None,
             codec: ExportCodec::H264,
+            bit_rate: None,
         }
     }
 }
@@ -1130,8 +1151,11 @@ pub fn run_composited_multi(
 
     // fps : explicite > dérivé du premier clip.
     let out_fps = params.fps.unwrap_or(30) as i32;
-    // bitrate proportionnel à la surface de sortie (référence : 8Mbps @ 1920x1080).
-    let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
+    // Débit fourni par l'app (taille ET cadence). Repli pour le banc et les tests seulement,
+    // le même que `pipeline_windows` : 8Mbps @ 1920x1080 quelle que soit la cadence.
+    let bit_rate = params.bit_rate.unwrap_or_else(|| {
+        ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000)
+    });
 
     // ---- decodeurs : un par chemin, réutilisés entre clips (screen ≠ webcam → 2 maps) ----
     let mut screen_decs: std::collections::HashMap<String, Decoder> =

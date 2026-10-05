@@ -17,6 +17,7 @@ import { z } from "zod";
 // Relative, not `@/`: the Electron main bundle imports this module and
 // vite-plugin-electron builds it without the root resolve.alias.
 import { toAspectRatioToken } from "../../../utils/aspectRatioUtils";
+import { clampToBound } from "../../projectDefaults";
 // Cycle-safe: `document/ids` only pulls `uuid`, and `timeline/timelineMap`'s
 // transitive value-imports (region-ventilation, virtual-preview) import from this
 // module TYPE-ONLY, so requiring them here never re-enters schema at runtime.
@@ -38,7 +39,10 @@ import { anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 //      made them AMBIGUOUS the moment two clips drew from the same asset (a
 //      duplicated clip): every reader either matched both clips or picked the
 //      first. See `upgradeV6DocumentToV7`.
-export const axcutSchemaVersion = 7;
+//   7. v8 — Auto becomes the default AspectRatio. A document that never chose a
+//      ratio stores none and reads the default, so the upgrader pins the one it
+//      has always shown, 16:9. See `upgradeV7DocumentToV8`.
+export const axcutSchemaVersion = 8;
 
 // ponytail: every region schema shares the same monotonicity rule
 // (end >= start) with the same error shape. Factor the refine so the
@@ -422,7 +426,12 @@ const annotationStyleSchema = z.object({
 	// so the toggle is reversible. Nothing renders it: the paint path still reads `backgroundColor`
 	// alone.
 	lastBackgroundColor: z.string().optional(),
-	fontSize: z.number().nonnegative().default(32),
+	// Read into its bound rather than refused: a size of 0, which an emptied field used to store,
+	// must still open, as the smallest text instead of none.
+	fontSize: z
+		.number()
+		.default(32)
+		.transform((size) => clampToBound(size, "annotationFontSize")),
 	fontFamily: z.string().default("Inter"),
 	fontWeight: z.enum(["normal", "bold"]).default("bold"),
 	fontStyle: z.enum(["normal", "italic"]).default("normal"),
@@ -455,9 +464,16 @@ export const annotationRegionSchema = endGteStart(
 		content: z.string().default(""),
 		textContent: z.string().optional(),
 		imageContent: z.string().optional(),
+		// The box `position`, `size` and the text size are measured against. `"frame"`, the output
+		// frame: where text, images and arrows are placed, so padding and the footage's size never
+		// move them. Absent, the footage (screen rect): a privacy blur always, since it must stay on
+		// what it hides, and every annotation saved before frame placement existed. See
+		// `annotations/placement.ts`.
+		space: z.literal("frame").optional(),
+		// At least 0 too, except for an arrow: see the refine below.
 		position: z.object({
-			x: z.number().min(0).max(100),
-			y: z.number().min(0).max(100),
+			x: z.number().max(100),
+			y: z.number().max(100),
 		}),
 		size: z.object({
 			width: z.number().positive(),
@@ -471,6 +487,12 @@ export const annotationRegionSchema = endGteStart(
 	}),
 	"endMs",
 	"startMs",
+).refine(
+	// The compositor draws an arrow in the middle of its square box, so an arrow drawn against the
+	// frame's left or top edge has a box that starts before the frame (`annotations/arrowBounds.ts`).
+	// Its strokes stay inside. Every other box starts inside the frame.
+	(region) => region.type === "figure" || (region.position.x >= 0 && region.position.y >= 0),
+	{ message: "position must be at least 0", path: ["position"] },
 );
 
 export const zoomRegionSchema = endGteStart(
@@ -493,16 +515,18 @@ export const zoomRegionSchema = endGteStart(
 		}),
 		focusMode: z.enum(["manual", "auto"]).optional(),
 		/** The zoom's 3D camera (`Rotation3DPreset` in `components/video-editor/types.ts` — same
-		 *  literal list, duplicated here): a fixed angle, or the camera that turns to the cursor
-		 *  (`crates/compositor/src/camera.rs`). Absent means a flat screen. */
-		rotationPreset: z.enum(["iso", "left", "right", "follow-cursor"]).optional(),
+		 *  literal list, duplicated here): a fixed angle, or the camera that orbits the screen
+		 *  (`crates/compositor/src/camera.rs`), placed by the zoom's focus mode. Absent means a flat
+		 *  screen. A stored `iso`, the retired "turned left, seen from above" angle, reads as
+		 *  `left`, which kept its look (`readRotation3DPreset`): every document load goes through
+		 *  this parse. A stored `follow-cursor` never reaches it (`readFollowCursorAsAutoOrbit`). */
+		rotationPreset: z
+			.enum(["iso", "left", "right", "orbit"])
+			.transform((preset) => (preset === "iso" ? "left" : preset))
+			.optional(),
 		customScale: z.number().positive().optional(),
 		source: z.enum(["auto", "manual"]).optional(),
 		hideCursor: z.boolean().optional(),
-		/** Each click gives an impact: a fixed-angle `rotationPreset` presses the tilted plane
-		 *  toward the clicked side, `follow-cursor` recoils the camera. Needs a `rotationPreset`;
-		 *  omitted (never `false`) when off. */
-		clickImpact: z.literal(true).optional(),
 	}),
 	"endMs",
 	"startMs",
@@ -879,6 +903,31 @@ export function upgradeV6DocumentToV7(raw: unknown): unknown {
 }
 
 /**
+ * v7 → v8 — Auto becomes the default AspectRatio, and older documents keep their frame.
+ *
+ * A project whose user never opened the ratio menu stores no `aspectRatio` at all: every
+ * reader falls back to the default (`getEditorSettings`). Changing that default would
+ * therefore reshape every such project on its next open, which is the silent drift v6
+ * removed for `"native"`. So the value those documents have always shown, 16:9, is written
+ * down; only documents created from v8 on take the new default.
+ *
+ * Mirrors the read: `getEditorSettings` takes any stored value as is, so only a missing one
+ * (no envelope, or no key) is pinned.
+ */
+export function upgradeV7DocumentToV8(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return raw;
+	const doc = raw as Record<string, unknown>;
+	if (doc.schemaVersion !== 7) return raw;
+
+	const legacy =
+		doc.legacyEditor && typeof doc.legacyEditor === "object" && !Array.isArray(doc.legacyEditor)
+			? (doc.legacyEditor as Record<string, unknown>)
+			: null;
+	if (legacy?.aspectRatio != null) return { ...doc, schemaVersion: 8 };
+	return { ...doc, schemaVersion: 8, legacyEditor: { ...legacy, aspectRatio: "16:9" } };
+}
+
+/**
  * Runs the whole upgrade chain on a raw, untrusted value. Idempotent: each step
  * is gated on an exact `schemaVersion`, so an already-current document passes
  * through untouched.
@@ -938,20 +987,148 @@ function dropAudioAnchoredTrims(raw: unknown): unknown {
 	return { ...doc, timeline: { ...timeline, trimRanges: kept } };
 }
 
+/**
+ * Raise to its start the end of every transcript segment or word stored BEFORE its start.
+ *
+ * The transcription core before a9fdd97ff (transformers.js, removed 2026-07-05) clamped a
+ * timestamp's end to the audio length but not its start, so a Whisper hallucination past the
+ * end of the audio ("very good" at 13.5 s in 6.76 s of sound) was written as [13.5, 6.76].
+ * The schema rejects that, and a single such word made the whole project unreadable: it
+ * vanished from the project list.
+ *
+ * Raising the end loses nothing: the text, any edit made to it, and every id a segment or a
+ * caption refers to all survive. The word becomes a zero-length point at its start, which in
+ * the known case lies past the media, so it plays and shows nowhere.
+ *
+ * No `schemaVersion` bump, like `dropAudioAnchoredTrims`: the document comes back untouched
+ * when there is nothing to repair. Runs on RAW, untrusted input, so every read is guarded.
+ */
+function raiseInvertedTranscriptEnds(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+	const doc = raw as Record<string, unknown>;
+	let repaired = false;
+	const repairSpans = (spans: unknown): unknown => {
+		if (!Array.isArray(spans)) return spans;
+		return spans.map((entry) => {
+			if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+			const span = entry as Record<string, unknown>;
+			if (typeof span.startSec !== "number" || typeof span.endSec !== "number") return entry;
+			if (span.endSec >= span.startSec) return entry;
+			repaired = true;
+			return { ...span, endSec: span.startSec };
+		});
+	};
+	const repairTranscript = (value: unknown): unknown => {
+		if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+		const transcript = value as Record<string, unknown>;
+		return {
+			...transcript,
+			segments: repairSpans(transcript.segments),
+			words: repairSpans(transcript.words),
+		};
+	};
+	const transcript = repairTranscript(doc.transcript);
+	const transcripts = Array.isArray(doc.transcripts)
+		? doc.transcripts.map(repairTranscript)
+		: doc.transcripts;
+	return repaired ? { ...doc, transcript, transcripts } : raw;
+}
+
+/**
+ * Carry a zoom's click impact over to the cursor setting it became.
+ *
+ * Builds up to v1.13.0 stored `clickImpact` on each zoom range, and only a 3D camera used it.
+ * It is now a cursor setting (`legacyEditor.cursorClickImpact`) that acts under every camera,
+ * and the zoom range schema no longer has the key, so the parse would drop it silently. A
+ * document that turned it on for any zoom keeps it on, now for the whole project; one that
+ * never did, or already stores the cursor setting, comes back untouched.
+ *
+ * No `schemaVersion` bump, like `dropAudioAnchoredTrims`. Runs on RAW, untrusted input, so
+ * every read is guarded.
+ */
+function liftZoomClickImpact(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+	const doc = raw as Record<string, unknown>;
+	const zooms = Array.isArray(doc.zoomRanges) ? doc.zoomRanges : [];
+	const on = zooms.some(
+		(zoom) =>
+			zoom && typeof zoom === "object" && (zoom as Record<string, unknown>).clickImpact === true,
+	);
+	if (!on) return raw;
+	const legacy =
+		doc.legacyEditor && typeof doc.legacyEditor === "object" && !Array.isArray(doc.legacyEditor)
+			? (doc.legacyEditor as Record<string, unknown>)
+			: null;
+	if (typeof legacy?.cursorClickImpact === "boolean") return raw;
+	return { ...doc, legacyEditor: { ...legacy, cursorClickImpact: true } };
+}
+
+/**
+ * Read a zoom stored with the `follow-cursor` camera as the `orbit` camera under auto focus.
+ *
+ * `follow-cursor` was the orbit before it had a manual mode: it followed the cursor whatever the
+ * zoom's focus mode said, and most such zooms carry "manual", the default. The camera now reads
+ * the focus mode like every other zoom, so the auto focus is written down along with the new
+ * name, and the zoom keeps following the cursor as it did.
+ *
+ * No `schemaVersion` bump, as for `iso` → `left`: the retired value is the marker, and nothing
+ * writes it any more, so a second run finds nothing. A document without such a zoom comes back
+ * untouched. Runs on RAW, untrusted input, so every read is guarded.
+ */
+function readFollowCursorAsAutoOrbit(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+	const doc = raw as Record<string, unknown>;
+	if (!Array.isArray(doc.zoomRanges)) return raw;
+	let renamed = false;
+	const zoomRanges = doc.zoomRanges.map((entry) => {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+		const zoom = entry as Record<string, unknown>;
+		if (zoom.rotationPreset !== "follow-cursor") return entry;
+		renamed = true;
+		return { ...zoom, rotationPreset: "orbit", focusMode: "auto" };
+	});
+	return renamed ? { ...doc, zoomRanges } : raw;
+}
+
 export function migrateRawDocumentToCurrent(raw: unknown): unknown {
-	return dropAudioAnchoredTrims(
-		upgradeV6DocumentToV7(upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw)))),
+	return readFollowCursorAsAutoOrbit(
+		raiseInvertedTranscriptEnds(
+			dropAudioAnchoredTrims(
+				liftZoomClickImpact(
+					upgradeV7DocumentToV8(
+						upgradeV6DocumentToV7(
+							upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw))),
+						),
+					),
+				),
+			),
+		),
 	);
 }
 
-// PURE v7 validation. Callers that read a document from disk (or any other
+// PURE v8 validation. Callers that read a document from disk (or any other
 // source that might carry an older `schemaVersion`) MUST run
 // `migrateRawDocumentToCurrent` on the raw value first. The previous
 // implementation wrapped this schema in a `z.preprocess` that re-ran the whole
-// v3→…→v7 chain on EVERY parse, including in-memory parses of documents that
+// v3→…→v8 chain on EVERY parse, including in-memory parses of documents that
 // were already current. Hoisting it to load time makes the in-memory parse a
-// single `z.literal(7)` + shape check.
+// single `z.literal(8)` + shape check.
 export const documentSchema = documentSchemaShape;
+
+/**
+ * Whether a parsed `.openscreen` file is an AxcutDocument — what the editor saves, at any
+ * `schemaVersion` — rather than a legacy v2 `{ version, media, editor }` project, which must go
+ * through `migrateProjectDataToAxcutDocument` instead (it reads `.media` / `.editor` and would
+ * yield an empty document from a current one).
+ */
+export function isAxcutDocumentFile(raw: unknown): raw is Record<string, unknown> {
+	return typeof raw === "object" && raw !== null && "schemaVersion" in raw && "timeline" in raw;
+}
+
+/** A document read from a file, at any supported `schemaVersion`: upgraded, then validated. */
+export function parseDocumentFile(raw: unknown): AxcutDocument {
+	return documentSchema.parse(migrateRawDocumentToCurrent(raw));
+}
 
 export const createProjectInputSchema = z.object({
 	title: z.string().trim().min(1).default("Untitled Project"),
@@ -1132,13 +1309,31 @@ export function ensureDocument(value: unknown): AxcutDocument {
 }
 
 /**
+ * The level and ramps a track starts with. A music bed sits UNDER the voice, at −18 dB,
+ * and eases in and out over a second instead of cutting in; a voiceover is voice, levelled
+ * by the export like the recording itself, so it starts flat.
+ *
+ * Applied when a track is created, and by the inspector's reset. Deliberately NOT the
+ * schema's parse defaults above: a track saved before these existed keeps the level its
+ * author set.
+ */
+export function audioTrackDefaults(
+	kind: AxcutAudioTrack["kind"],
+): Pick<AxcutAudioTrack, "gainDb" | "fadeInMs" | "fadeOutMs"> {
+	return kind === "music"
+		? { gainDb: -18, fadeInMs: 1000, fadeOutMs: 1000 }
+		: { gainDb: 0, fadeInMs: 0, fadeOutMs: 0 };
+}
+
+/**
  * Build a timeline audio track for an imported or recorded audio asset
  * (issue #350). The head is placed at `timelineStartSec` (RAW/document timeline
  * seconds — the same clock the ruler, playhead and clip `timelineStartSec` use,
  * NOT the trim-compressed output programme; the export projects it with
  * `projectRawTimelineSecToPlayback`) and the track spans the whole source file
- * unless the caller asks for a shorter `spanSec`. Parsed through the schema so
- * every default (gain, fades, loop) is applied in one place.
+ * unless the caller asks for a shorter `spanSec`. Starts at its kind's
+ * `audioTrackDefaults`, then parsed through the schema so every other default
+ * (loop, mute) is applied in one place.
  *
  * The result is UNANCHORED — `clipId` is absent. Callers place it through
  * `anchorAudioTrackFragments`, which ventilates it across the clips it covers.
@@ -1157,10 +1352,12 @@ export function createAudioTrack(input: {
 	// A track with no measurable source still needs a visible span, or the pill
 	// is zero-width and cannot be grabbed to fix.
 	const spanMs = Math.max(1, Math.round((input.spanSec ?? input.durationSec) * 1000));
+	const kind = input.kind ?? "music";
 	return audioTrackSchema.parse({
 		id: createId("audio"),
 		assetId: input.assetId,
-		kind: input.kind ?? "music",
+		kind,
+		...audioTrackDefaults(kind),
 		durationSec: input.durationSec,
 		startMs,
 		endMs: startMs + spanMs,

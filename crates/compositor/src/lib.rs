@@ -9,7 +9,7 @@
 //! # Backends
 //!
 //! - Windows : `d3d_windows::Gpu` (D3D11 + D3D11VA), shaders HLSL compilés via `D3DCompile`
-//!   à l'exécution, `cpu_frames_windows.rs` pour l'axe décodage logiciel du backend CPU.
+//!   au build (`build.rs`), `cpu_frames_windows.rs` pour l'axe décodage logiciel du backend CPU.
 //!   Le moteur est dans `compositor_windows.rs` et le rastériseur de texte dans `text_windows.rs`.
 //!
 //! - macOS : `d3d_macos::Gpu` (Metal + VideoToolbox), shaders MSL compilés via
@@ -37,18 +37,24 @@ pub mod export_probe;
 pub mod ffi;
 pub mod frame_geometry;
 pub mod gif_export;
+pub mod gif_export_control;
 pub mod regions;
 // Multiplateforme à dessein : n'utilise que libavformat (liée sur les trois
 // cibles) et le shim C. Seul Linux l'appelle aujourd'hui, parce que c'est la
 // seule plateforme dont la capture passe par `MediaRecorder`, mais rien dedans
 // n'est spécifique à Linux.
+pub mod prism_mesh;
 pub mod remux;
 pub mod scene;
+pub mod sculpt;
 // Segmentation du sujet webcam (masque -> `t3`). Le module compile toujours ; sans la feature
 // `segmentation` ses deux entrées échouent proprement, ce qui garde le reste du crate
 // indépendant du choix de packaging d'ONNX Runtime.
 pub mod segmentation;
+// Livraison de la preview par textures partagées (Windows) ; la tenue des cases est portable.
+pub mod shared_frames;
 pub mod text_anim;
+pub mod text_fonts;
 pub mod text_plate;
 pub(crate) mod timeline_walk;
 

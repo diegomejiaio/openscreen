@@ -135,13 +135,13 @@ openscreen export demo.openscreen -o out.mp4 --auto-zoom --json
 | `--quality <medium\|good\|source>` | Output size: `medium` is 720p, `good` is 1080p, `source` follows the smallest clip after cropping, so it never upscales. A GIF starts from this size too |
 | `--gif-fps <15\|20\|25\|30>` | GIF frame rate |
 | `--gif-size <medium\|large\|original>` | GIF height cap applied to that size: 720, 1080, or none |
-| `--auto-zoom` | Before rendering, add zooms where the recorded pointer paused, with the same engine as the editor's [automatic zooms](/features/auto-zoom/). Existing zooms are kept, and new ones never overlap them |
+| `--auto-zoom` | Before rendering, add zooms on the recorded clicks, with the same engine as the editor's [automatic zooms](/features/auto-zoom/). Existing zooms are kept, and new ones keep clear of them |
 | `--audio <file>` | Mix a voiceover file (mp3, wav or m4a) into the MP4. MP4 only |
 | `--audio-mode <mix\|replace>` | `mix` (default) keeps the recording's audio under the voiceover at 40% gain; `replace` drops it |
 | `--audio-offset <seconds>` | Delay before the voiceover starts (default 0) |
 | `--json` | NDJSON progress and result on stdout |
 
-MP4 exports from the CLI are always **H.264 at 60 fps**. There is no codec or frame-rate option. The desktop app's [Export](./export.md) dialog also offers H.265 and 24 or 30 fps.
+MP4 exports from the CLI are always **H.264 at 60 fps**. There is no codec or frame-rate option. The desktop app's [Export](./export.md) dialog also offers 24 or 30 fps.
 
 `--audio` works after the render: the video stream is copied untouched, and a new AAC track is mixed and written over the same output file.
 
@@ -158,7 +158,7 @@ openscreen captions demo.openscreen --min-words 2 --max-words 7
 openscreen export demo.openscreen -o demo.mp4   # captions are burned into the video
 ```
 
-- `--min-words` and `--max-words` set the words per caption. Defaults: 2 and 7.
+- `--min-words` and `--max-words` set the words per caption. Each takes 1 to 12, the range the editor offers. Defaults: 2 and 7.
 - Running it again replaces the captions it added before. Annotations you added yourself are kept.
 - The project's screen video must have an audio track, for example from `record --mic`.
 - Captions are burned into the export. There is no subtitle file output. See [Captions](./captions.md).
@@ -247,7 +247,7 @@ node -e '
   fs.writeFileSync("demo.openscreen", JSON.stringify(p, null, 2));
 '
 
-# 4. Render, with automatic zooms added where the pointer paused
+# 4. Render, with automatic zooms added on the recorded clicks
 openscreen export demo.openscreen -o demo.mp4 --auto-zoom --json
 ```
 

@@ -20,6 +20,7 @@ import Translate from "@docusaurus/Translate";
 import Heading from "@theme/Heading";
 import { Fragment } from "react";
 
+import DemoLoop from "../DemoLoop";
 import LocaleLink from "../LocaleLink";
 import { getFeatures } from "./content";
 import { PANELS } from "./panels";
@@ -55,15 +56,24 @@ export default function Showcase() {
 							<p className={styles.fact}>{item.fact}</p>
 						</div>
 
-						{/* One label for the whole drawing. Without it a screen reader walks
-						    two dozen interface fragments — "Display 1", "60 fps", "62%" —
-						    that mean nothing out of the picture they are drawn in.
-						    The drawing is in English on every locale, so it says so; the
-						    figure does not, its label is translated. */}
-						<figure className={styles.figure} role="img" aria-label={item.label}>
-							<span className={styles.glow} />
-							<div lang="en">{PANELS[item.id]}</div>
-						</figure>
+						{item.video ? (
+							<div className={styles.figure}>
+								<span className={styles.glow} />
+								<div className={`${styles.panel} ${styles.filmPanel}`}>
+									<DemoLoop name={item.video} />
+								</div>
+							</div>
+						) : (
+							/* One label for the whole drawing. Without it a screen reader walks
+							   two dozen interface fragments — "Display 1", "60 fps", "62%" —
+							   that mean nothing out of the picture they are drawn in.
+							   The drawing is in English on every locale, so it says so; the
+							   figure does not, its label is translated. */
+							<figure className={styles.figure} role="img" aria-label={item.label}>
+								<span className={styles.glow} />
+								<div lang="en">{PANELS[item.id]}</div>
+							</figure>
+						)}
 					</article>
 				))}
 			</div>

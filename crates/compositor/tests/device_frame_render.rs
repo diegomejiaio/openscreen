@@ -153,7 +153,7 @@ fn scene_json_themed(
                        "screenRect":{{"x":0.08,"y":0.08,"width":0.84,"height":0.84}}}},
             "effects":{{"padding":0.25,"blur":false,"shadow":{shadow},"roundnessFrac":0.02,"motionBlur":0{frame}}},
             "background":{{"kind":"gradient","angleDeg":135,"stops":["#5b6ee1","#e8a0bf"]}},
-            "zoomRegions":[{{"clipIndex":0,"startSec":0,"endSec":10,"scale":1,"focusX":0.5,"focusY":0.5,"focusMode":"manual","rotation":{rotation}}}],
+            "zoomRegions":[{{"clipIndex":0,"startSec":0,"endSec":10,"scale":1,"focusX":0.5,"focusY":0.5,"rotation":{rotation}}}],
             "annotations":[],
             "cursor":{cursor},
             "cropByClip":[null],
@@ -163,9 +163,12 @@ fn scene_json_themed(
 
 const NO_CURSOR: &str = r#"{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}"#;
 
+/// La caméra en orbite, en focus auto : celle qui bouge avec le pointeur.
+const ORBIT: &str = r#""orbit","focusMode":"auto""#;
+
 fn cfg() -> Cfg {
     let mut cfg = Cfg::c8();
-    cfg.bg_blur = false;
+    cfg.bg_blur = 0.0;
     cfg.zoom = false;
     cfg.layout_anim = false;
     cfg.cursor = false;
@@ -223,6 +226,11 @@ fn aperture(json: &str, out: (u32, u32)) -> ([(f32, f32); 4], [f32; 4]) {
 
 /// Le plan de la scène, par le même chemin que les backends.
 fn plan(json: &str, out: (u32, u32), src: (u32, u32)) -> FrameGeometry {
+    plan_at(json, out, src, T)
+}
+
+/// `plan` à l'instant `t` de la timeline.
+fn plan_at(json: &str, out: (u32, u32), src: (u32, u32), t: f32) -> FrameGeometry {
     let scene = Scene::from_json(json).expect("scène valide");
     let cfg = cfg();
     let mut live = live_params_from_scene(&scene);
@@ -240,7 +248,7 @@ fn plan(json: &str, out: (u32, u32), src: (u32, u32)) -> FrameGeometry {
         live,
         scene: Some(&scene),
         cursor: None,
-        timeline_t_override: Some(T),
+        timeline_t_override: Some(t),
         programme_time: None,
     })
 }
@@ -263,7 +271,12 @@ struct Geo {
 
 impl Geo {
     fn new(json: &str, out: (u32, u32), src: (u32, u32)) -> Geo {
-        let g = plan(json, out, src);
+        Geo::at(json, out, src, T)
+    }
+
+    /// `Geo::new` à l'instant `t` : pendant une rampe de zoom, le plan d'une autre frame.
+    fn at(json: &str, out: (u32, u32), src: (u32, u32), t: f32) -> Geo {
+        let g = plan_at(json, out, src, t);
         let (rw, rh) = (out.0 as f32, out.1 as f32);
         let s_px = [g.s_dst[2] * rw, g.s_dst[3] * rh];
         let center = [(g.s_dst[0] + g.s_dst[2] * 0.5) * rw, (g.s_dst[1] + g.s_dst[3] * 0.5) * rh];
@@ -451,7 +464,7 @@ fn each_device_draws_around_untouched_footage() {
         let blue = FakeFrame::new(&gpu, src, Tint::Blue);
         let orange = FakeFrame::new(&gpu, src, Tint::Orange);
         for &device in &DEVICES {
-            for rotation in ["null", r#""iso""#, r#""follow-cursor""#] {
+            for rotation in ["null", r#""iso""#, ORBIT] {
                 let json = scene_json(device, rotation, 0.0, NO_CURSOR, out);
                 let a = render(&comp, &blue, &json, None, T);
                 let b = render(&comp, &orange, &json, None, T);
@@ -563,13 +576,73 @@ fn the_device_follows_the_tilt_and_the_orbit_camera() {
             flat == render(&comp, &screen, &scene_json(device, "null", 0.0, NO_CURSOR, (W, H)), None, T),
             "{device} : le rendu à plat n'est pas stable"
         );
-        for rotation in [r#""iso""#, r#""left""#, r#""follow-cursor""#] {
+        for rotation in [r#""iso""#, r#""left""#, ORBIT] {
             let tilted = render(&comp, &screen, &scene_json(device, rotation, 0.0, NO_CURSOR, (W, H)), None, T);
             let moved = differing(&flat, &tilted, 8);
             println!("{device:<8} {rotation:<16} {moved:>7} px bougent");
             assert!(moved > (W * H) as usize / 20, "{device} {rotation} : l'appareil n'a pas suivi");
             // (Le cadre peut sortir de l'image : le métrage garde sa taille et le cadre pousse
             // vers l'extérieur, la sortie le coupe. `the_footage_box_is_the_same_under_every_frame`.)
+        }
+    }
+}
+
+/// Le flou de mouvement prend l'écran CADRÉ en bloc, à plat comme sous une caméra 3D : pendant la
+/// rampe du zoom, le corps du cadre (lunette, barre de titre) file avec le métrage, donc ses pixels
+/// changent avec le flou. Au palier, le rendu flou est le rendu net, à l'octet. Sous un angle fixe
+/// ou la caméra en orbite, seul le métrage était flouté : l'appareil restait net autour de lui.
+#[test]
+fn the_device_trails_with_the_screen_under_motion_blur() {
+    let Some(gpu) = gpu() else { return };
+    let comp = Compositor::new_sized(&gpu, W, H).expect("compositor");
+    let blue = FakeFrame::new(&gpu, SRC, Tint::Blue);
+    // Zoom ×1,6 de 2 à 6 s : sa rampe d'entrée court de 1,14 à 2 s, vitesse au plus fort vers 1,26 s.
+    // Le petit rect garde l'appareil dans l'image pendant la rampe.
+    let json = |device: &str, rotation: &str, blur: f32| {
+        let json = with_rect(&scene_json(device, rotation, 0.6, NO_CURSOR, (W, H)), CLIPS[0].1)
+            .replace(r#""startSec":0,"endSec":10,"scale":1,"#, r#""startSec":2,"endSec":6,"scale":1.6,"#)
+            .replace(r#""roundnessFrac":0.02,"motionBlur":0"#, &format!(r#""roundnessFrac":0.02,"motionBlur":{blur}"#));
+        assert!(json.contains(r#""scale":1.6"#), "la substitution doit poser la rampe");
+        json
+    };
+    for device in ["laptop", "window"] {
+        for rotation in ["null", r#""iso""#, ORBIT] {
+            let case = format!("{device} {rotation}");
+            let still = |blur| render(&comp, &blue, &json(device, rotation, blur), None, 4.0);
+            assert!(still(0.0) == still(1.0), "{case} : immobile, le flou ne doit rien changer");
+            let t = 1.3;
+            let sharp = render(&comp, &blue, &json(device, rotation, 0.0), None, t);
+            let blurred = render(&comp, &blue, &json(device, rotation, 1.0), None, t);
+            // Le corps du cadre à CET instant, sondé tous les 4 px du plan : hors du métrage et dans
+            // le corps, loin de leurs deux franges. Ni l'ombre ni le fond n'y entrent.
+            let g = Geo::at(&json(device, rotation, 0.0), (W, H), SRC, t);
+            let [l, top, r, b] = g.body;
+            let (mut probes, mut smeared) = (0usize, 0usize);
+            let mut y = -top;
+            while y <= g.s_px[1] + b {
+                let mut x = -l;
+                while x <= g.s_px[0] + r {
+                    if g.footage_sd([x, y]) > 3.5 && g.body_sd([x, y]) < -2.0 {
+                        let (ox, oy) = g.to_out([x, y]);
+                        if let (Some(a), Some(c)) = (px(&sharp, (W, H), ox, oy), px(&blurred, (W, H), ox, oy)) {
+                            probes += 1;
+                            smeared += a.iter().zip(c).any(|(p, q)| p.abs_diff(q) > 8) as usize;
+                        }
+                    }
+                    x += 4.0;
+                }
+                y += 4.0;
+            }
+            println!("{case:<24} {smeared:>5} / {probes:>5} sondes du cadre changent avec le flou");
+            if let Some(dir) = out_dir("OPENSCREEN_DEVICE_OUT") {
+                let name = format!("trail-{device}-{}", rotation.trim_matches('"'));
+                save(&dir, &format!("{name}-sharp"), &sharp, (W, H));
+                save(&dir, &format!("{name}-blurred"), &blurred, (W, H));
+            }
+            assert!(probes > 50, "{case} : trop peu de sondes du cadre ({probes})");
+            // Le milieu d'un aplat (la barre de titre) file dans lui-même : seules ses franges
+            // changent. Net, le cadre ne change en AUCUNE sonde.
+            assert!(smeared * 50 > probes, "{case} : le cadre reste net pendant le zoom ({smeared} / {probes})");
         }
     }
 }
@@ -619,7 +692,7 @@ fn no_seam_lets_the_wallpaper_through() {
         let screen = FakeFrame::new(&gpu, SRC, Tint::Blue);
         for frame in ["window", "laptop", "phone", "monitor"] {
             for roundness in [0.0f32, MAX_ROUND] {
-                for rotation in ["null", r#""iso""#, r#""follow-cursor""#] {
+                for rotation in ["null", r#""iso""#, ORBIT] {
                     let json = on_green(&with_roundness(&scene_json(frame, rotation, 0.6, NO_CURSOR, out), roundness));
                     let rgba = render(&comp, &screen, &json, None, T);
                     let g = Geo::new(&json, out, SRC);
@@ -660,7 +733,7 @@ fn the_bezel_fills_the_corners_at_maximum_roundness() {
     let blue = FakeFrame::new(&gpu, SRC, Tint::Blue);
     let orange = FakeFrame::new(&gpu, SRC, Tint::Orange);
     for frame in ["window", "laptop", "phone", "monitor"] {
-        for rotation in ["null", r#""iso""#, r#""follow-cursor""#] {
+        for rotation in ["null", r#""iso""#, ORBIT] {
             let json = on_green(&with_roundness(&scene_json(frame, rotation, 0.0, NO_CURSOR, out), MAX_ROUND));
             let (a, b) = (render(&comp, &blue, &json, None, T), render(&comp, &orange, &json, None, T));
             let g = Geo::new(&json, out, SRC);
@@ -775,7 +848,7 @@ fn the_device_shadow_follows_the_silhouette() {
     let spread = 40.0 / 1080.0 * W.min(H) as f32;
     for frame in ["laptop", "monitor", "phone"] {
         for theme in ["light", "dark"] {
-            for rotation in ["null", r#""iso""#, r#""follow-cursor""#] {
+            for rotation in ["null", r#""iso""#, ORBIT] {
                 let json = |shadow: f32, f: &str| {
                     with_rect(&scene_json_themed(f, theme, rotation, shadow, NO_CURSOR, (W, H)), rect)
                 };
@@ -991,7 +1064,7 @@ fn v3_renders() {
     for frame in all {
         for theme in ["light", "dark"] {
             let mut row = Vec::new();
-            for (cam, rotation) in [("flat", "null"), ("iso", r#""iso""#), ("orbit", r#""follow-cursor""#)] {
+            for (cam, rotation) in [("flat", "null"), ("iso", r#""iso""#), ("orbit", ORBIT)] {
                 let json = with_rect(&scene_json_themed(frame, theme, rotation, 1.0, NO_CURSOR, (W, H)), CLIPS[0].1);
                 let i = img(render(&comp, &screen, &json, None, T));
                 save_in(&dir, "shadows", &format!("{frame}-{cam}-{theme}"), &i);
@@ -1041,13 +1114,13 @@ fn orbit_clip_frames() {
     std::fs::write(&path, format!(r#"{{"samples":[{}]}}"#, samples.join(","))).expect("sidecar");
     let track = CursorTrack::load(path.to_str().unwrap(), 0.0, 10.0).expect("piste curseur");
     let cursor = format!(
-        r#"{{"show":true,"size":4,"smoothing":0.2,"motionBlur":0,"clickBounce":2.5,"model3d":true,"clipToBounds":false,"theme":"default","cursorSprites":{{"arrow":{{"path":"{}/arrow.png","hotspotX":0.119,"hotspotY":0.0874}}}}}}"#,
+        r#"{{"show":true,"size":4,"smoothing":0.2,"motionBlur":0,"clickBounce":2.5,"model3d":true,"clipToBounds":false,"theme":"default","cursorSprites":{{"arrow":{{"path":"{}/arrow.png","hotspotX":0.1205,"hotspotY":0.0881}}}}}}"#,
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../public/cursors/default")
             .to_string_lossy()
             .replace('\\', "/")
     );
-    let json = scene_json("laptop", r#""follow-cursor""#, 0.6, &cursor, (W, H));
+    let json = scene_json("laptop", ORBIT, 0.6, &cursor, (W, H));
     for k in 0..180 {
         let t = k as f32 / 30.0;
         let rgba = render(&comp, &screen, &json, Some(&track), t);
@@ -1361,9 +1434,9 @@ fn parked_track(name: &str, x: f32, y: f32) -> CursorTrack {
 const SHOWN_CURSOR: &str = r#"{"show":true,"size":0.2,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default","cursorSprites":{}}"#;
 
 /// La caméra en orbite qui zoome de `zoom` : la région de zoom de `scene_json`, sous
-/// `follow-cursor`, à l'échelle voulue.
+/// l'orbite en focus auto, à l'échelle voulue.
 fn orbit_json(frame: &str, zoom: f32, out: (u32, u32)) -> String {
-    scene_json(frame, r#""follow-cursor""#, 0.6, SHOWN_CURSOR, out).replace(r#""scale":1,"#, &format!(r#""scale":{zoom},"#))
+    scene_json(frame, ORBIT, 0.6, SHOWN_CURSOR, out).replace(r#""scale":1,"#, &format!(r#""scale":{zoom},"#))
 }
 
 /// Le socle du portable ne couvre JAMAIS le métrage que le zoom montre : au plus fort zoom et aux
@@ -1553,7 +1626,7 @@ fn v4_near_clip() {
     let comp = Compositor::new_sized(&gpu, W, H).expect("compositor");
     let screen = FakeFrame::new(&gpu, SRC, Tint::Blue);
     let track = parked_track("near", 0.5, 0.97);
-    let json = with_rect(&scene_json("laptop", r#""follow-cursor""#, 0.6, SHOWN_CURSOR, (W, H)), CLIPS[0].1)
+    let json = with_rect(&scene_json("laptop", ORBIT, 0.6, SHOWN_CURSOR, (W, H)), CLIPS[0].1)
         .replace(
             r#""zoomRegions":[{"clipIndex":0,"startSec":0,"endSec":10,"scale":1,"#,
             r#""zoomRegions":[{"clipIndex":0,"startSec":1.2,"endSec":4.4,"scale":3.5,"#,
@@ -1609,7 +1682,7 @@ fn bench_the_device_frame_at_1080p() {
         }
         t0.elapsed().as_secs_f64() * 10.0
     };
-    for rotation in ["null", r#""iso""#, r#""follow-cursor""#] {
+    for rotation in ["null", r#""iso""#, ORBIT] {
         for &device in &DEVICES {
             let (off, on) = (
                 scene_json("none", rotation, 0.6, NO_CURSOR, (1920, 1080)),

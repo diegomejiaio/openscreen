@@ -33,14 +33,14 @@ Unter Windows hält OpenScreen das HUD und das Notizfenster aus der Aufnahme her
 
 ## 2. Den Bildschirm oder ein Fenster aufnehmen {#2-record-the-screen-or-a-window}
 
-1. Unter Windows und macOS öffnest du die Quellenauswahl und wählst unter **Screens** einen Bildschirm oder unter **Windows** ein einzelnes Fenster. Unter Linux gibt es keine Auswahl in der App: Das Systemportal fragt bei jedem Take nach der Quelle. OpenScreen hat keine Bereichsaufnahme. Nimm also das Fenster oder den Bildschirm auf und schneide den Clip dann im Editor zu.
+1. Unter Windows und macOS öffnest du die Quellenauswahl und wählst unter **Bildschirme** einen Bildschirm oder unter **Fenster** ein einzelnes Fenster. Unter macOS 15.2 und neuer wählst du Bildschirm oder Fenster stattdessen in der Systemauswahl von Apple aus. Unter Linux gibt es keine Auswahl in der App: Das Systemportal fragt bei jedem Take nach der Quelle. OpenScreen hat keine Bereichsaufnahme. Nimm also das Fenster oder den Bildschirm auf und schneide den Clip dann im Editor zu.
 2. Schalte das Mikrofon ein und prüfe seine Pegelanzeige. Schalte Systemaudio ein, wenn das Produkt Töne macht, und die Webcam, wenn du im Bild sein willst.
 3. Behalte den bearbeitbaren Cursormodus, den Standard: Der Zeiger wird als Daten aufgezeichnet, du kannst ihn also später neu gestalten. Klicks werden unter Windows aufgezeichnet. Unter macOS brauchen sie die Berechtigung „Bedienungshilfen“. Unter Linux muss dein Benutzer in der Gruppe `input` sein, und Tippen zum Klicken auf dem Touchpad wird nicht erfasst ([Details](../installation.md#mouse-clicks-on-wayland)).
 4. Starte die Aufnahme. Vorher läuft ein 3-2-1-Countdown, der sich nicht abschalten lässt.
 
 OpenScreen nimmt mit angestrebten 60 fps auf, unter Windows und macOS bis 3840×2160. Unter Linux entspricht die Größe dem, was der Compositor liefert. Während der Aufnahme kannst du pausieren, den Take neu starten, ihn abbrechen oder stoppen.
 
-**Tempo für die Zooms.** Bewege den Zeiger zu dem, was du gleich erklärst, und halte ihn dann still. Die automatischen Zooms aus Schritt 4 suchen nach diesen Pausen: ein ruhender Zeiger für etwa eine halbe Sekunde bis 2,6 Sekunden. Ein Zeiger, der länger ruht, bekommt keinen Zoom.
+**Tempo für die Zooms.** Klicke dort, wo das Geschehen ist, und lass das Ergebnis sichtbar werden, bevor du weitermachst. Die automatischen Zooms aus Schritt 4 folgen deinen Klicks: Nah beieinanderliegende Klicks teilen sich einen Zoom, wenn sie zusammen hineinpassen, und er hält nach dem letzten 1,5 Sekunden lang. Die ersten 2,5 Sekunden des Videos bleiben in der Totalen, gib dem Take also einen Moment vor dem ersten Klick.
 
 **Lange Demos unter Linux.** Linux schreibt ein normales MP4, das erst beim Stoppen abgeschlossen wird. Ein Absturz mitten im Take hinterlässt also eine unlesbare Datei. Nimm stattdessen mehrere kürzere Takes auf; Schritt 5 zeigt, wie du sie zusammenfügst.
 
@@ -52,18 +52,18 @@ Die Webcam wird in eine eigene Datei aufgenommen. Ihre Platzierung ist also eine
 
 - **Picture in Picture**, **Vertical Stack**, **Dual Frame** oder **No Webcam**.
 - Für jedes Layout: Spiegeln und ein Zuschnitt des Kamerabilds.
-- Nur für **Picture in Picture**: **Camera Shape** (Rect, Circle, Square oder Rounded), eine Größe von 10 bis 50 % (standardmäßig 25 %) und **Shrink on Zoom**, standardmäßig an: Es verkleinert die Kamera, während ein Zoom läuft, damit sie das Detail nicht verdeckt. Zieh die Kamera auf der Arbeitsfläche, um sie zu verschieben.
+- Nur für **Picture in Picture**: **Camera Shape** (standardmäßig Square, oder Original, das die eigenen Proportionen der Kamera behält), **Roundness** (standardmäßig 70 % für Square und 40 % für Original; bei 100 % wird eine quadratische Kamera zum Kreis), eine Größe von 15 bis 60 % (standardmäßig 40 %), **Position** (eine Ecke oder die Mitte einer Kante, standardmäßig unten rechts) und **Shrink on Zoom**, standardmäßig an: Es verkleinert die Kamera, während ein Zoom läuft, damit sie das Detail nicht verdeckt. Zieh die Kamera auf der Arbeitsfläche, und sie rastet an der nächsten Position ein.
 - **Camera Background**: Original, Blur, Cutout oder Custom. Cutout entfernt den Hintergrund ohne Greenscreen, mit einem Segmentierungsmodell, das auf deiner CPU läuft. Dieser Abschnitt erscheint nur, wenn sich die Segmentierungs-Laufzeit auf deinem Rechner laden lässt.
 
 Für ein Intro oder Outro drückst du `C`, um ein **Full Camera**-Segment hinzuzufügen: Die Kamera füllt in diesem Abschnitt das ganze Bild.
 
-Der Tab **Composition** gestaltet das Bild. Sein Hintergrundabschnitt bietet 18 mitgelieferte Hintergrundbilder, eine Volltonfarbe, einen Verlauf oder dein eigenes Bild sowie eine Hintergrundunschärfe. Darunter folgen Schatten, Rundung, Innenabstand und Bewegungsunschärfe.
+Der Tab **Composition** gestaltet das Bild. Sein Hintergrundabschnitt bietet 18 mitgelieferte Hintergrundbilder, eine Volltonfarbe, einen Verlauf oder dein eigenes Bild, eine Animation, die Verläufe und Bilder gleichermaßen bewegt, sowie eine Hintergrundunschärfe. Darunter folgen Schatten, Innenabstand, Rundung und Bewegungsunschärfe.
 
 ## 4. Automatische Zooms hinzufügen {#4-add-automatic-zooms}
 
-Öffne in der Werkzeugleiste der Zeitleiste **Auto-enhance** und wähle **Automatic zooms**. OpenScreen liest die aufgezeichnete Cursorbewegung und setzt Zoombereiche auf diese Pausen, ohne Netzwerk und ohne Modell. Setzt der Durchlauf nichts, sagt OpenScreen dir das. Die üblichen Ursachen sind eine Aufnahme ohne Cursordaten, keine Pause in diesem Abschnitt oder vorhandene Zooms, die diese Momente schon abdecken.
+OpenScreen setzt sie, sobald sich die Aufnahme im Editor öffnet: Es liest die aufgezeichneten Klicks und zoomt auf sie, ohne Netzwerk und ohne Modell. Hat sich die Aufnahme ohne sie geöffnet, öffne in der Werkzeugleiste der Zeitleiste **Auto-enhance** und wähle **Automatic zooms**. Setzt der Durchlauf nichts, sagt OpenScreen dir das. Die üblichen Ursachen sind eine Aufnahme ohne aufgezeichnete Klicks, Klicks nur in ihren ersten oder letzten Sekunden oder vorhandene Zooms, die sie schon abdecken oder zu nah an ihnen liegen.
 
-Prüfe die Zooms anschließend. Klicke auf einen Zoom, um seine Stufe (von 1.25× bis 5×), seinen Fokusmodus (Auto folgt dem Cursor, Manual hält einen festen Punkt) und eine optionale 3D-Drehung einzustellen. Mit `Z` fügst du einen Zoom von Hand hinzu, mit `Ctrl/Cmd+D` löschst du einen, den du nicht willst.
+Prüfe die Zooms anschließend. Klicke auf einen Zoom, um seine Stufe (von 1.25× bis 5×), seinen Fokusmodus (Auto folgt dem Cursor, Manual hält einen festen Punkt) und eine optionale 3D-Kamera einzustellen. Mit `Z` fügst du einen Zoom von Hand hinzu, mit `Ctrl/Cmd+D` löschst du einen, den du nicht willst.
 
 Mehr dazu, wie die Zooms gesetzt werden: [Auto-zoom](/features/auto-zoom/).
 
@@ -73,7 +73,7 @@ Mehr dazu, wie die Zooms gesetzt werden: [Auto-zoom](/features/auto-zoom/).
 
 **Über den Text schneiden.** Markiere im Transkript Wörter und drücke `Delete`: Dieser Abschnitt fällt aus Wiedergabe und Export heraus. Pausen erscheinen als Markierungen im Text: Klicke auf eine, um sie zu schneiden, und noch einmal, um sie wiederherzustellen. Fahr mit der Maus über ein geschnittenes Wort, um es wiederherzustellen. Du kannst auch `T` drücken, um auf der Zeitleiste einen Schnittbereich hinzuzufügen.
 
-**Beschleunige, was du nicht schneiden kannst**, etwa Ladezeiten oder Tipparbeit. Drücke `S`, um einen Geschwindigkeitsbereich hinzuzufügen, wähle eine Vorgabe von 0.25× bis 5× oder gib einen beliebigen Wert von 0.1× bis 100× ein. Der Ton wird passend zeitgestreckt.
+**Beschleunige, was du nicht schneiden kannst**, etwa Ladezeiten oder Tipparbeit. Drücke `S`, um einen Geschwindigkeitsbereich hinzuzufügen, wähle eine Vorgabe (0.5×, 1×, 1.5×, 2× oder 4×) oder gib einen beliebigen Wert von 0.25× bis 16× ein. Der Ton wird passend zeitgestreckt.
 
 **Mehrere Takes zusammenfügen.** Wechsle zu **Media**, nutze **Import media**, falls ein Take noch nicht aufgeführt ist, und zieh seine Karte dann in die Clipzeile. Legst du die Karte auf einem vorhandenen Clip ab, bietet OpenScreen **Add before**, **Add after** oder **Split here and insert** an. Siehe [Mediathek](../media-library.md).
 
@@ -102,11 +102,11 @@ Untertitel werden ins Video eingebrannt. OpenScreen schreibt keine `.srt`- oder 
 
 ## 8. Exportieren {#8-export}
 
-**Format wählen.** Die Einstellung **Format** im Tab **Composition** bietet 16:9 (Standard), 9:16, 1:1, 4:3, 4:5, 16:10, 10:16 oder die ursprüngliche Form deiner Clips.
+**Format wählen.** Die Einstellung **Format** im Tab **Composition** bietet **Auto** (Standard für neue Projekte), bei dem sich das Bild an deine Aufnahme, das Webcam-Layout und den Innenabstand anpasst, dann 16:9, 9:16, 1:1, 4:3, 4:5, 16:10, 10:16 oder die ursprüngliche Form deiner Clips.
 
 **Exportieren.** Klicke in der oberen Leiste auf **Export**:
 
-- **MP4**: 720p, 1080p oder Source; 24, 30 oder 60 fps; H.264 oder H.265. Der Dialog kennzeichnet H.264 als die Option mit der besten Kompatibilität. Die Videobitrate lässt sich nicht einstellen und liegt bei 1080p bei etwa 8 Mbit/s.
+- **MP4**: 720p, 1080p oder Source; 24, 30 oder 60 fps; H.264. Die Videobitrate lässt sich nicht einstellen und liegt bei 1080p bei etwa 8 Mbit/s.
 - **GIF**: 15, 20, 25 oder 30 fps; Größe Medium, Large oder Original; Schleife an oder aus. GIFs nutzen 256 Farben ohne Dithering und eignen sich deshalb für kurze Clips von Oberflächen im Flat Design.
 
 Es gibt kein Wasserzeichen. Für ein anderes Format änderst du die Einstellung und exportierst erneut.

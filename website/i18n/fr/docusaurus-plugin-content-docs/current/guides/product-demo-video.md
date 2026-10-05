@@ -33,14 +33,14 @@ Sous Windows, OpenScreen exclut le HUD et la fenêtre Notes de la capture. Sous 
 
 ## 2. Enregistrer l'écran ou une fenêtre {#2-record-the-screen-or-a-window}
 
-1. Sous Windows et macOS, ouvrez le sélecteur de source et choisissez un écran sous **Écrans** ou une seule fenêtre sous **Fenêtres**. Sous Linux, il n'y a pas de sélecteur dans l'application : le portail du système demande la source à chaque prise. OpenScreen ne capture pas de zone de l'écran : enregistrez la fenêtre ou l'écran, puis recadrez le clip dans l'éditeur.
+1. Sous Windows et macOS, ouvrez le sélecteur de source et choisissez un écran sous **Écrans** ou une seule fenêtre sous **Fenêtres**. Sous macOS 15.2 et ultérieur, vous choisissez plutôt l'écran ou la fenêtre dans le sélecteur du système d'Apple. Sous Linux, il n'y a pas de sélecteur dans l'application : le portail du système demande la source à chaque prise. OpenScreen ne capture pas de zone de l'écran : enregistrez la fenêtre ou l'écran, puis recadrez le clip dans l'éditeur.
 2. Activez le micro et vérifiez son vumètre. Activez l'audio système si le produit émet du son, et la webcam si vous voulez apparaître à l'écran.
 3. Gardez le mode curseur éditable, celui par défaut : le pointeur est enregistré sous forme de données, et vous pourrez donc en changer le style plus tard. Les clics sont enregistrés sous Windows. Sous macOS, ils exigent l'autorisation Accessibilité. Sous Linux, votre utilisateur doit faire partie du groupe `input`, et le tapotement pour cliquer des pavés tactiles n'est pas capturé ([détails](../installation.md#mouse-clicks-on-wayland)).
 4. Lancez l'enregistrement. Un compte à rebours 3-2-1 s'affiche d'abord ; il ne peut pas être désactivé.
 
 OpenScreen vise 60 fps à la capture, jusqu'à 3840×2160 sous Windows et macOS. Sous Linux, la taille est celle que fournit le compositeur. Pendant l'enregistrement, vous pouvez mettre en pause, recommencer la prise, l'annuler ou l'arrêter.
 
-**Calez votre rythme sur les zooms.** Amenez le pointeur sur l'élément que vous allez expliquer, puis immobilisez-le. Les zooms automatiques de l'étape 4 cherchent ces pauses : un pointeur immobile pendant une durée allant d'environ une demi-seconde à 2,6 secondes. Un pointeur qui reste immobile plus longtemps n'obtient pas de zoom.
+**Calez votre rythme sur les zooms.** Cliquez là où se passe l'action, et laissez le résultat s'afficher avant de passer à la suite. Les zooms automatiques de l'étape 4 suivent vos clics : des clics rapprochés partagent un même zoom quand ils y tiennent ensemble, et celui-ci se maintient 1,5 seconde après le dernier. Les 2,5 premières secondes de la vidéo restent en plan large ; laissez donc tourner la prise un moment avant le premier clic.
 
 **Longues démos sous Linux.** Linux écrit un MP4 classique qui n'est finalisé qu'à l'arrêt : un plantage en pleine prise laisse donc un fichier illisible. Enregistrez plutôt plusieurs prises plus courtes ; l'étape 5 montre comment les assembler.
 
@@ -52,18 +52,18 @@ La webcam est enregistrée dans son propre fichier : son placement est donc une
 
 - **Incrustation d'image**, **Empilement vertical**, **Double cadre** ou **Sans webcam**.
 - Pour toutes les dispositions : miroir, et recadrage de l'image de la caméra.
-- Pour **Incrustation d'image** uniquement : **Forme de la caméra** (Rect., Cercle, Carré ou Arrondi), une taille de 10 à 50 % (25 % par défaut), et **Réduire au zoom**, activé par défaut, qui réduit la caméra pendant un zoom pour qu'elle ne cache pas le détail. Faites glisser la caméra sur le canevas pour la déplacer.
+- Pour **Incrustation d'image** uniquement : **Forme de la caméra** (Carré par défaut, ou Original, qui garde les proportions de la caméra), **Arrondi** (70 % pour Carré et 40 % pour Original par défaut ; à 100 % une caméra carrée devient un cercle), une taille de 15 à 60 % (40 % par défaut), **Position** (un coin ou le milieu d'un bord, en bas à droite par défaut), et **Réduire au zoom**, activé par défaut, qui réduit la caméra pendant un zoom pour qu'elle ne cache pas le détail. Faites glisser la caméra sur le canevas : elle se cale sur la position la plus proche.
 - **Arrière-plan de la caméra** : Original, Flouté, Détouré ou Personnalisé. Détouré retire l'arrière-plan sans fond vert, grâce à un modèle de segmentation qui tourne sur votre CPU. Cette section n'apparaît que si le moteur de segmentation se charge sur votre machine.
 
 Pour une introduction ou une conclusion, appuyez sur `C` pour ajouter un segment **Caméra plein écran** : la caméra remplit tout le cadre pendant ce passage.
 
-L'onglet **Composition** met en forme le cadre. Sa section d'arrière-plan propose 18 fonds d'écran intégrés, une couleur unie, un dégradé ou votre propre image, ainsi qu'un flou d'arrière-plan. En dessous se trouvent l'ombre, l'arrondi, la marge et le flou de mouvement.
+L'onglet **Composition** met en forme le cadre. Sa section d'arrière-plan propose 18 fonds d'écran intégrés, une couleur unie, un dégradé ou votre propre image, une animation qui anime aussi bien les dégradés que les images, ainsi qu'un flou d'arrière-plan. En dessous se trouvent l'ombre, la marge, l'arrondi et le flou de mouvement.
 
 ## 4. Ajouter des zooms automatiques {#4-add-automatic-zooms}
 
-Dans la barre d'outils de la timeline, ouvrez **Amélioration auto** et choisissez **Zooms automatiques**. OpenScreen lit le mouvement enregistré du curseur et place des régions de zoom sur ces pauses, sans réseau ni modèle. S'il ne place rien, il vous le signale. Les causes habituelles sont un enregistrement sans données de curseur, aucune pause sur cette plage, ou des zooms existants qui couvrent déjà ces moments.
+OpenScreen les ajoute à l'ouverture de la prise dans l'éditeur : il lit les clics enregistrés et zoome dessus, sans réseau ni modèle. Si la prise s'est ouverte sans eux, ouvrez **Amélioration auto** dans la barre d'outils de la timeline et choisissez **Zooms automatiques**. S'il ne place rien, il vous le signale. Les causes habituelles sont un enregistrement sans clics enregistrés, des clics uniquement dans ses premières ou dernières secondes, ou des zooms existants qui les couvrent déjà ou en sont trop proches.
 
-Vérifiez-les ensuite. Cliquez sur un zoom pour régler son niveau (de 1.25× à 5×), son mode de focus (Auto suit le curseur, Manuel garde un point fixe) et une éventuelle rotation 3D. Appuyez sur `Z` pour ajouter un zoom à la main, et sur `Ctrl/Cmd+D` pour supprimer un zoom dont vous ne voulez pas.
+Vérifiez-les ensuite. Cliquez sur un zoom pour régler son niveau (de 1.25× à 5×), son mode de focus (Auto suit le curseur, Manuel garde un point fixe) et une éventuelle caméra 3D. Appuyez sur `Z` pour ajouter un zoom à la main, et sur `Ctrl/Cmd+D` pour supprimer un zoom dont vous ne voulez pas.
 
 Pour en savoir plus sur le placement des zooms : [Zoom automatique](/features/auto-zoom/).
 
@@ -73,7 +73,7 @@ Pour en savoir plus sur le placement des zooms : [Zoom automatique](/features/a
 
 **Coupez par le texte.** Dans la transcription, sélectionnez des mots et appuyez sur `Delete` : ce passage est retiré de la lecture et de l'export. Les silences apparaissent dans le texte sous forme de repères : cliquez sur l'un d'eux pour le couper, et cliquez de nouveau pour le rétablir. Survolez un mot coupé pour le rétablir. Vous pouvez aussi appuyer sur `T` pour ajouter une région de coupe sur la timeline.
 
-**Accélérez ce que vous ne pouvez pas couper**, comme les chargements de page ou la saisie. Appuyez sur `S` pour ajouter une région de vitesse, choisissez un préréglage de 0.25× à 5×, ou saisissez une valeur de 0.1× à 100×. L'audio est étiré dans le temps en conséquence.
+**Accélérez ce que vous ne pouvez pas couper**, comme les chargements de page ou la saisie. Appuyez sur `S` pour ajouter une région de vitesse, choisissez un préréglage (0.5×, 1×, 1.5×, 2× ou 4×), ou saisissez une valeur de 0.25× à 16×. L'audio est étiré dans le temps en conséquence.
 
 **Assemblez plusieurs prises.** Passez en mode **Médias**, utilisez **Importer un média** si une prise n'est pas encore listée, puis faites glisser sa carte sur la rangée de clips. Si vous la déposez sur un clip existant, OpenScreen propose **Ajouter avant**, **Ajouter après** ou **Diviser ici et insérer**. Voir [Médiathèque et clips](../media-library.md).
 
@@ -102,11 +102,11 @@ Les sous-titres sont incrustés dans la vidéo. OpenScreen n'écrit pas de fichi
 
 ## 8. Exporter {#8-export}
 
-**Choisissez le format.** Le réglage **Format** de l'onglet **Composition** propose 16:9 (par défaut), 9:16, 1:1, 4:3, 4:5, 16:10, 10:16, ou la forme d'origine de vos clips.
+**Choisissez le format.** Le réglage **Format** de l'onglet **Composition** propose **Auto** (par défaut pour les nouveaux projets), qui adapte le cadre à votre enregistrement, à la disposition caméra et à la marge, puis 16:9, 9:16, 1:1, 4:3, 4:5, 16:10, 10:16, ou la forme d'origine de vos clips.
 
 **Exportez.** Cliquez sur **Exporter** dans la barre supérieure :
 
-- **MP4** : 720p, 1080p ou Source ; 24, 30 ou 60 fps ; H.264 ou H.265. La fenêtre présente H.264 comme l'option **Meilleure compatibilité**. Le débit vidéo n'est pas réglable : environ 8 Mbit/s en 1080p.
+- **MP4** : 720p, 1080p ou Source ; 24, 30 ou 60 fps ; H.264. Le débit vidéo n'est pas réglable : environ 8 Mbit/s en 1080p.
 - **GIF** : 15, 20, 25 ou 30 fps ; taille Medium, Large ou Original ; boucle activée ou désactivée. Les GIF utilisent 256 couleurs, sans tramage : ils conviennent aux clips courts d'interfaces en aplats.
 
 Il n'y a pas de filigrane. Pour obtenir un autre format, changez de format et exportez de nouveau.

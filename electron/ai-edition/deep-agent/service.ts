@@ -28,6 +28,7 @@ import type { AxcutDocument } from "../../../src/lib/ai-edition/schema";
 // wrong at both ends of a table that actually runs 1.25× to 5.0×.
 import { ZOOM_DEPTH_LEGEND } from "../../../src/lib/ai-edition/timeline/zoom-scale";
 import {
+	type AgentToolExecution,
 	addAnnotationArgs,
 	addAudioArgs,
 	addCameraFullscreenArgs,
@@ -170,11 +171,11 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	addZooms: `Add MANY zooms in one call: \`regions\` is a list, each entry taking exactly the fields addZoom takes (same depth table, ${ZOOM_DEPTH_LEGEND}). Use this for the smart-zoom pass, where you have decided every zoom before emitting the first one — sending them one at a time costs one round trip each. Each region stands or falls ALONE: one that covers no clip is refused by itself and listed in \`refused\` with its index and the reason, while the others are still applied. The result leads with requested / appliedCount / refusedCount, and each applied entry carries its renderedScale — quote that, never the depth — plus the same \`cursorAnchor\` addZoom reports, whenever the footage under that region has readable pointer telemetry.`,
 	setZoom: `Move, resize, or restyle an existing zoom by id (virtual-timeline seconds). Only the fields you pass are changed. depth selects from the same table (${ZOOM_DEPTH_LEGEND}); if the zoom carries a customScale (getCurrentDocument shows it as depthIsOverridden), that custom value is what renders, and passing depth clears it so the depth takes effect — the result says so. The result reports the resulting renderedScale, and — when the footage under the span has readable pointer telemetry — the same \`cursorAnchor\` addZoom reports, measured against the zoom's EFFECTIVE focus, so a call that moved only the span still learns what its unchanged focus is now looking at.`,
 	addSpeed:
-		"Add a speed-change region over a span of the edited timeline (virtual seconds). speed > 1 fast-forwards, < 1 slows down (default 1.5×). Use to speed through slow stretches without cutting them.",
+		"Add a speed-change region over a span of the edited timeline (virtual seconds). speed > 1 fast-forwards, < 1 slows down, from 0.25× to 16× (default 1.5×). Use to speed through slow stretches without cutting them.",
 	setSpeed:
 		"Move, resize, or change the multiplier of an existing speed region by id (virtual-timeline seconds). Only the fields you pass are changed.",
 	addAnnotation:
-		"Add a text annotation over a span of the edited timeline (virtual seconds). x/y are frame percentages (0–100, default centre). Use for callouts and labels.",
+		"Add a text annotation over a span of the edited timeline (virtual seconds). x/y place the text's centre, in frame percentages (0–100, default the frame's centre); the box stays inside the frame. It is drawn on a dark plate so it reads on any footage. Use for callouts and labels.",
 	setAnnotation:
 		"Move, resize, or edit the text of an existing annotation by id (virtual-timeline seconds). Only the fields you pass are changed.",
 	addCameraFullscreen:
@@ -220,7 +221,7 @@ export interface CursorTelemetryReader {
 	probe?(input: { assetId: string; originalPath: string | null }): Promise<boolean>;
 }
 
-interface ToolRuntime {
+export interface ToolRuntime {
 	cursor?: CursorTelemetryReader;
 	availableByAssetId?: Record<string, boolean>;
 }
@@ -270,24 +271,40 @@ function documentTool<S extends z.ZodType>(
 	return tool(
 		async (args: z.infer<S>) => {
 			sink.toolStart(name, args);
-			// ponytail: the ONE async step the pure executor cannot take. Reading a
-			// sidecar is IO; `executeAgentTool` is synchronous by design (it is the
-			// gate every mutation passes through, and it has to stay testable
-			// without a filesystem). So the load happens here and its verdict —
-			// including "I could not look" — goes in as data.
-			const load = TOOLS_READING_CURSOR.has(name)
-				? await loadCursorTelemetry(holder.current, args, runtime)
-				: undefined;
-			const execution = executeAgentTool(holder.current, name, JSON.stringify(args), {
-				editsAllowed,
-				cursorTelemetry: { availableByAssetId: runtime.availableByAssetId, load },
-			});
+			const execution = await runDocumentTool(holder.current, name, args, editsAllowed, runtime);
 			if (execution.document) holder.current = execution.document;
 			sink.toolEnd(name, execution.ok, execution.summary);
 			return execution.resultJson;
 		},
 		{ name, description: TOOL_DESCRIPTIONS[name], schema },
 	);
+}
+
+/**
+ * Run one tool against a document: the cursor read it may need, then the shared
+ * executor. The in-app agent (`documentTool`) and the MCP server both call this,
+ * so a tool behaves the same whichever agent is driving it.
+ *
+ * ponytail: the ONE async step the pure executor cannot take. Reading a sidecar
+ * is IO; `executeAgentTool` is synchronous by design (it is the gate every
+ * mutation passes through, and it has to stay testable without a filesystem).
+ * So the load happens here and its verdict — including "I could not look" — goes
+ * in as data.
+ */
+export async function runDocumentTool(
+	document: AxcutDocument,
+	name: string,
+	args: unknown,
+	editsAllowed: boolean,
+	runtime: ToolRuntime,
+): Promise<AgentToolExecution> {
+	const load = TOOLS_READING_CURSOR.has(name)
+		? await loadCursorTelemetry(document, args, runtime)
+		: undefined;
+	return executeAgentTool(document, name, JSON.stringify(args ?? {}), {
+		editsAllowed,
+		cursorTelemetry: { availableByAssetId: runtime.availableByAssetId, load },
+	});
 }
 
 /** Reads the sidecar for whichever asset the call names, defaulting to the
@@ -333,36 +350,43 @@ export function buildTools(
 	editsAllowed = true,
 	runtime: ToolRuntime = {},
 ): StructuredToolInterface[] {
-	const build = <S extends z.ZodType>(name: string, schema: S) =>
-		documentTool(holder, sink, name, schema, editsAllowed, runtime);
-	return [
-		build("getCurrentDocument", z.object({})),
-		build("getTranscript", getTranscriptArgs),
-		build("getTranscriptWords", getTranscriptWordsArgs),
-		build("getCursorTrack", getCursorTrackArgs),
-		build("setWordText", setWordTextArgs),
-		build("addTrim", addTrimArgs),
-		build("addTrims", addTrimsArgs),
-		build("setTrim", setTrimArgs),
-		build("setClipRange", setClipRangeArgs),
-		build("moveClip", moveClipArgs),
-		build("replaceTimeline", replaceTimelineArgs),
-		build("addZoom", addZoomArgs),
-		build("addZooms", addZoomsArgs),
-		build("setZoom", setZoomArgs),
-		build("addSpeed", addSpeedArgs),
-		build("setSpeed", setSpeedArgs),
-		build("addAnnotation", addAnnotationArgs),
-		build("setAnnotation", setAnnotationArgs),
-		build("addCameraFullscreen", addCameraFullscreenArgs),
-		build("setCameraFullscreen", setCameraFullscreenArgs),
-		build("addAudio", addAudioArgs),
-		build("setAudio", setAudioArgs),
-		build("removeTrim", removeTrimArgs),
-		build("removeModifier", removeModifierArgs),
-		build("removeClip", removeClipArgs),
-	];
+	return TOOL_ARG_SCHEMAS.map(([name, schema]) =>
+		documentTool(holder, sink, name, schema, editsAllowed, runtime),
+	);
 }
+
+/**
+ * Every tool's name and argument schema, in the order the model is handed them.
+ * `buildTools` wraps these for the in-app agent and `electron/mcp/` exposes the
+ * same list over MCP, so the two surfaces cannot drift apart.
+ */
+export const TOOL_ARG_SCHEMAS: ReadonlyArray<readonly [string, z.ZodObject]> = [
+	["getCurrentDocument", z.object({})],
+	["getTranscript", getTranscriptArgs],
+	["getTranscriptWords", getTranscriptWordsArgs],
+	["getCursorTrack", getCursorTrackArgs],
+	["setWordText", setWordTextArgs],
+	["addTrim", addTrimArgs],
+	["addTrims", addTrimsArgs],
+	["setTrim", setTrimArgs],
+	["setClipRange", setClipRangeArgs],
+	["moveClip", moveClipArgs],
+	["replaceTimeline", replaceTimelineArgs],
+	["addZoom", addZoomArgs],
+	["addZooms", addZoomsArgs],
+	["setZoom", setZoomArgs],
+	["addSpeed", addSpeedArgs],
+	["setSpeed", setSpeedArgs],
+	["addAnnotation", addAnnotationArgs],
+	["setAnnotation", setAnnotationArgs],
+	["addCameraFullscreen", addCameraFullscreenArgs],
+	["setCameraFullscreen", setCameraFullscreenArgs],
+	["addAudio", addAudioArgs],
+	["setAudio", setAudioArgs],
+	["removeTrim", removeTrimArgs],
+	["removeModifier", removeModifierArgs],
+	["removeClip", removeClipArgs],
+];
 
 /**
  * Prompt caching for the Anthropic-wire providers, which `createDeepAgent`
@@ -404,7 +428,7 @@ export interface InvokeArgs {
 
 /** One cheap probe per asset, run before the tools are built so the very first
  *  `getCurrentDocument` can already say whether telemetry exists. */
-async function probeCursorTelemetry(
+export async function probeCursorTelemetry(
 	document: AxcutDocument,
 	cursor: CursorTelemetryReader | undefined,
 ): Promise<Record<string, boolean> | undefined> {

@@ -18,6 +18,8 @@ import type {
 	CompositorExportResult,
 	CompositorFramePacket,
 	CompositorParamValue,
+	CompositorSharedFrameMeta,
+	CompositorSharedFrameReceipt,
 	CompositorViewRect,
 	CompositorViewResult,
 	SegmentationSupport,
@@ -58,6 +60,21 @@ export async function probeSegmentationSupport(): Promise<SegmentationSupport> {
 	}
 }
 
+/** The segmentation model's input size (`segmentation::MODEL_WIDTH` x `MODEL_HEIGHT`). */
+export const SEGMENTATION_WIDTH = 256;
+export const SEGMENTATION_HEIGHT = 144;
+
+/** Subject mask for one camera frame: `rgba` is SEGMENTATION_WIDTH x SEGMENTATION_HEIGHT
+ *  RGBA8, the mask one byte per pixel, 255 = subject. `null` when the addon cannot do it. */
+export async function segmentCameraFrame(rgba: Uint8Array): Promise<Uint8Array | null> {
+	const { mask } = await requireNativeBridgeData<{ mask: Uint8Array | null }>({
+		domain: "compositor",
+		action: "segmentFrame",
+		payload: { rgba },
+	});
+	return mask;
+}
+
 export function createCompositorView(
 	rect: CompositorViewRect,
 	sources?: { screenPath?: string; webcamPath?: string; cursorPath?: string },
@@ -82,15 +99,36 @@ export function setCompositorRect(id: number, rect: CompositorViewRect): Promise
  *  {@link CompositorFramePacket} on a new frame, or `null` when the addon is absent,
  *  no frame is ready yet, OR the caller already holds the current generation — the
  *  idle path, where `null` returns without any buffer crossing IPC. Pass `sinceGen = 0`
- *  to force delivery of the current frame. */
+ *  to force delivery of the current frame.
+ *
+ *  A view on shared textures answers with a {@link CompositorSharedFrameReceipt} instead:
+ *  its frame already went to {@link subscribeCompositorSharedFrames}, ahead of this reply. */
 export function readCompositorFrame(
 	id: number,
 	sinceGen: number,
-): Promise<CompositorFramePacket | null> {
-	return requireNativeBridgeData<CompositorFramePacket | null>({
+): Promise<CompositorFramePacket | CompositorSharedFrameReceipt | null> {
+	return requireNativeBridgeData<CompositorFramePacket | CompositorSharedFrameReceipt | null>({
 		domain: "compositor",
 		action: "readFrame",
 		payload: { id, sinceGen },
+	});
+}
+
+/** Preview frames handed over as shared GPU textures. The listener draws `frame` and closes
+ *  it. Returns the unsubscribe; without the Electron bridge (pure web, jsdom) nothing ever
+ *  arrives. */
+export function subscribeCompositorSharedFrames(
+	listener: (frame: VideoFrame, meta: CompositorSharedFrameMeta) => void,
+): () => void {
+	return window.electronAPI?.onCompositorFrame?.(listener) ?? (() => undefined);
+}
+
+/** Back to read-back frames for `id`: a shared frame reached the canvas as nothing. */
+export function stopSharedCompositorFrames(id: number): Promise<{ ok: true }> {
+	return requireNativeBridgeData<{ ok: true }>({
+		domain: "compositor",
+		action: "stopSharedFrames",
+		payload: { id },
 	});
 }
 
@@ -173,10 +211,19 @@ export function exportGifNative(
 	outPath?: string,
 	sceneJson?: string,
 	params?: CompositorExportGifParams,
+	exportId?: string,
 ): Promise<CompositorExportGifResult> {
 	return requireNativeBridgeData<CompositorExportGifResult>({
 		domain: "compositor",
 		action: "exportGif",
-		payload: { clips, outPath, sceneJson, params },
+		payload: { clips, outPath, sceneJson, params, exportId },
+	});
+}
+
+export function cancelGifExportNative(exportId: string): Promise<{ accepted: boolean }> {
+	return requireNativeBridgeData<{ accepted: boolean }>({
+		domain: "compositor",
+		action: "cancelGifExport",
+		payload: { exportId },
 	});
 }

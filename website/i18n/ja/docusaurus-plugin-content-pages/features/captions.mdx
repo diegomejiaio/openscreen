@@ -9,11 +9,16 @@ keywords:
   - 字幕 自動生成 画面録画
 ---
 
+import DemoLoop from "@site/src/components/DemoLoop";
+import DemoLoopPair from "@site/src/components/DemoLoop/Pair";
+
 # 自分のマシンで字幕を作る画面録画ソフト
 
 OpenScreen は、Windows・macOS・Linux 向けの無料の MIT ライセンスの字幕付き画面録画ソフトです。約 264 MB のモデルを一度だけダウンロードしたあと、Whisper で自分のパソコン上で録画を文字起こしし、スタイルを設定した字幕をエクスポートする動画に焼き込みます。コース用プラットフォームやアクセシビリティ要件のために別ファイルの SRT や VTT の字幕が必要な場合は、Cap または Camtasia のほうが適しています。
 
 このページは OpenScreen プロジェクトが公開しています。Cap、Camtasia、Screen Studio に関する情報は cap.so、techsmith.com、screen.studio によるもので、2026 年 9 月に確認しました。情報源は末尾に一覧しています。
+
+<DemoLoop name="automatic-subtitles" />
 
 ## 概要 {#at-a-glance}
 
@@ -52,11 +57,18 @@ Whisper は話されている言語を自動で検出します。判定が誤っ
 
 プレビューとエクスポートは同じレイアウトを使うため、見えている字幕がそのまま動画に焼き込まれます。**字幕を表示**をオフにすると、それらを含まないエクスポートになります。詳しい仕様は[字幕と文字起こし](/docs/captions/)を参照してください。
 
+<DemoLoop name="caption-styles" />
+
 ### 単語を削除してカットする {#cutting-by-deleting-words}
 
 **文字起こし**パネルには、タイムライン上のすべてのクリップの単語が表示されます。単語や範囲を選んで Delete を押すと、その区間が再生とエクスポートからカットされます。タイムライン上のトリムと同じ扱いです。カットした単語は取り消し線で表示され、元に戻すこともできます。無音部分もテキスト内でマークされ、同じ方法でカットまたは復元できます。
 
 Whisper が報告する単語のタイミングはやや遅めです。OpenScreen は各単語の境界を音声そのものに合わせて引き戻すため、カットは 1 音節遅れることなく、実際に話された単語が始まる位置から始まります。詳しくは[文字起こしの編集](/docs/captions/#transcript-editing)を参照してください。
+
+<DemoLoopPair>
+  <DemoLoop name="edit-by-transcript" />
+  <DemoLoop name="tighten-pauses" />
+</DemoLoopPair>
 
 ### 自分の API キーによる翻訳 {#translation-with-your-own-key}
 

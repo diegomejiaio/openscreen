@@ -2,8 +2,17 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app } from "electron";
-import { resolveCursorSprites } from "../../../src/lib/cursor/cursorThemes";
+import { app, sharedTexture, type WebFrameMain } from "electron";
+import {
+	type CursorKind,
+	readCursorAsArrow,
+	resolveCursorSprites,
+} from "../../../src/lib/cursor/cursorThemes";
+import type {
+	CompositorSharedFrameMeta,
+	CompositorSharedFrameReceipt,
+} from "../../../src/native/contracts";
+import type { GifExportJob } from "../../ipc/gifExportJobs";
 import type {
 	ClipInput,
 	CompositorBackend,
@@ -15,6 +24,7 @@ import type {
 	GifExportStats,
 	GifParamsInput,
 	NativeFramePacket,
+	NativeSharedFramePacket,
 	RemuxStats,
 	SegmentationSupport,
 } from "../../native/compositor-view/addon";
@@ -100,15 +110,21 @@ export function resolveSceneAssetPath(relativePath: string): string | null {
  */
 function resolveCursorSpritePaths(
 	themeId: string,
-): Record<string, { path: string; hotspotX: number; hotspotY: number }> {
-	const resolved: Record<string, { path: string; hotspotX: number; hotspotY: number }> = {};
-	for (const [type, sprite] of Object.entries(resolveCursorSprites(themeId))) {
+	asArrow: readonly CursorKind[],
+	model3d = false,
+): Record<string, { path: string; hotspotX: number; hotspotY: number; sculpt?: string }> {
+	const resolved: Record<
+		string,
+		{ path: string; hotspotX: number; hotspotY: number; sculpt?: string }
+	> = {};
+	for (const [type, sprite] of Object.entries(resolveCursorSprites(themeId, asArrow, model3d))) {
 		const absolute = resolveSceneAssetPath(sprite.assetPath);
 		if (absolute) {
 			resolved[type] = {
 				path: absolute,
 				hotspotX: sprite.hotspotX,
 				hotspotY: sprite.hotspotY,
+				...(sprite.sculpt ? { sculpt: sprite.sculpt } : {}),
 			};
 		}
 	}
@@ -126,7 +142,12 @@ export function resolveSceneAssetPaths(sceneJson: string): string {
 			background?: { kind?: string; path?: string };
 			cursor?: {
 				theme?: string;
-				cursorSprites?: Record<string, { path: string; hotspotX: number; hotspotY: number }>;
+				asArrow?: unknown;
+				model3d?: boolean;
+				cursorSprites?: Record<
+					string,
+					{ path: string; hotspotX: number; hotspotY: number; sculpt?: string }
+				>;
 			};
 			webcamEffect?: {
 				mode?: string;
@@ -158,7 +179,11 @@ export function resolveSceneAssetPaths(sceneJson: string): string {
 		changed = resolveBackgroundImage(scene.background) || changed;
 		changed = resolveBackgroundImage(scene.webcamEffect?.background) || changed;
 		if (scene.cursor && typeof scene.cursor.theme === "string") {
-			scene.cursor.cursorSprites = resolveCursorSpritePaths(scene.cursor.theme);
+			scene.cursor.cursorSprites = resolveCursorSpritePaths(
+				scene.cursor.theme,
+				readCursorAsArrow(scene.cursor.asArrow, undefined, []),
+				scene.cursor.model3d === true,
+			);
 			changed = true;
 		}
 		// The scene asks for an effect; this process says where the model is. A model that
@@ -179,6 +204,8 @@ export function resolveSceneAssetPaths(sceneJson: string): string {
 }
 
 export interface CompositorViewServiceOptions {
+	/** Explicit in-process addon, used by tests of native job lifecycle. */
+	addon?: CompositorViewAddon;
 	/**
 	 * Optional explicit override for the addon path. Has precedence over the
 	 * `OPENSCREEN_COMPOSITOR_VIEW_NODE` env var and the candidate path list.
@@ -193,6 +220,26 @@ export interface CompositorViewServiceOptions {
 	 */
 	appRoot?: string;
 	isPackaged?: boolean;
+	/** Electron's `sharedTexture` module, injectable for tests. `null` keeps every view on
+	 *  read-back. */
+	sharedTexture?: SharedTextureApi | null;
+	/** Whether Chromium composites on the GPU, where a shared texture is imported. Injectable
+	 *  for tests; defaults to `app.getGPUFeatureStatus()`. */
+	gpuCompositing?: () => boolean;
+}
+
+/** The two calls a shared preview frame needs from Electron's `sharedTexture` module. */
+export type SharedTextureApi = Pick<
+	Electron.SharedTexture,
+	"importSharedTexture" | "sendSharedTexture"
+>;
+
+function defaultGpuCompositing(): boolean {
+	try {
+		return String(app.getGPUFeatureStatus().gpu_compositing).startsWith("enabled");
+	} catch {
+		return false;
+	}
 }
 
 function defaultAppRoot(): string {
@@ -401,6 +448,23 @@ function ensureOnnxRuntimeOnPath(appRoot: string): void {
 	}
 }
 
+/**
+ * Points `OPENSCREEN_FONTS_DIR` at the font files the compositor draws captions and annotations
+ * with (`public/fonts`, shipped through `extraResources` like the wallpapers). The compositor
+ * registers them privately when it builds its text rasterizer and never reads the machine's
+ * installed fonts, so without this every family falls back to a system face. Best-effort like
+ * `ensureOnnxRuntimeOnPath`: unresolved, text still draws, in system fonts.
+ */
+function ensureTextFontsDir(): void {
+	if (process.env.OPENSCREEN_FONTS_DIR) {
+		return;
+	}
+	const dir = resolveSceneAssetPath("fonts");
+	if (dir) {
+		process.env.OPENSCREEN_FONTS_DIR = dir;
+	}
+}
+
 function tryLoadAddon(candidates: string[]): CompositorViewAddon | null {
 	for (const candidate of candidates) {
 		try {
@@ -428,6 +492,8 @@ function tryLoadAddon(candidates: string[]): CompositorViewAddon | null {
 export class CompositorViewService {
 	private readonly options: CompositorViewServiceOptions;
 	private readonly rects = new Map<number, CompositorViewRect>();
+	/** Views whose frames go out as shared GPU textures rather than RAM pixels. */
+	private readonly sharedViews = new Set<number>();
 	private addon: CompositorViewAddon | null = null;
 	private loadAttempted = false;
 	private syntheticIdCounter = 0;
@@ -437,6 +503,7 @@ export class CompositorViewService {
 	}
 
 	private ensureAddon(): CompositorViewAddon | null {
+		if (this.options.addon) return this.options.addon;
 		if (this.loadAttempted) {
 			return this.addon;
 		}
@@ -449,6 +516,7 @@ export class CompositorViewService {
 
 		ensureFfmpegSharedDllsOnPath(appRoot);
 		ensureOnnxRuntimeOnPath(appRoot);
+		ensureTextFontsDir();
 		const candidates = buildCandidatePaths(appRoot, isPackaged, envOverride);
 		const loaded = tryLoadAddon(candidates);
 		if (!loaded) {
@@ -516,6 +584,20 @@ export class CompositorViewService {
 		return resolveSceneAssetPath(SEGMENTATION_MODEL_ASSET) ? "ready" : "no-model";
 	}
 
+	/** Subject mask for one camera frame, no view needed — see `segmentFrame` in the addon.
+	 *  `null` when the addon (or this version of it) or the model is missing. */
+	async segmentFrame(rgba: Uint8Array): Promise<Uint8Array | null> {
+		const addon = this.ensureAddon();
+		const modelPath = resolveSceneAssetPath(SEGMENTATION_MODEL_ASSET);
+		if (!addon?.segmentFrame || !modelPath) {
+			return null;
+		}
+		return addon.segmentFrame(
+			modelPath,
+			Buffer.from(rgba.buffer, rgba.byteOffset, rgba.byteLength),
+		);
+	}
+
 	/** Allocates an offscreen compositor view sized to `rect.width`x`rect.height`.
 	 *  `rect.x` / `rect.y` are vestigial (ignored native-side) — the renderer
 	 *  keeps them on the wire so the existing `CompositorViewRect` shape stays
@@ -538,7 +620,39 @@ export class CompositorViewService {
 		}
 		const id = addon.createView(rect, paths?.screenPath, paths?.webcamPath, paths?.cursorPath);
 		this.rects.set(id, rect);
+		this.shareFrames(addon, id);
 		return id;
+	}
+
+	/** Hands the view's frames over as shared GPU textures when this host can, instead of
+	 *  copying them through IPC: measured, that transport alone kept 37 to 55 % of the
+	 *  renderer's main thread busy at 30 fps (rendering-performance.md). Anything missing —
+	 *  the Electron API, GPU compositing, Windows' hardware backend native-side — leaves the
+	 *  view on read-back. `OPENSCREEN_PREVIEW_READBACK=1` forces read-back, to compare. */
+	private shareFrames(addon: CompositorViewAddon, id: number): void {
+		if (process.env.OPENSCREEN_PREVIEW_READBACK === "1" || !this.sharedTextureApi()) {
+			return;
+		}
+		if (!(this.options.gpuCompositing ?? defaultGpuCompositing)()) {
+			return;
+		}
+		if (addon.setSharedFrames?.(id, true)) {
+			this.sharedViews.add(id);
+		}
+	}
+
+	private sharedTextureApi(): SharedTextureApi | null {
+		const api =
+			this.options.sharedTexture === undefined ? sharedTexture : this.options.sharedTexture;
+		return typeof api?.importSharedTexture === "function" ? api : null;
+	}
+
+	/** Takes the view back to read-back frames: a delivery failed, or the renderer saw a shared
+	 *  frame land as nothing (Chromium could not open the texture). The render thread
+	 *  republishes the current frame, so the canvas is not left empty. */
+	stopSharedFrames(id: number): void {
+		this.sharedViews.delete(id);
+		this.ensureAddon()?.setSharedFrames?.(id, false);
 	}
 
 	setRect(id: number, rect: CompositorViewRect): void {
@@ -550,17 +664,76 @@ export class CompositorViewService {
 		addon.setRect(id, rect);
 	}
 
-	/** Reads the most recently rendered frame for `id` as a self-describing packet
-	 *  (`{ gen, width, height, data }`), but only if its generation is newer than
-	 *  `sinceGen`. Returns `null` when the addon is absent, no frame is ready yet,
-	 *  OR the caller already holds the current generation — the idle path, where
-	 *  `null` comes back without any buffer copy. Byte order is RGBA. */
-	readFrame(id: number, sinceGen: number): NativeFramePacket | null {
+	/** Reads the most recently rendered frame for `id`, but only if its generation is newer
+	 *  than `sinceGen`. Returns `null` when the addon is absent, no frame is ready yet, OR the
+	 *  caller already holds the current generation — the idle path, where nothing is copied.
+	 *
+	 *  A view on shared textures sends the frame to `target` as a GPU texture, and answers with
+	 *  its receipt (`shared: true`, no pixels): the texture reaches the renderer before this
+	 *  reply does. Any other view answers with the RGBA pixels themselves. */
+	async readFrame(
+		id: number,
+		sinceGen: number,
+		target?: WebFrameMain | null,
+	): Promise<NativeFramePacket | CompositorSharedFrameReceipt | null> {
 		const addon = this.ensureAddon();
 		if (!addon) {
 			return null;
 		}
+		if (target && this.sharedViews.has(id)) {
+			const frame = addon.readSharedFrame?.(id, sinceGen);
+			if (frame) {
+				return this.sendSharedFrame(addon, id, frame, target);
+			}
+		}
+		// Also the answer for a view whose render thread went back to read-back on its own.
 		return addon.readFrame(id, sinceGen);
+	}
+
+	private async sendSharedFrame(
+		addon: CompositorViewAddon,
+		id: number,
+		frame: NativeSharedFramePacket,
+		target: WebFrameMain,
+	): Promise<CompositorSharedFrameReceipt | null> {
+		const meta: CompositorSharedFrameMeta = {
+			viewId: id,
+			gen: frame.gen,
+			width: frame.width,
+			height: frame.height,
+			footage: frame.footage ?? null,
+			footageProjective: frame.footageProjective ?? false,
+			clipIndex: frame.clipIndex,
+			sourceTimeSec: frame.sourceTimeSec,
+		};
+		const api = this.sharedTextureApi();
+		let imported: Electron.SharedTextureImported | undefined;
+		try {
+			if (!api) {
+				throw new Error("the sharedTexture API is gone");
+			}
+			imported = api.importSharedTexture({
+				textureInfo: {
+					pixelFormat: "rgba",
+					codedSize: { width: frame.width, height: frame.height },
+					handle: { ntHandle: frame.handle },
+				},
+				// Chromium is done with the texture in every process: the slot may be written again.
+				allReferencesReleased: () => addon.releaseSharedFrame?.(id, frame.slot, frame.gen),
+			});
+			await api.sendSharedTexture({ frame: target, importedSharedTexture: imported }, meta);
+			return { ...meta, shared: true };
+		} catch (error) {
+			console.warn("[compositor-view] shared frame not delivered; reading frames back:", error);
+			this.stopSharedFrames(id);
+			if (!imported) {
+				addon.releaseSharedFrame?.(id, frame.slot, frame.gen);
+			}
+			return null;
+		} finally {
+			// This process's reference only: the renderer holds its own until it has drawn.
+			imported?.release();
+		}
 	}
 
 	setParam(id: number, key: string, value: CompositorParamValue): void {
@@ -613,6 +786,7 @@ export class CompositorViewService {
 	destroyView(id: number): void {
 		const addon = this.ensureAddon();
 		this.rects.delete(id);
+		this.sharedViews.delete(id);
 		if (!addon) {
 			return;
 		}
@@ -659,6 +833,7 @@ export class CompositorViewService {
 		sceneJson?: string,
 		params?: GifParamsInput,
 		onProgress?: (frames: number) => void,
+		control?: object,
 	): Promise<GifExportStats | null> {
 		const addon = this.ensureAddon();
 		if (!addon) {
@@ -671,7 +846,29 @@ export class CompositorViewService {
 			sceneJson ? resolveSceneAssetPaths(sceneJson) : undefined,
 			params,
 			onProgress,
+			control,
 		);
+	}
+
+	startGifExport(
+		clips: ClipInput[],
+		outPath?: string,
+		sceneJson?: string,
+		params?: GifParamsInput,
+		onProgress?: (frames: number) => void,
+	): GifExportJob<GifExportStats | null> {
+		const addon = this.ensureAddon();
+		if (!addon?.createGifExportControl || !addon.cancelGifExport) {
+			throw new Error(
+				"Native GIF cancellation is unavailable. Rebuild or update the compositor addon.",
+			);
+		}
+		const control = addon.createGifExportControl();
+		const cancel = addon.cancelGifExport.bind(addon);
+		return {
+			result: this.exportGif(clips, outPath, sceneJson, params, onProgress, control),
+			cancel: () => cancel(control),
+		};
 	}
 
 	/** Stream-copy `inputPath` to `outputPath` through libavformat's matroska muxer.
@@ -691,5 +888,16 @@ export class CompositorViewService {
 			return null;
 		}
 		return addon.remuxSeekable(inputPath, outputPath);
+	}
+
+	/** The loudness-normalisation gain (dB) the export applies to this voice file, so the
+	 *  preview can play it at the same level. Null when the addon is absent or predates it:
+	 *  the preview then plays the file as recorded, the export still normalises. */
+	async loudnessGainDb(filePath: string): Promise<number | null> {
+		const addon = this.ensureAddon();
+		if (!addon?.loudnessGainDb) {
+			return null;
+		}
+		return addon.loudnessGainDb(filePath);
 	}
 }

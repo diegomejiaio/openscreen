@@ -12,6 +12,8 @@ import type {
 	Rotation3DPreset,
 } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
+import { DEFAULT_TEXT_PLATE } from "../annotations/background";
+import { fitTextBox } from "../annotations/placement";
 import {
 	collapseTracksToPills,
 	patchAudioTrack,
@@ -20,11 +22,15 @@ import {
 	trackGroupId,
 } from "../document/audioTracks";
 import { createId } from "../document/ids";
+import { resolveAspectRatioValue } from "../document/outputFormat";
 import {
+	clearEditRegions,
+	countEditRegions,
 	duplicateClip as duplicateClipInDocument,
 	moveClip as moveClipInDocument,
 	PLACEHOLDER_DURATION_SEC,
 	type RegionKind,
+	readSpeedRegions,
 	removeClip as removeClipInDocument,
 	removeRegion as removeRegionInDocument,
 	resequenceClips,
@@ -43,8 +49,12 @@ import {
 	resolvePillIds,
 } from "../timeline/timelineMap";
 import { dropTrimPillsByIds, resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
+import { MAX_ZOOM_SCALE, MIN_ZOOM_SCALE } from "../timeline/zoom-scale";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
-import { useProjectStore, waitForDocumentSaves } from "./projectStore";
+import { getEditorSettings } from "./editorSettings";
+import { saveWithDeadline, useProjectStore, waitForDocumentSaves } from "./projectStore";
+import { currentWriteEpoch } from "./undoStack";
+import { useSequentialTimelineOps } from "./useSequentialTimelineOps";
 
 // How long a region lasts when the caller doesn't say. The timeline's toolbar
 // passes its own duration instead, derived from the current zoom so the new pill
@@ -133,6 +143,13 @@ export function useTimeline() {
 	// was never written.
 	const zoomFocusRollbackRef = useRef<AxcutDocument | null>(null);
 	const zoomFocusLiveRef = useRef<AxcutDocument | null>(null);
+	// And the focus drag's last value, which its commit puts back if a zoom write lands over it,
+	// with the write epoch it was made in.
+	const zoomFocusEditRef = useRef<{
+		id: string;
+		focus: { cx: number; cy: number };
+		epoch: number;
+	} | null>(null);
 	const annotationRollbackRef = useRef<AxcutDocument | null>(null);
 	const annotationLiveRef = useRef<AxcutDocument | null>(null);
 
@@ -146,6 +163,7 @@ export function useTimeline() {
 	useEffect(() => {
 		zoomFocusRollbackRef.current = null;
 		zoomFocusLiveRef.current = null;
+		zoomFocusEditRef.current = null;
 		annotationRollbackRef.current = null;
 		annotationLiveRef.current = null;
 	}, [projectId]);
@@ -329,8 +347,10 @@ export function useTimeline() {
 						startMs: timeMs,
 						endMs,
 						depth: 3,
+						// Auto: a zoom added with Z frames what the pointer is doing, like the ones
+						// placed at import. The centre is its fallback where no pointer was recorded.
 						focus: { cx: 0.5, cy: 0.5 },
-						focusMode: "manual" as const,
+						focusMode: "auto" as const,
 					},
 				],
 				document.timeline.clips,
@@ -422,7 +442,7 @@ export function useTimeline() {
 		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
 			if (!document) return;
 			const timeMs = Math.round(playheadSec() * 1000);
-			const ann: AnnotationRegion = {
+			const draft: AnnotationRegion = {
 				id: createId("ann"),
 				startMs: timeMs,
 				endMs: timeMs + Math.round(durationSec * 1000),
@@ -435,11 +455,14 @@ export function useTimeline() {
 				// `content || textContent` and seeding both would just duplicate it.
 				content: ts("annotation.defaultText"),
 				textContent: "",
+				// On the frame, free of the footage: padding never moves it.
+				space: "frame",
+				// A point at the centre of the frame; `fitTextBox` below grows the box around it.
 				position: { x: 50, y: 50 },
-				size: { width: 30, height: 20 },
+				size: { width: 0, height: 0 },
 				style: {
 					color: "#ffffff",
-					backgroundColor: "transparent",
+					backgroundColor: DEFAULT_TEXT_PLATE,
 					fontSize: 32,
 					fontFamily: "Inter",
 					fontWeight: "bold",
@@ -450,6 +473,11 @@ export function useTimeline() {
 				},
 				zIndex: document.annotations.length + 1,
 			};
+			const frameAspect = resolveAspectRatioValue(
+				document,
+				getEditorSettings(document).aspectRatio,
+			);
+			const ann: AnnotationRegion = { ...draft, ...fitTextBox(draft, frameAspect) };
 			const created = anchorRegionsWithDerivedMs([ann], document.timeline.clips, () =>
 				createId("ann"),
 			);
@@ -622,29 +650,119 @@ export function useTimeline() {
 		[saveDocument],
 	);
 
+	// The zoom pane's own write chain -- see `queueZoomWrite`. Only `enqueue` is used, so
+	// there is no fallback document to hand it.
+	const { enqueue: enqueueZoomWrite } = useSequentialTimelineOps({
+		fallbackDocument: null,
+		saveDocument,
+	});
+
+	// Every whole-document write to one zoom goes through this chain: the pane's one-field
+	// writes (level, 3D tilt, focus mode, cursor), a pill's span, and the focus
+	// commit. `write` runs INSIDE the chain, on the document the previous zoom write left, and
+	// returns its `saveDocument`. The level buttons step while the previous save is still out,
+	// and 3 -> 4 -> 5 built both saves from the render's depth-3 document: the main process does
+	// not order them, so the 4 could land last, and even in order one Ctrl+Z skipped a level. A
+	// neighbouring select changed, a pill resized or a focus committed while a level was pending
+	// rebuilt from that same document and put 3 back. Resolves `saveDocument`'s answer, so the
+	// level buttons can retry a failed write, or `"timeout"` when it did not come in time.
+	//
+	// Each request is bound to the project and write epoch it was asked against — the same
+	// pair `addAsset` samples: an undo bumps the epoch, a project switch swaps both, and a
+	// queued patch that only STARTS after such a replacement must not apply to the document
+	// that replaced its target. A save whose answer is unknown (`saveWithDeadline` timed out
+	// with the bridge still silent) may still land, so later zoom writes are refused until it
+	// settles instead of racing it — the same "a queued write racing a stuck one" the
+	// `waitForDocumentSaves` header calls out. The block is keyed to the save's own epoch:
+	// once a replacement moves the epoch, that save can no longer install anything
+	// (`saveDocument` drops it) and must stop blocking; a project switch does not move the
+	// epoch, so there the stuck save can still land and the block correctly stays.
+	const unknownZoomSavesRef = useRef<Array<number>>([]);
+	const queueZoomWrite = useCallback(
+		(write: (doc: AxcutDocument, historyBase: AxcutDocument | undefined) => Promise<boolean>) => {
+			const epoch = currentWriteEpoch();
+			const projectId = useProjectStore.getState().projectId;
+			return enqueueZoomWrite(async () => {
+				if (useProjectStore.getState().projectId !== projectId || currentWriteEpoch() !== epoch) {
+					return false;
+				}
+				if (unknownZoomSavesRef.current.filter((stuck) => stuck === epoch).length > 0) {
+					return false;
+				}
+				const doc = useProjectStore.getState().document;
+				if (!doc) return false;
+				// A focus drag not yet committed is on screen, so this write saves it too, and the
+				// commit will find nothing left to record. Its undo step reaches back to before
+				// the drag instead, or the drag could never be undone.
+				const historyBase =
+					doc === zoomFocusLiveRef.current
+						? (zoomFocusRollbackRef.current ?? undefined)
+						: undefined;
+				const save = write(doc, historyBase);
+				const outcome = await saveWithDeadline(save);
+				if (outcome === "timeout") {
+					// Unknown, not failed: the write may still land. Refuse later writes into
+					// this same document generation until the save settles or the epoch moves
+					// past it.
+					unknownZoomSavesRef.current.push(epoch);
+					void save
+						.then(
+							() => undefined,
+							() => undefined,
+						)
+						.finally(() => {
+							unknownZoomSavesRef.current = unknownZoomSavesRef.current.filter(
+								(stuck) => stuck !== epoch,
+							);
+						});
+				}
+				return outcome;
+			});
+		},
+		[enqueueZoomWrite],
+	);
+
+	// Reports not-taken for an unknown answer too, so the buttons retry.
+	const saveZoomPatch = useCallback(
+		(id: string, patch: Partial<AxcutDocument["zoomRanges"][number]>) =>
+			queueZoomWrite((doc, historyBase) =>
+				saveDocument(
+					{
+						...doc,
+						zoomRanges: patchPillById(doc.zoomRanges, id, patch) as AxcutDocument["zoomRanges"],
+					},
+					{ history: true, historyBase },
+				),
+			).then((outcome) => outcome === true),
+		[queueZoomWrite, saveDocument],
+	);
+
 	// Span edits are GROUP-AWARE: dragging/resizing a pill re-anchors every fragment
 	// under the pill to the new ruler span, so an edit that crosses a clip
 	// boundary re-splits and one dragged back inside a clip collapses — one user edit stays
 	// one pill. See timelineMap.reanchorGroupSpan.
 	const updateZoomSpan = useCallback(
-		async (id: string, startMs: number, endMs: number) => {
-			if (!document) return;
+		(id: string, startMs: number, endMs: number) => {
 			const s = finiteMs(startMs);
 			const e = finiteMs(endMs);
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: replacePillSpan(
-					document.zoomRanges,
-					id,
-					Math.min(s, e),
-					Math.max(s, e),
-					document.timeline.clips,
-					() => createId("zoom"),
-				) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
+			return queueZoomWrite((doc, historyBase) =>
+				saveDocument(
+					{
+						...doc,
+						zoomRanges: replacePillSpan(
+							doc.zoomRanges,
+							id,
+							Math.min(s, e),
+							Math.max(s, e),
+							doc.timeline.clips,
+							() => createId("zoom"),
+						) as AxcutDocument["zoomRanges"],
+					},
+					{ history: true, historyBase },
+				),
+			);
 		},
-		[document, saveDocument],
+		[queueZoomWrite, saveDocument],
 	);
 
 	// ponytail: the focus overlay drags at pointermove frequency (~60-120 Hz).
@@ -664,63 +782,111 @@ export function useTimeline() {
 			// behind when the commit failed and rolled the document back to that very
 			// document — a Ctrl+Z that visibly did nothing, with `future` already wiped.
 			if (zoomFocusLiveRef.current !== doc) zoomFocusRollbackRef.current = doc;
+			const edit = {
+				id,
+				focus: { cx: finiteFraction(focus.cx), cy: finiteFraction(focus.cy) },
+				epoch: currentWriteEpoch(),
+			};
 			const next: AxcutDocument = {
 				...doc,
 				zoomRanges: patchPillById(doc.zoomRanges, id, {
-					focus: { cx: finiteFraction(focus.cx), cy: finiteFraction(focus.cy) },
+					focus: edit.focus,
 				}) as AxcutDocument["zoomRanges"],
 			};
 			setDocument(next, { history: false });
 			zoomFocusLiveRef.current = next;
+			zoomFocusEditRef.current = edit;
 		},
 		[setDocument],
 	);
 
+	// On the zoom chain, like every zoom write: a level still being saved when the focus is
+	// committed would otherwise land first and be overwritten by this save, built before it.
 	const commitZoomFocus = useCallback(async () => {
-		const doc = useProjectStore.getState().document;
-		if (!doc) return;
-		// The snapshot counts only while the document on screen is still the one this
-		// hook's last live write produced -- `updateZoomFocusLive`'s own identity test,
-		// read the other way round. Without it a commit that arrives with no live write
-		// in front of it picks up whatever an abandoned drag left behind, and every
-		// recording write since has already put the states in between on the stack: as a
-		// `historyBase` that makes one Ctrl+Z step over the lot, and on the failure path
-		// below it puts that buried document back on screen, silently dropping them.
-		// `handlePointerDown` sets `draggingRef` BEFORE its live write and that write
-		// returns early on a zero-size overlay rect, so `endDrag` can reach here bare.
-		const rollback = zoomFocusLiveRef.current === doc ? zoomFocusRollbackRef.current : null;
+		// What the drag left, taken now. While the commit waits its turn, a zoom write queued
+		// before the drag can land, and it installs ITS document, built before the drag, in
+		// place of the dragged one.
+		const live = zoomFocusLiveRef.current;
+		const rollback = zoomFocusRollbackRef.current;
+		const epoch = currentWriteEpoch();
+		// A drag abandoned before an undo or a replacement is not this commit's to put back: the
+		// document it was made on is gone, and restoring its focus would undo the undo.
+		const pendingEdit = zoomFocusEditRef.current;
+		const edit = pendingEdit?.epoch === epoch ? pendingEdit : null;
 		zoomFocusRollbackRef.current = null;
 		zoomFocusLiveRef.current = null;
-		// `historyBase: rollback` — the pre-drag document, not the one the store holds
-		// (that is the dragged one, written live). `null` when no live write happened,
-		// which records nothing, which is right: nothing changed.
-		if (!(await saveDocument(doc, { history: true, historyBase: rollback })) && rollback) {
+		zoomFocusEditRef.current = null;
+		const pending: { save?: Promise<boolean> } = {};
+		const outcome = await queueZoomWrite((doc) => {
+			// The snapshot counts only while the document on screen is still the one this
+			// hook's last live write produced -- `updateZoomFocusLive`'s own identity test,
+			// read the other way round. Without it a commit that arrives with no live write
+			// in front of it picks up whatever an abandoned drag left behind, and every
+			// recording write since has already put the states in between on the stack: as a
+			// `historyBase` that makes one Ctrl+Z step over the lot, and on the failure path
+			// below it puts that buried document back on screen, silently dropping them.
+			// `handlePointerDown` sets `draggingRef` BEFORE its live write and that write
+			// returns early on a zero-size overlay rect, so `endDrag` can reach here bare.
+			//
+			// `historyBase` is the pre-drag document, not the one the store holds (that is the
+			// dragged one, written live); `null` when no live write happened, which records
+			// nothing, which is right: nothing changed.
+			let next = doc;
+			let historyBase = doc === live ? rollback : null;
+			const pill = edit ? doc.zoomRanges.find((zoom) => zoom.id === edit.id) : undefined;
+			if (
+				doc !== live &&
+				edit &&
+				pill &&
+				(pill.focus.cx !== edit.focus.cx || pill.focus.cy !== edit.focus.cy)
+			) {
+				// A zoom write landed over the drag and took its focus off screen. The focus goes
+				// back on top of that write, so both stay, and one Ctrl+Z takes the focus off it
+				// again. When the writes since carried the focus along, there is nothing to add.
+				next = {
+					...doc,
+					zoomRanges: patchPillById(doc.zoomRanges, edit.id, {
+						focus: edit.focus,
+					}) as AxcutDocument["zoomRanges"],
+				};
+				historyBase = doc;
+			}
+			pending.save = saveDocument(next, { history: true, historyBase });
+			return pending.save;
+		});
+		// A save out of time has left the chain, but it can still fail: its answer, whenever it
+		// comes, decides the rollback, or the dragged focus stays on screen for a later save.
+		const saved = outcome === "timeout" && pending.save ? await pending.save : outcome;
+		if (saved === false && rollback) {
 			useProjectStore.setState((state) =>
+				// Only while the dragged document is still the one on screen, in the epoch it was
+				// committed in: anything else there was put by a write that landed, or by an undo.
 				// `dirty` is deliberately NOT cleared. The rollback target is the last document
 				// this drag started from, which is not the same as the last SAVED one: with two
 				// commits in flight the first one's unsaved document is what we restore. Saying
 				// "clean" there tells `beforeunload` and `setHasUnsavedChanges` there is nothing
 				// to save, and the window closes on real work without prompting.
-				state.document === doc ? { document: rollback, revision: state.revision + 1 } : {},
+				state.document === live && currentWriteEpoch() === epoch
+					? { document: rollback, revision: state.revision + 1 }
+					: {},
 			);
 		}
-	}, [saveDocument]);
+	}, [queueZoomWrite, saveDocument]);
 
-	// Zoom-level control for the region-settings panel (1-6, matches
-	// zoomRegionSchema's depth literal union — 1.0x..3.5x in 0.5x steps per
-	// the `depth/2 + 0.5` label formula used throughout the timeline UI).
+	// A preset level (`ZOOM_DEPTH_SCALES`, 1.25×–5×). It clears any custom scale, which
+	// would otherwise keep overriding the depth: the level picked is the level rendered.
 	const updateZoomDepth = useCallback(
-		async (id: string, depth: 1 | 2 | 3 | 4 | 5 | 6) => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					depth,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
+		(id: string, depth: 1 | 2 | 3 | 4 | 5 | 6) =>
+			saveZoomPatch(id, { depth, customScale: undefined }),
+		[saveZoomPatch],
+	);
+
+	// Any other level, from the pane's free field. Clamped to the renderer's range here, so no
+	// caller can store a scale that `effectiveZoomScale` would then read differently.
+	const updateZoomCustomScale = useCallback(
+		(id: string, scale: number) =>
+			saveZoomPatch(id, { customScale: Math.min(MAX_ZOOM_SCALE, Math.max(MIN_ZOOM_SCALE, scale)) }),
+		[saveZoomPatch],
 	);
 
 	// Same story as `focusMode` below: the 3D tilt was implemented end to end — schema
@@ -729,17 +895,9 @@ export function useTimeline() {
 	// `undefined` clears the preset back to a flat frame; `migrate.ts` already drops the field
 	// when it is falsy, so absent and "no rotation" are the same state.
 	const updateZoomRotation = useCallback(
-		async (id: string, rotationPreset: Rotation3DPreset | undefined) => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					rotationPreset,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
+		(id: string, rotationPreset: Rotation3DPreset | undefined) =>
+			saveZoomPatch(id, { rotationPreset }),
+		[saveZoomPatch],
 	);
 
 	// Nothing could set `focusMode`: "auto" only ever arrived from the automatic suggestion pass
@@ -751,47 +909,14 @@ export function useTimeline() {
 	// Writing "manual" explicitly is safe even though `migrate.ts` only persists "auto": an absent
 	// field MEANS manual, so both forms resolve identically.
 	const updateZoomFocusMode = useCallback(
-		async (id: string, focusMode: "manual" | "auto") => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					focusMode,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
+		(id: string, focusMode: "manual" | "auto") => saveZoomPatch(id, { focusMode }),
+		[saveZoomPatch],
 	);
 
 	const updateZoomHideCursor = useCallback(
-		async (id: string, hideCursor: boolean | undefined) => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					hideCursor: hideCursor ? true : undefined,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
-	);
-
-	// Per-region, like the preset it animates. `undefined` rather than `false` so the document
-	// keeps omitting the key when the option is off.
-	const updateZoomClickImpact = useCallback(
-		async (id: string, clickImpact: boolean) => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					clickImpact: clickImpact ? true : undefined,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
+		(id: string, hideCursor: boolean | undefined) =>
+			saveZoomPatch(id, { hideCursor: hideCursor ? true : undefined }),
+		[saveZoomPatch],
 	);
 
 	const updateAnnotationSpan = useCallback(
@@ -1012,6 +1137,22 @@ export function useTimeline() {
 		},
 		[document, saveDocument],
 	);
+
+	// Every edit region (zoom, speed, trim, annotation, Full Camera), on every clip, in one
+	// write: one undo step brings them all back. Clips, media, audio tracks, captions and the
+	// transcript are content, not edits, and stay (see `clearEditRegions`).
+	//
+	// `hasEditRegions` counts the STORED regions, not the pills the lanes draw: a trim whose
+	// clip is gone is stored and cleared but has no pill. The toolbar button reads it too, so
+	// what shows the button and what the action clears are one count.
+	const hasEditRegions = document !== null && countEditRegions(document) > 0;
+	const clearTimeline = useCallback(async () => {
+		if (!document || !hasEditRegions) return;
+		if (!(await saveDocument(clearEditRegions(document), { history: true }))) return;
+		// Every region a selection can point at is gone. An audio track is not one of them.
+		if (selection && selection.kind !== "audio") setSelection(null);
+		setMultiSelection((prev) => prev.filter((h) => h.kind === "audio"));
+	}, [document, hasEditRegions, selection, saveDocument]);
 
 	// Selecting a pill and selecting a clip are the SAME act — "this is the thing
 	// I mean" — so they cancel each other. They used to be two states that could
@@ -1309,12 +1450,7 @@ export function useTimeline() {
 	);
 
 	const speedRegions = hasDoc
-		? (((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as Array<{
-				id: string;
-				startMs: number;
-				endMs: number;
-				speed: number;
-			}>) ?? [])
+		? readSpeedRegions<{ id: string; startMs: number; endMs: number; speed: number }>(document)
 		: [];
 
 	const cameraFullscreenRegions = hasDoc
@@ -1529,6 +1665,8 @@ export function useTimeline() {
 		addCameraFullscreen,
 		removeRegion,
 		removeRegions,
+		hasEditRegions,
+		clearTimeline,
 		addAudioTrack,
 		addAudio,
 		removeAudioTrack,
@@ -1552,10 +1690,10 @@ export function useTimeline() {
 		updateZoomFocusLive,
 		commitZoomFocus,
 		updateZoomDepth,
+		updateZoomCustomScale,
 		updateZoomRotation,
 		updateZoomFocusMode,
 		updateZoomHideCursor,
-		updateZoomClickImpact,
 		updateAnnotationSpan,
 		updateAnnotationLive,
 		commitAnnotationChange,

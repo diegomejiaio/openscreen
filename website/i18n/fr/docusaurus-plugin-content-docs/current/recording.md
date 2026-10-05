@@ -25,7 +25,7 @@ Le bouton du sélecteur de source affiche le nom, tronqué, de l'écran ou de la
 - **Écrans** : une carte par écran.
 - **Fenêtres** : une carte par fenêtre ouverte, avec l'icône de son application.
 
-Choisissez une vignette et cliquez sur **Partager**. Si aucune source n'est choisie quand vous lancez l'enregistrement, OpenScreen ouvre d'abord le sélecteur et démarre l'enregistrement automatiquement dès que vous en choisissez une.
+Choisissez une vignette et cliquez sur **Partager**. Sous macOS 15.2 et ultérieur, le bouton ouvre plutôt le sélecteur du système d'Apple. Si aucune source n'est choisie quand vous lancez l'enregistrement, OpenScreen ouvre d'abord le sélecteur et démarre l'enregistrement automatiquement dès que vous en choisissez une.
 
 Il n'y a pas de capture de zone : vous enregistrez un écran entier ou une fenêtre, puis vous recadrez l'image après coup, clip par clip, dans l'éditeur.
 
@@ -49,7 +49,7 @@ Sous Windows, macOS et Linux, un bouton de mode du curseur bascule entre :
 
 Ce que capture le curseur éditable dépend de la plateforme :
 - **Windows** : la vraie forme du curseur et les clics.
-- **macOS** : la forme du curseur et les clics, qui exigent l'autorisation Accessibilité. Dans ce mode, sans cette autorisation, le bouton d'enregistrement ouvre une invite qui renvoie vers le réglage au lieu de lancer l'enregistrement (voir l'[installation sous macOS](./installation.md#macos)).
+- **macOS** : la forme du curseur et les clics, qui exigent l'autorisation Accessibilité. Dans ce mode, sans cette autorisation, le bouton d'enregistrement ouvre la fenêtre d'autorisations au lieu de lancer l'enregistrement (voir l'[installation sous macOS](./installation.md#macos)).
 - **Linux** : la position et la forme via le portail ScreenCast, ainsi que les clics gauches si votre utilisateur fait partie du groupe `input` (voir [Clics de souris sous Wayland](./installation.md#mouse-clicks-on-wayland)).
 
 Une prise sous Linux qui se rabat sur la [capture par le navigateur](#native-vs-browser-capture) enregistre le curseur du système, quel que soit le mode choisi.
@@ -78,9 +78,9 @@ Lancer l'enregistrement déclenche un compte à rebours 3‑2‑1, affiché en s
 
 Vous n'êtes pas obligé de partir du HUD. Dans l'éditeur, choisissez **Enregistrement** dans la barre supérieure pour obtenir une page de préparation en pleine taille au lieu d'une pastille :
 
-- **Source** : le même sélecteur d'écran ou de fenêtre, dans une fenêtre modale. Sous Linux, cette ligne affiche aussi *Le système vous demandera quoi partager*, et c'est la boîte de dialogue du portail qui fait le choix.
+- **Source** : le même sélecteur d'écran ou de fenêtre, dans une fenêtre modale, ou le sélecteur du système d'Apple sous macOS 15.2 et ultérieur. Sous Linux, cette ligne affiche aussi *Le système vous demandera quoi partager*, et c'est la boîte de dialogue du portail qui fait le choix.
 - **Audio système**, **Microphone**, **Caméra** : chacun sur une ligne avec un interrupteur ; le micro et la caméra se déplient en liste de périphériques, et la caméra montre un aperçu en direct pour vous cadrer avant de commencer.
-- **Curseur en surbrillance** : activé, c'est le curseur éditable ; désactivé, le simple curseur du système.
+- **Curseur éditable** : activé, c'est le curseur éditable ; désactivé, le simple curseur du système.
 
 **Démarrer l'enregistrement** ouvre le widget d'enregistrement et ferme la fenêtre de l'éditeur ; annuler vous ramène en mode Édition. C'est aussi là que mène **Nouveau projet → Enregistrement d'écran**.
 

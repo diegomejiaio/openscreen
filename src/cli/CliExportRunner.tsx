@@ -7,27 +7,28 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+	type EditorProjectData,
 	normalizeProjectEditor,
 	resolveProjectMedia,
 	toFileUrl,
 	validateProjectData,
 } from "@/components/video-editor/projectPersistence";
-import type { CursorTelemetryPoint } from "@/components/video-editor/types";
 import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
 import {
 	collectEffectiveClipDims,
-	type Dims,
 	pickExtremeDims,
 	resolveAspectRatioValue,
 } from "@/lib/ai-edition/document/outputFormat";
 import { applyProbedDuration } from "@/lib/ai-edition/document/timeline";
-import type { AxcutDocument } from "@/lib/ai-edition/schema";
+import { type AxcutDocument, isAxcutDocumentFile } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
+import {
+	appendAutoZoomSuggestions,
+	collectAutoZoomSuggestionsForDocument,
+} from "@/lib/ai-edition/timeline/apply-auto-zooms";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { clipAudioExportFields } from "@/lib/ai-edition/timeline/clipAudio";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
-import { DEFAULT_ZOOM_DEPTH, ZOOM_DEPTH_SCALES } from "@/lib/ai-edition/timeline/zoom-scale";
-import { buildAutoZoomSuggestions } from "@/lib/ai-edition/timeline/zoom-suggestions";
 import type { CliDoneResult, CliExportRequest } from "@/lib/cliContracts";
 import { GIF_SIZE_PRESETS, type GifSizePreset } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
@@ -36,7 +37,7 @@ import { mixVoiceoverIntoVideo } from "@/lib/exporter/voiceoverMix";
 import { exportGifNative, exportMultiNative, nativeBridgeClient } from "@/native";
 import type { CompositorClipInput } from "@/native/contracts";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
-import { clampZoomFocus } from "./vendor/zoomHelpers";
+import { type ExportProject, loadDocumentProject } from "./exportProject";
 
 const MP4_EXPORT_FPS = 60;
 
@@ -116,42 +117,11 @@ function gifOutputDims(
 	return { width: even(tierDims.width), height: even(tierDims.height) };
 }
 
-function appendAutoZoomRanges(
-	axcutDocument: AxcutDocument,
-	cursorTelemetry: CursorTelemetryPoint[],
-	totalMs: number,
-): number {
-	const suggestions = buildAutoZoomSuggestions({
-		cursorTelemetry,
-		totalMs,
-		existingRegions: axcutDocument.zoomRanges,
-		defaultDurationMs: Math.max(1000, Math.round(totalMs * 0.05)),
-	});
-	let nextId = 1;
-	for (const suggestion of suggestions) {
-		axcutDocument.zoomRanges.push({
-			id: `cli-auto-zoom-${nextId++}`,
-			startMs: Math.round(suggestion.span.start),
-			endMs: Math.round(suggestion.span.end),
-			depth: DEFAULT_ZOOM_DEPTH,
-			customScale: ZOOM_DEPTH_SCALES[DEFAULT_ZOOM_DEPTH],
-			focus: clampZoomFocus(suggestion.focus),
-			focusMode: "auto",
-			source: "auto",
-		});
-	}
-	return suggestions.length;
-}
-
-async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
-	const loaded = await nativeBridgeClient.project.loadProjectFileFromPath(request.projectPath);
-	if (!loaded.success || loaded.project === undefined) {
-		throw new Error(loaded.error ?? loaded.message ?? "Failed to load project file");
-	}
-	if (!validateProjectData(loaded.project)) {
-		throw new Error("Project file is not a valid .openscreen project");
-	}
-	const project = loaded.project;
+/**
+ * A legacy v2 project (`{ version, media, editor }`), as written before the editor saved the
+ * document itself: migrated to an AxcutDocument, with what the migration cannot know probed.
+ */
+async function loadLegacyProject(project: EditorProjectData): Promise<ExportProject> {
 	const media = resolveProjectMedia(project);
 	if (!media) {
 		throw new Error("Project file does not reference any recorded media");
@@ -172,28 +142,6 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	}
 	const editor = normalizeProjectEditor(project.editor ?? {});
 
-	const format = request.format ?? editor.exportFormat;
-	if (request.audioPath && format === "gif") {
-		throw new Error(
-			"--audio is only supported for MP4 exports (this project's stored format is gif; pass --format mp4)",
-		);
-	}
-	const quality = request.quality ?? editor.exportQuality;
-	const gifFrameRate = request.gifFrameRate ?? editor.gifFrameRate;
-	const gifSizePreset = request.gifSizePreset ?? editor.gifSizePreset;
-	const outPath =
-		request.outPath ?? replaceExtension(request.projectPath, format === "gif" ? ".gif" : ".mp4");
-	// Cursor telemetry: only needed to compute --auto-zoom suggestions. The
-	// native compositor discovers the `<video>.cursor.json` sidecar itself.
-	let cursorTelemetry: CursorTelemetryPoint[] = [];
-	if (request.autoZoom) {
-		try {
-			cursorTelemetry = await nativeBridgeClient.cursor.getTelemetry(media.screenVideoPath);
-		} catch {
-			cursorTelemetry = [];
-		}
-	}
-
 	const probed = await probeVideoDimensions(toFileUrl(media.screenVideoPath));
 
 	// Migrate the .openscreen project onto the AxcutDocument the native
@@ -211,6 +159,29 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	}
 	if (probed.durationMs > 0) {
 		axcutDocument = applyProbedDuration(axcutDocument, primaryAssetId, probed.durationMs / 1000);
+	}
+	// The screen's dimensions, for the same reason as the camera's below: the pure migration
+	// cannot know them, and the scene's screen box, the output frame and Auto all read them off
+	// `asset.video`. Without them the CLI laid every recording out as 1920x1080 while sizing the
+	// export from the probe, two answers to one question.
+	if (probed.width > 0 && probed.height > 0) {
+		axcutDocument = {
+			...axcutDocument,
+			assets: axcutDocument.assets.map((asset) =>
+				asset.id === primaryAssetId
+					? {
+							...asset,
+							video: {
+								codec: "unknown",
+								fps: 0,
+								...asset.video,
+								width: probed.width,
+								height: probed.height,
+							},
+						}
+					: asset,
+			),
+		};
 	}
 
 	// The camera's dimensions decide the PiP's layout box, and this is the one caller the
@@ -240,20 +211,61 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 			};
 		}
 	}
+	return {
+		document: axcutDocument,
+		editor,
+		screenVideoPath: media.screenVideoPath,
+		durationMs: probed.durationMs,
+		sourceDims: { width: probed.width, height: probed.height },
+	};
+}
 
+async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
+	const loaded = await nativeBridgeClient.project.loadProjectFileFromPath(request.projectPath);
+	if (!loaded.success || loaded.project === undefined) {
+		throw new Error(loaded.error ?? loaded.message ?? "Failed to load project file");
+	}
+	let project: ExportProject;
+	if (isAxcutDocumentFile(loaded.project)) {
+		project = await loadDocumentProject(loaded.project, (videoPath) =>
+			probeVideoDimensions(toFileUrl(videoPath)),
+		);
+	} else if (validateProjectData(loaded.project)) {
+		project = await loadLegacyProject(loaded.project);
+	} else {
+		throw new Error("Project file is not a valid .openscreen project");
+	}
+	const { editor } = project;
+	let axcutDocument = project.document;
+
+	const format = request.format ?? editor.exportFormat;
+	if (request.audioPath && format === "gif") {
+		throw new Error(
+			"--audio is only supported for MP4 exports (this project's stored format is gif; pass --format mp4)",
+		);
+	}
+	const quality = request.quality ?? editor.exportQuality;
+	const gifFrameRate = request.gifFrameRate ?? editor.gifFrameRate;
+	const gifSizePreset = request.gifSizePreset ?? editor.gifSizePreset;
+	const outPath =
+		request.outPath ?? replaceExtension(request.projectPath, format === "gif" ? ".gif" : ".mp4");
+	// Use the same per-clip auto-zoom suggestions as the editor, including its default span and
+	// anchoring behavior.
 	if (request.autoZoom) {
-		const added = appendAutoZoomRanges(axcutDocument, cursorTelemetry, probed.durationMs);
-		window.electronAPI.cliLog("info", `Auto-zoom: added ${added} region(s) from cursor telemetry`);
+		const suggestions = await collectAutoZoomSuggestionsForDocument(axcutDocument, (videoPath) =>
+			nativeBridgeClient.cursor.getTelemetry(videoPath).catch(() => []),
+		);
+		axcutDocument = appendAutoZoomSuggestions(axcutDocument, suggestions);
+		window.electronAPI.cliLog(
+			"info",
+			`Auto-zoom: added ${suggestions.length} region(s) from cursor telemetry`,
+		);
 	}
 
 	// Output sizing mirrors the ExportDialog: crop-aware smallest clip on the
 	// timeline, normalized to the document's aspect ratio.
-	const probedAssetDims: Record<string, Dims> = {
-		[primaryAssetId]: { width: probed.width, height: probed.height },
-	};
 	const smallestSource =
-		pickExtremeDims(collectEffectiveClipDims(axcutDocument, probedAssetDims), "smallest") ??
-		({ width: probed.width, height: probed.height } as Dims);
+		pickExtremeDims(collectEffectiveClipDims(axcutDocument), "smallest") ?? project.sourceDims;
 	const aspectRatioValue = resolveAspectRatioValue(
 		axcutDocument,
 		getEditorSettings(axcutDocument).aspectRatio,
@@ -263,6 +275,7 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 		sourceWidth: smallestSource.width,
 		sourceHeight: smallestSource.height,
 		aspectRatioValue,
+		frameRate: MP4_EXPORT_FPS,
 	});
 
 	const builtClips = buildNativeClipList(axcutDocument);
@@ -319,6 +332,7 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 			height: outDims.height,
 			fps: MP4_EXPORT_FPS,
 			codec: "h264",
+			bitrate: outDims.bitrate,
 		});
 
 		if (request.audioPath) {

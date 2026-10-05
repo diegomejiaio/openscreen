@@ -24,10 +24,10 @@ This page is published by the OpenScreen project. The Cap details come from cap.
 | What it records | A display or one window. Crop afterward in the editor | A display, a window, an area, or the camera only |
 | Hosted share links | No | Yes. Up to 5 minutes per link on Free and the Desktop License, unlimited on Cap Pro (as of September 2026) |
 | Sign-in | Never needed | Needed for share links and Instant Mode |
-| Automatic zooms | Yes, placed from the recorded cursor movement | Yes, generated from recorded clicks |
+| Automatic zooms | Yes, planned from recorded clicks | Yes, generated from recorded clicks |
 | Captions | On-device Whisper, one model of about 264 MB, downloaded once. Burned into the video | On-device Whisper or Parakeet, in beta. Burned into the video, or saved as SRT or WebVTT |
 | AI features | Optional chat editing and caption translation into 15 languages, with your own provider key | Hosted in Cap Pro: titles, summaries, chapters, transcriptions and caption translation. No key needed |
-| Export | MP4 (H.264 or H.265) at 720p, 1080p or source size, 24, 30 or 60 fps. GIF at 15 to 30 fps. No watermark | MP4 at 720p, 1080p or 4K, 15, 30 or 60 fps. GIF at 10 to 30 fps. Transparent cursor-only MOV. No watermark. No codec setting documented |
+| Export | MP4 (H.264) at 720p, 1080p or source size, 24, 30 or 60 fps. GIF at 15 to 30 fps. No watermark | MP4 at 720p, 1080p or 4K, 15, 30 or 60 fps. GIF at 10 to 30 fps. Transparent cursor-only MOV. No watermark |
 | Teams and compliance | None | Team workspaces. SAML SSO add-on at $199/month. SOC 2 Type II, ISO 27001 and HIPAA, with a signed BAA at $99/month (as of September 2026) |
 | Command-line interface | Yes, with JSON output | Yes, with JSON output |
 
@@ -35,7 +35,7 @@ This page is published by the OpenScreen project. The Cap details come from cap.
 
 The two editors overlap widely. None of the following is unique to either app.
 
-- **Automatic and manual zooms.** In OpenScreen, **Auto-enhance → Automatic zooms** places zooms from the recorded cursor movement, with no network call and no model, and manual zooms come in six depths. Cap generates zooms around recorded clicks and offers manual zooms from 1x to 4.5x. More on [auto-zoom](/features/auto-zoom/).
+- **Automatic and manual zooms.** In OpenScreen, **Auto-enhance → Automatic zooms** plans zooms from the recorded clicks, with no network call and no model, and manual zooms come in six depths. Cap generates zooms around recorded clicks and offers manual zooms from 1x to 4.5x. More on [auto-zoom](/features/auto-zoom/).
 - **A cursor you can change afterward.** Both record the pointer as data rather than pixels, so you can resize it, smooth its movement or hide it after the take.
 - **Backgrounds and framing.** Both add wallpapers, solid colors, gradients or your own image behind the recording, with padding, rounded corners and a shadow. Both output wide, vertical or square video.
 - **Webcam, microphone and system audio** in the same recording. Both can blur the webcam background. OpenScreen can also remove it or replace it with an image, without a green screen. Cap added background removal on macOS in version 0.6.0.
@@ -63,7 +63,6 @@ If you are choosing between the two, check the license first. The others come fr
 
 ### Editing and export
 
-- **Codec choice.** MP4 exports in H.264 or H.265. Cap's export options list resolution, frame rate and quality presets, but no codec setting. See [Export](/docs/export/).
 - **A wider speed range.** OpenScreen speed regions go from 0.1x to 100x. Cap's Studio Mode docs list segment speeds from 0.25x to 8x.
 - **Export speed.** Both apps are in the public [export benchmark](/blog/2026/09/09/an-export-benchmark-hard-to-fake/). At the time of writing, OpenScreen's entry ranks ahead of Cap 0.6.0. Results vary between machines, so check the live standings there.
 
@@ -81,8 +80,8 @@ If you are choosing between the two, check the license first. The others come fr
 ## Getting started
 
 1. Download OpenScreen from the [download page](/download/). On Windows, the Microsoft Store is the recommended route.
-2. Follow [Installation](/docs/installation/). On macOS, grant the Screen Recording and Accessibility permissions before the first take.
-3. Make a first recording with the [quick start](/docs/quick-start/), then run **Auto-enhance → Automatic zooms** on it.
+2. Follow [Installation](/docs/installation/). On macOS, grant permissions from the window that opens on first launch.
+3. Make a first recording with the [quick start](/docs/quick-start/). It opens in the editor with automatic zooms already placed.
 4. To reuse videos made in Cap, export them as MP4 first. The [media library](/docs/media-library/) imports MP4, MOV, MKV and other video files into a project.
 
 Comparing other tools as well? See the [Screen Studio alternative](/alternatives/screen-studio/), [OpenScreen vs OBS Studio](/compare/openscreen-vs-obs/), the [Camtasia alternative](/alternatives/camtasia/) and the [Loom alternative](/alternatives/loom/), or go back to the [OpenScreen home page](/).

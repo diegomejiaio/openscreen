@@ -350,7 +350,7 @@
 			var(--scene-foliage-d) 100%);
 	/* ponytail: the wallpaper card is a floating, rounded surface (per the v4
 	   design's preview frame) — rounded corners + a layered drop shadow lift it
-	   off the scene gradient. The custom background (buildFrameStyle) fills this
+	   off the scene gradient. The custom background (wallpaperStyle) fills this
 	   card; the video sits on top with its own padding so the wallpaper shows
 	   around it. */
 	border-radius: 16px;
@@ -361,6 +361,20 @@
 	overflow: hidden;
 	display: grid;
 	place-items: center;
+	/* Its own stacking context: the layers inside it (gimbals, zoom focus, webcam drag) order
+	   themselves with z-indexes up to 1000 and more, which must not reach past the preview. A
+	   selected annotation's gimbal painted over the export dialog (z-index 100). */
+	isolation: isolate;
+}
+/* Once the native canvas has painted, it covers the whole card, and anything painted UNDER the
+   same rounded clip leaks through its anti-aliased edge: the wallpaper placeholder and the inset
+   hairline showed as a fringe of background around each corner. So the card keeps only what lies
+   outside it, its drop shadow. `!important` because the placeholder wallpaper is an inline style. */
+.previewFrame:has(> canvas[data-painted]) {
+	background: none !important;
+	box-shadow:
+		0 40px 90px -30px rgba(0, 0, 0, 0.75),
+		0 12px 28px -12px rgba(0, 0, 0, 0.5);
 }
 .videoStage {
 	position: relative;
@@ -470,12 +484,13 @@
 	align-items: center;
 	justify-content: center;
 	gap: var(--sp-2);
+	min-height: 40px;
 	padding: var(--sp-3) var(--sp-4);
-	border-radius: var(--r-sm);
+	border-radius: var(--r-md);
 	background: var(--primary, #34B27B);
 	color: var(--accent-on);
 	border: none;
-	font-weight: 500;
+	font-weight: 600;
 	font-size: 0.875rem;
 	cursor: pointer;
 	transition: background-color 120ms ease;
@@ -488,18 +503,41 @@
 	align-items: center;
 	justify-content: center;
 	gap: var(--sp-2);
+	min-height: 40px;
 	padding: var(--sp-3) var(--sp-4);
-	border-radius: var(--r-sm);
-	background: var(--card);
+	border-radius: var(--r-md);
+	background: color-mix(in oklab, var(--fg) 7%, transparent);
 	color: var(--fg-2);
-	border: 1px solid var(--border);
-	font-weight: 500;
+	border: 1px solid transparent;
+	font-weight: 600;
 	font-size: 0.875rem;
 	cursor: pointer;
 	transition: background-color 120ms ease;
 }
+/* Not --accent: design-tokens.css pins it to solid mint, and the label on it fell to 2.3:1.
+   A deeper step of the same fill rather than --surface-2, which in the dark theme is the
+   resting fill's own colour. */
 .previewEmptySecondaryButton:hover {
-	background: var(--accent, rgba(255, 255, 255, 0.06));
+	background: color-mix(in oklab, var(--fg) 13%, transparent);
+}
+/* The third way in, once recording leads: text, not a third button. */
+.previewEmptyLinkButton {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--sp-2);
+	padding: var(--sp-2);
+	border: 0;
+	background: transparent;
+	color: var(--muted);
+	font: 500 0.875rem var(--font-body);
+	cursor: pointer;
+	transition: color var(--motion-fast) var(--ease);
+}
+.previewEmptyLinkButton:hover {
+	color: var(--fg);
+	text-decoration: underline;
+	text-underline-offset: 3px;
 }
 .previewEmptyButtonIcon {
 	width: 16px;
@@ -593,7 +631,7 @@
 .previewEmptyDialog {
 	max-width: 24rem;
 	padding: var(--sp-5);
-	background: var(--bg);
+	background: var(--surface);
 	border: 1px solid var(--border);
 }
 .previewEmptyDialogHeader {
@@ -651,11 +689,12 @@
 	justify-content: center;
 	gap: var(--sp-1);
 	width: 100%;
+	min-height: 36px;
 	padding: var(--sp-2) var(--sp-3);
-	border-radius: var(--r-sm);
-	background: var(--card);
+	border-radius: var(--r-md);
+	background: color-mix(in oklab, var(--fg) 8%, transparent);
 	color: var(--fg-2);
-	border: 1px solid var(--border);
+	border: 1px solid transparent;
 	font-size: 0.875rem;
 	font-weight: 500;
 	cursor: pointer;
@@ -687,7 +726,8 @@
 	position: relative;
 	z-index: 1;
 	/* Pixels come from the native canvas now; this <video> stays mounted (and
-	   playing) purely as the decode/playback-clock/metadata source. A plain
+	   playing) purely as the playback clock and metadata source, its picture
+	   undecoded (`dropVideoTrack` in VirtualPreview.tsx). A plain
 	   descendant selector (not a fixed child-depth chain) is required here:
 	   VirtualPreview nests the actual <video> THREE levels down
 	   (.screenStage > .container > .videoFrame > video), not one or two —
@@ -705,9 +745,8 @@
 	border-radius: 18px !important;
 }
 
-/* Webcam overlay: real <video> driven by the cameraTrack. The slot is
-   transparent so clip-path / border-radius carve the camera without leaving
-   a rectangular placeholder peeking through. */
+/* Webcam slot: the drag-to-reposition hitbox over the camera the native canvas
+   draws. Transparent, so nothing of it shows. */
 .webcamSlot {
 	background: transparent;
 	overflow: hidden;
@@ -718,8 +757,8 @@
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
-	/* Native canvas already draws the composited webcam PiP; this <video> stays
-	   mounted (playing) only to drive the camera's own decode/sync clock. The
+	/* Native canvas already draws the composited webcam PiP; this <video> is
+	   never played, only read for the camera's size (WebcamOverlay.tsx). The
 	   slot div itself stays visible/clickable for the drag-to-reposition hitbox. */
 	visibility: hidden;
 	display: block;
@@ -728,16 +767,14 @@
 .transport {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	flex: 1;
-	min-width: 0;
+	gap: 12px;
 }
 .transport .tbtn {
-	width: 28px;
-	height: 28px;
+	width: 32px;
+	height: 32px;
 	display: grid;
 	place-items: center;
-	border-radius: var(--r-sm);
+	border-radius: var(--r-md);
 	color: var(--fg-2);
 	background: transparent;
 	border: 0;
@@ -750,8 +787,8 @@
 	color: var(--fg);
 }
 .transport .tbtn.play {
-	width: 28px;
-	height: 28px;
+	width: 34px;
+	height: 34px;
 	background: var(--fg);
 	color: var(--bg);
 	border-radius: 50%;
@@ -760,11 +797,10 @@
 	background: var(--fg-2);
 }
 .transport .time {
-	font-family: var(--font-mono);
-	font-size: var(--fs-app-sm);
+	font: 500 14px/1 var(--font-body);
+	font-variant-numeric: tabular-nums;
 	color: var(--fg);
-	letter-spacing: 0.02em;
-	min-width: 96px;
+	min-width: 104px;
 	text-align: center;
 	flex-shrink: 0;
 }
@@ -818,17 +854,17 @@
 	gap: 2px;
 	padding: 3px;
 	margin: 12px var(--sp-4);
-	background: var(--surface-2);
-	border: 1px solid var(--border);
-	border-radius: 10px;
+	background: color-mix(in oklab, var(--fg) 6%, transparent);
+	border-radius: 12px;
 }
 .paneTabs button {
 	flex: 1;
-	padding: 7px 10px;
+	min-height: 30px;
+	padding: 0 10px;
 	border: 0;
 	background: transparent;
-	border-radius: 7px;
-	font: 500 var(--fs-app-sm)/1 var(--font-body);
+	border-radius: 9px;
+	font: 500 13px/1 var(--font-body);
 	color: var(--muted);
 	cursor: pointer;
 	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
@@ -836,8 +872,9 @@
 .paneTabs button:hover:not(:disabled) {
 	color: var(--fg);
 }
+/* Raised above its track: --surface was darker than the track in the dark theme. */
 .paneTabs button.isActive {
-	background: var(--surface);
+	background: var(--surface-hi);
 	color: var(--fg-emphasis);
 	font-weight: 600;
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
@@ -846,36 +883,64 @@
 .paneSection.isActive { display: block; }
 
 /* ─── pane rows (label + control) ─────────────────────────────── */
+/* Free rows, the way Screen Studio sets its settings: label and control on one line, flush with
+   the section labels, grouped by those labels and by space rather than each boxed in a card. */
 .paneRow {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
-	padding: 12px 14px;
+	padding: 12px 0;
 	margin: 8px var(--sp-4);
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	background: var(--bg);
 }
 .paneRow .label { font: 500 var(--fs-app) var(--font-body); color: var(--fg-2); }
-.paneRow .info  { color: var(--meta); font-size: var(--fs-app-sm); margin-left: 4px; }
+.paneRow .info {
+	display: block;
+	margin-top: 2px;
+	font: 400 12px/1.5 var(--font-body);
+	color: var(--muted);
+}
+/* The one group label: sentence case, normal tracking. */
 .sectionLabel {
-	font: 500 var(--fs-app-sm) var(--font-body);
+	font: 600 13px/1.3 var(--font-body);
 	color: var(--fg-2);
 	margin: 4px var(--sp-4) 8px;
 }
+/* The current value, after the label, when the control below only shows it as a picture. */
+.sectionLabelValue {
+	margin-left: 6px;
+	font-weight: 400;
+	color: var(--muted);
+}
+/* The same label where there is no pane inset to honour (dialogs). */
+.groupLabel {
+	display: block;
+	margin: 0 0 8px;
+	font: 600 13px/1.3 var(--font-body);
+	color: var(--fg-2);
+}
+/* A sentence that explains the control above it. */
+.hint {
+	margin: 0;
+	font: 400 12px/1.5 var(--font-body);
+	color: var(--muted);
+}
 /* ─── action menu (a button's list of things it could do) ─────── */
 /* Sits where a Toggle would; reads as the current value, not as on/off. */
+/* Raised (--surface-hi) rather than filled like a field: it sits on a row that already
+   carries the soft fill, and the same fill twice would vanish. */
 .rowAction {
 	display: inline-flex;
 	align-items: center;
-	gap: 5px;
-	padding: 5px 8px;
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	background: var(--bg);
+	gap: 6px;
+	min-height: 30px;
+	padding: 0 10px;
+	border: 1px solid transparent;
+	border-radius: var(--r-md);
+	background: var(--surface-hi);
+	box-shadow: var(--elev-card-soft);
 	color: var(--fg-2);
-	font: 500 var(--fs-app-sm)/1 var(--font-body);
+	font: 500 13px/1 var(--font-body);
 	font-variant-numeric: tabular-nums;
 	cursor: pointer;
 	transition: border-color 150ms ease, color 150ms ease;
@@ -889,7 +954,7 @@
 	border-radius: 12px;
 	background: var(--surface-1);
 	box-shadow: var(--elev-pop);
-	/* Ten shapes must cost no more room than two. */
+	/* Ten presets must cost no more room than two. */
 	max-height: min(var(--radix-popover-content-available-height, 60vh), 320px);
 	overflow-y: auto;
 	scrollbar-width: thin;
@@ -908,8 +973,8 @@
 	cursor: pointer;
 	text-align: left;
 }
-.actionMenuRow:hover:not(:disabled) { background: var(--surface-2); }
-.actionMenuRow.isActive { background: color-mix(in oklab, var(--brand), transparent 82%); }
+.actionMenuRow:hover:not(:disabled) { background: color-mix(in oklab, var(--fg) 6%, transparent); }
+.actionMenuRow.isActive { background: var(--accent-soft); }
 /* A row the project cannot take (a portrait device frame on a landscape timeline) stays in the
    list so the option is still discoverable, but has to LOOK unavailable — and the reason rides
    in its `actionMenuCount` slot on the right. */
@@ -917,18 +982,13 @@
 /* Separates the fixed presets from the shapes this timeline actually holds. */
 .actionMenuGroup {
 	padding: 8px 8px 4px;
-	font: 600 10px/1 var(--font-body);
-	letter-spacing: 0.04em;
-	text-transform: uppercase;
-	color: var(--muted);
+	font: 600 12px/1.3 var(--font-body);
+	color: var(--fg-2);
 }
-/* Resolution leads: it is the thing a user recognises about their own footage. */
-.actionMenuMain { font: 600 12.5px var(--font-display); font-variant-numeric: tabular-nums; }
-/* The ratio token second, for whoever does read them — `64:27` means nothing alone. */
-.actionMenuMeta { font: 400 11px var(--font-body); color: var(--muted); }
+.actionMenuMain { font: 600 13px var(--font-display); font-variant-numeric: tabular-nums; }
 .actionMenuCount {
 	margin-left: auto;
-	font: 500 11px var(--font-body);
+	font: 500 12px var(--font-body);
 	font-variant-numeric: tabular-nums;
 	color: var(--meta);
 }
@@ -945,7 +1005,7 @@
 	width: 12px;
 	color: var(--brand);
 }
-.presetActionLabel { font: 500 12px var(--font-body); color: var(--fg-2); }
+.presetActionLabel { font: 500 13px var(--font-body); color: var(--fg-2); }
 .presetActions {
 	margin: 2px 0 4px 20px;
 	padding-left: 4px;
@@ -956,111 +1016,273 @@
 	align-items: center;
 	gap: 6px;
 	padding: 7px 8px;
-	font: 400 11px var(--font-body);
+	font: 400 12px var(--font-body);
 	color: var(--muted);
 }
 .presetDivider { height: 1px; margin: 4px 2px; background: var(--border); }
 .presetForm { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; }
-.presetForm input {
-	width: 100%;
-	padding: 6px 8px;
-	font: 400 var(--fs-app-sm) var(--font-body);
-	color: var(--fg);
-	background: var(--surface);
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	outline: none;
-}
-.presetForm input:focus { border-color: var(--brand); }
-.presetForm input[aria-invalid="true"] { border-color: var(--danger); }
 .presetFormButtons { display: flex; justify-content: flex-end; gap: 6px; }
-.presetConfirm { font: 500 12px var(--font-body); color: var(--fg); }
-.presetError { font: 400 11px var(--font-body); color: var(--danger); }
+.presetConfirm { font: 500 13px var(--font-body); color: var(--fg); }
+.presetError { font: 400 12px var(--font-body); color: var(--danger); }
 
-/* A section title that carries an action on its right. */
-.sectionHead {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
-	margin: 4px var(--sp-4) 8px;
-}
-.sectionHead .sectionLabel { margin: 0; }
-/* Deliberately quieter than the settings it overwrites: it is reached on purpose, not
-   stumbled into, and it must not read as a fifth control in the group. */
-.sectionAction {
-	padding: 3px 8px;
-	border: 1px solid transparent;
-	border-radius: 999px;
-	background: var(--surface-2);
-	color: var(--muted);
-	font: 500 var(--fs-app-sm)/1.4 var(--font-body);
-	white-space: nowrap;
-	cursor: pointer;
-	transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
-}
-.sectionAction:hover:not(:disabled) {
-	border-color: var(--brand);
-	background: var(--bg);
-	color: var(--fg);
-}
-.sectionAction:disabled { cursor: default; opacity: 0.45; }
 .uploadBtn {
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	gap: 8px;
+	min-height: 34px;
 	margin: 0 var(--sp-4) 12px;
-	padding: 12px;
-	border: 1px dashed var(--border);
-	border-radius: 10px;
-	background: var(--bg);
-	color: var(--muted);
-	font: 500 var(--fs-app-sm) var(--font-body);
+	padding: 0 14px;
+	border: 1px dashed var(--border-hi);
+	border-radius: var(--r-md);
+	background: color-mix(in oklab, var(--fg) 5%, transparent);
+	color: var(--fg-2);
+	font: 500 13px var(--font-body);
 	cursor: pointer;
 }
-.uploadBtn:hover { border-color: var(--success); color: var(--success); }
+.uploadBtn:hover { border-color: var(--accent); color: var(--fg); }
 .field {
 	display: grid;
-	grid-template-columns: 80px 1fr;
+	grid-template-columns: 112px 1fr;
 	align-items: center;
-	gap: 8px;
+	gap: 6px 10px;
 	padding: 4px var(--sp-4);
 }
-.field label {
-	font: 500 var(--fs-app-sm) var(--font-body);
-	color: var(--muted);
+/* `.fieldLabel` names a control that is not one labelable element (a ChoiceRow's group). */
+.field label,
+.fieldLabel {
+	font: 500 13px/1.3 var(--font-body);
+	color: var(--fg-2);
+}
+/* Under the control, across both columns: a sentence does not fit a label column. */
+.field .hint { grid-column: 1 / -1; }
+
+/* ─── the one field look ─────────────────────────────────────────── */
+/* Filled, with no outline until focus. `.control` is for fields that live outside a `.field`
+   row (inspector, dialogs, menus).
+   Solid, not the rows' translucent fill: a native <select> paints its option list with this
+   background, and a translucent one comes out as white-on-white in the dark theme. Mixed from
+   --surface-1 rather than taken as --surface-2, which in the dark theme is 1.03:1 against the
+   inspector's --surface-1 — a field you cannot see. */
+.control,
+.field select,
+.field input:not([type="checkbox"]),
+.presetForm input {
+	height: 34px;
+	padding: 0 10px;
+	font: 400 13px var(--font-body);
+	color: var(--fg);
+	background: color-mix(in oklab, var(--fg) 7%, var(--surface-1));
+	border: 1px solid transparent;
+	border-radius: var(--r-md);
+	outline: none;
+	transition: border-color var(--motion-fast) var(--ease);
 }
 .field select,
-.field input {
-	width: 100%;
-	padding: 6px 8px;
-	font: 400 var(--fs-app-sm) var(--font-body);
-	color: var(--fg-2);
-	background: var(--surface);
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	outline: none;
+.field input:not([type="checkbox"]),
+.presetForm input { width: 100%; }
+textarea.control {
+	height: auto;
+	padding: 8px 10px;
+	line-height: 1.4;
+	resize: vertical;
 }
+.control:focus,
 .field select:focus,
-.field input:focus { border-color: var(--brand); }
+.field input:focus,
+.presetForm input:focus { border-color: var(--accent); }
+/* After :focus, so a rejected name stays red while it is being corrected. */
+.presetForm input[aria-invalid="true"] { border-color: var(--danger); }
+.control:disabled,
 .field select:disabled,
 .field input:disabled { opacity: 0.5; cursor: not-allowed; }
+/* A `.field` whose control needs the row's full width (a ChoiceRow): label on top. */
+.field.fieldStack { grid-template-columns: minmax(0, 1fr); }
+
+/* ─── choice row (ChoiceRow: a few fixed values, one button each) ─── */
+/* The picked value carries the app's one selected look: accent border on the accent tint. */
+.choiceRow {
+	display: grid;
+	gap: 4px;
+}
+.choiceBtn {
+	min-width: 0;
+	min-height: 32px;
+	padding: 0 6px;
+	display: inline-flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 3px;
+	border: 1px solid transparent;
+	border-radius: var(--r-md);
+	background: color-mix(in oklab, var(--fg) 6%, transparent);
+	color: var(--fg-2);
+	font: 500 12.5px/1.2 var(--font-body);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+	transition: background var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease);
+}
+.choiceBtn:hover:not(:disabled) { background: color-mix(in oklab, var(--fg) 11%, transparent); }
+.choiceBtn.isActive {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	color: var(--fg);
+}
+.choiceBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.choiceRowTiles .choiceBtn { min-height: 44px; }
+
+/* ─── webcam framing (LayoutPane) ─────────────────────────────── */
+/* A picture of the camera with the kept frame on it: outside the frame is dimmed, the frame is
+   what the webcam will show, and it is dragged to choose that. */
+.framing {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin: 0 var(--sp-4) 4px;
+}
+.framingBox {
+	position: relative;
+	width: 100%;
+	max-width: 100%;
+	overflow: hidden;
+	border-radius: var(--r-md);
+	background: linear-gradient(135deg, color-mix(in oklab, var(--fg) 10%, transparent), color-mix(in oklab, var(--fg) 4%, transparent));
+}
+.framingVideo {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	pointer-events: none;
+}
+.framingCrop {
+	position: absolute;
+	box-sizing: border-box;
+	border: 1.5px solid rgb(255 255 255 / 0.9);
+	border-radius: 4px;
+	/* Dims everything outside the frame without a second element. */
+	box-shadow: 0 0 0 999px rgb(0 0 0 / 0.45);
+	touch-action: none;
+}
+/* A corner bracket, the shape every photo cropper uses: thick, white and shadowed so it reads on
+   a bright wall as on a dark one, and sitting in a 28px square that a pointer finds without aiming. */
+.framingHandle {
+	position: absolute;
+	width: 28px;
+	height: 28px;
+	touch-action: none;
+}
+/* `--bracket` and `--bracket-w` size the bracket to its picture: a large preview sets them bigger. */
+.framingHandle::before {
+	content: "";
+	position: absolute;
+	width: var(--bracket, 14px);
+	height: var(--bracket, 14px);
+	border: 0 solid #fff;
+	filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.7));
+	transition: width var(--motion-fast) var(--ease), height var(--motion-fast) var(--ease);
+}
+.framingHandle:hover::before {
+	width: calc(var(--bracket, 14px) + 3px);
+	height: calc(var(--bracket, 14px) + 3px);
+}
+.framingHandle[data-corner="nw"] { top: -8px; left: -8px; cursor: nwse-resize; }
+.framingHandle[data-corner="ne"] { top: -8px; right: -8px; cursor: nesw-resize; }
+.framingHandle[data-corner="sw"] { bottom: -8px; left: -8px; cursor: nesw-resize; }
+.framingHandle[data-corner="se"] { bottom: -8px; right: -8px; cursor: nwse-resize; }
+.framingHandle[data-corner="nw"]::before { top: 8px; left: 8px; border-width: var(--bracket-w, 3.5px) 0 0 var(--bracket-w, 3.5px); border-top-left-radius: 5px; }
+.framingHandle[data-corner="ne"]::before { top: 8px; right: 8px; border-width: var(--bracket-w, 3.5px) var(--bracket-w, 3.5px) 0 0; border-top-right-radius: 5px; }
+.framingHandle[data-corner="sw"]::before { bottom: 8px; left: 8px; border-width: 0 0 var(--bracket-w, 3.5px) var(--bracket-w, 3.5px); border-bottom-left-radius: 5px; }
+.framingHandle[data-corner="se"]::before { bottom: 8px; right: 8px; border-width: 0 var(--bracket-w, 3.5px) var(--bracket-w, 3.5px) 0; border-bottom-right-radius: 5px; }
+/* Edit clip's crop region: focusable, since the arrows move it and Shift + the arrows resize it. */
+.cropRegion:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* A crop's sides: a short thick bar on the edge, in the brackets' white, and a grab area around it. */
+.cropEdge {
+	position: absolute;
+	touch-action: none;
+}
+.cropEdge::before {
+	content: "";
+	position: absolute;
+	border-radius: 2px;
+	background: #fff;
+	filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.7));
+}
+.cropEdge[data-edge="n"],
+.cropEdge[data-edge="s"] { left: 50%; width: 56px; height: 28px; margin-left: -28px; cursor: ns-resize; }
+.cropEdge[data-edge="n"] { top: -12px; }
+.cropEdge[data-edge="s"] { bottom: -12px; }
+.cropEdge[data-edge="w"],
+.cropEdge[data-edge="e"] { top: 50%; width: 28px; height: 56px; margin-top: -28px; cursor: ew-resize; }
+.cropEdge[data-edge="w"] { left: -12px; }
+.cropEdge[data-edge="e"] { right: -12px; }
+.cropEdge[data-edge="n"]::before { top: 12px; left: 12px; right: 12px; height: var(--bracket-w, 3.5px); }
+.cropEdge[data-edge="s"]::before { bottom: 12px; left: 12px; right: 12px; height: var(--bracket-w, 3.5px); }
+.cropEdge[data-edge="w"]::before { left: 12px; top: 12px; bottom: 12px; width: var(--bracket-w, 3.5px); }
+.cropEdge[data-edge="e"]::before { right: 12px; top: 12px; bottom: 12px; width: var(--bracket-w, 3.5px); }
+/* The zoom, on the picture it zooms. Its own dark ground, like any label over a photo. */
+.framingZoom {
+	position: absolute;
+	right: 8px;
+	bottom: 8px;
+	padding: 3px 8px;
+	border-radius: 999px;
+	background: rgb(0 0 0 / 0.55);
+	color: #fff;
+	font: 600 11px/1.2 var(--font-body);
+	font-variant-numeric: tabular-nums;
+	pointer-events: none;
+}
+.framingCrop[data-movable="true"] { cursor: grab; }
+.framingCrop[data-movable="true"]:active { cursor: grabbing; }
+.framingCrop:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.framingHint {
+	margin: 0;
+	font: 400 12px/1.5 var(--font-body);
+	color: var(--muted);
+}
+/* Under an icon, the name shrinks to one line and ellipsises rather than widening the column. */
+.choiceBtnLabel {
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: 12px;
+}
 
 /* ─── bg thumb grid ────────────────────────────────────────────── */
+/* Eight to a row, as small as Screen Studio's: the whole bundled set fits in three rows, and
+   the colours and gradients in two. */
 .bgGrid {
 	display: grid;
-	grid-template-columns: repeat(4, 1fr);
-	gap: 8px;
-	padding: 0 var(--sp-4) var(--sp-4);
+	grid-template-columns: repeat(8, minmax(0, 1fr));
+	gap: 5px;
+	padding: 0 var(--sp-4) 12px;
 }
 .bgThumb {
 	aspect-ratio: 1/1;
-	border-radius: 10px;
+	min-width: 0;
+	padding: 0;
+	border-radius: 8px;
 	border: 1px solid transparent;
 	cursor: pointer;
 	transition: transform 150ms ease, border-color 150ms ease;
 	background: var(--surface-2);
+}
+.bgAdd {
+	display: grid;
+	place-items: center;
+	border: 1px dashed var(--border-hi);
+	background: transparent;
+	color: var(--muted);
+}
+.bgAdd:hover:not(:disabled) {
+	border-color: var(--accent);
+	color: var(--accent);
 }
 .bgThumb:hover { transform: translateY(-1px); }
 .bgThumb.isActive {
@@ -1068,72 +1290,10 @@
 	box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand), transparent 70%);
 }
 
-/* ─── background picker (collapsed trigger + floating panel) ───── */
-/* The trigger paints the CURRENT background as its own surface, so the pane shows what is
-   selected without spending the ~300px the inline swatch grid used to cost. */
-.bgTrigger {
-	display: flex;
-	align-items: flex-end;
-	justify-content: flex-end;
-	height: 52px;
-	margin: 0 var(--sp-4) 12px;
-	padding: 6px;
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	background: var(--surface-2);
-	cursor: pointer;
-	overflow: hidden;
-	transition: border-color 150ms ease;
-}
-.bgTrigger:hover { border-color: var(--brand); }
-/* Sits ON an arbitrary photo, so it carries its own ground rather than trusting contrast. */
-.bgTriggerChip {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	padding: 3px 7px;
-	border-radius: 999px;
-	background: color-mix(in oklab, var(--bg), transparent 10%);
-	color: var(--fg);
-	font: 500 var(--fs-app-sm)/1 var(--font-body);
-}
-.bgPopover {
-	width: 300px;
-	padding-top: 4px;
-	border: 1px solid var(--border);
-	border-radius: 12px;
-	background: var(--surface-1);
-	box-shadow: var(--elev-pop);
-	/* Radix measures the room actually left below the trigger and publishes it here, so the
-	   picker uses the screen it has instead of a number guessed at authoring time. The second
-	   term is the tallest it ever needs: the gradient tab is ~640px (tabs + preset grid + the
-	   240px-wide editor, whose wheel is square). A fixed 460px cap cut that editor in half and
-	   read as "the gradient panel is gone" — the content was there, below the fold, behind a
-	   scroll nobody could see. Beyond 680px there is nothing left to reveal. */
-	max-height: min(var(--radix-popover-content-available-height, 80vh), 680px);
-	overflow-y: auto;
-	scrollbar-width: thin;
-	scrollbar-color: var(--border) transparent;
-}
-
-.captionsPopover {
-	width: 310px;
-	display: flex;
-	flex-direction: column;
-	border: 1px solid var(--border);
-	border-radius: 14px;
-	background: var(--surface-1);
-	box-shadow: var(--elev-pop);
-	backdrop-filter: blur(18px);
-	-webkit-backdrop-filter: blur(18px);
-	max-height: min(var(--radix-popover-content-available-height, 80vh), 560px);
-	overflow: hidden;
-}
-
 /* ─── toggle (switch) ──────────────────────────────────────────── */
 .toggle {
-	width: 36px;
-	height: 20px;
+	width: 40px;
+	height: 24px;
 	border: 0;
 	padding: 0;
 	background: var(--border-hi);
@@ -1143,16 +1303,17 @@
 	transition: background 150ms ease;
 	flex-shrink: 0;
 }
+/* A white knob in both themes: the old --accent-on one was near-black on the dark track. */
 .toggle::after {
 	content: "";
 	position: absolute;
 	top: 2px;
 	left: 2px;
-	width: 16px;
-	height: 16px;
-	background: var(--accent-on);
+	width: 20px;
+	height: 20px;
+	background: #fff;
 	border-radius: 50%;
-	box-shadow: 0 1px 3px rgba(22, 23, 29, 0.2);
+	box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
 	transition: transform 150ms ease;
 }
 .toggle.isOn { background: var(--brand); }
@@ -1166,21 +1327,42 @@
 	gap: 8px;
 	padding: 0 var(--sp-4) var(--sp-4);
 }
+/* A free row too, like .paneRow: no card around the label, value and track. */
 .sliderCell {
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	background: var(--bg);
-	padding: 10px 12px;
+	padding: 12px 0;
 	display: grid;
 	grid-template-rows: auto auto;
-	gap: 8px;
+	gap: 10px;
 }
-.sliderCell .head { display: flex; align-items: center; gap: 6px; }
-.sliderCell .label { font: 500 11px var(--font-body); color: var(--fg-2); }
-.sliderCell .val { font: 500 11px var(--font-mono); color: var(--brand); margin-left: auto; }
+/* min-height = the reset button's 20px, so the row keeps its height whether it shows or not. */
+.sliderCell .head { display: flex; align-items: center; gap: 6px; min-height: 20px; }
+/* The label takes the free room, so the value and the reset button sit right, with or without
+   each other. */
+.sliderCell .label { font: 500 13px/1.3 var(--font-body); color: var(--fg-2); margin-right: auto; }
+/* --muted, not mint: mint text is 2.3:1 on the light theme's row. */
+.sliderCell .val {
+	font: 500 12px/1.3 var(--font-body);
+	font-variant-numeric: tabular-nums;
+	color: var(--muted);
+}
+.sliderCell .sliderReset {
+	display: inline-grid;
+	place-items: center;
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--muted);
+	cursor: pointer;
+}
+.sliderCell .sliderReset:hover { color: var(--fg); background: var(--border-hi); }
+.sliderCell .sliderReset:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.sliderCell .sliderReset:disabled { cursor: default; opacity: 0.5; }
 .sliderCell input[type=range] {
 	width: 100%;
-	height: 4px;
+	height: 6px;
 	background: linear-gradient(
 		to right,
 		var(--brand) 0%,
@@ -1188,33 +1370,40 @@
 		var(--border-hi) var(--slider-pct, 0%),
 		var(--border-hi) 100%
 	);
-	border-radius: 2px;
+	border-radius: 999px;
 	outline: none;
 	-webkit-appearance: none;
 	cursor: pointer;
 }
 .sliderCell input[type=range]::-moz-range-progress {
 	background-color: var(--brand);
-	height: 4px;
-	border-radius: 2px;
+	height: 6px;
+	border-radius: 999px;
 }
 .sliderCell input[type=range]::-webkit-slider-thumb {
 	-webkit-appearance: none;
-	width: 14px;
-	height: 14px;
+	width: 18px;
+	height: 18px;
 	border-radius: 50%;
-	background: var(--brand);
-	box-shadow: 0 0 0 4px color-mix(in oklab, var(--brand), transparent 80%);
+	background: #fff;
+	box-shadow: 0 1px 3px rgb(0 0 0 / 0.35);
 	cursor: pointer;
 }
 .sliderCell input[type=range]::-moz-range-thumb {
-	width: 14px;
-	height: 14px;
+	width: 18px;
+	height: 18px;
 	border-radius: 50%;
-	background: var(--brand);
+	background: #fff;
 	border: 0;
-	box-shadow: 0 0 0 4px color-mix(in oklab, var(--brand), transparent 80%);
+	box-shadow: 0 1px 3px rgb(0 0 0 / 0.35);
 	cursor: pointer;
+}
+/* `outline: none` above takes the native ring, so keyboard focus lands on the knob. */
+.sliderCell input[type=range]:focus-visible::-webkit-slider-thumb {
+	box-shadow: 0 1px 3px rgb(0 0 0 / 0.35), 0 0 0 4px var(--accent-ring);
+}
+.sliderCell input[type=range]:focus-visible::-moz-range-thumb {
+	box-shadow: 0 1px 3px rgb(0 0 0 / 0.35), 0 0 0 4px var(--accent-ring);
 }
 .sliderCell.full { grid-column: 1 / -1; }
 .sliderCell input[type=range]:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -1228,28 +1417,39 @@
 }
 .cursorCell {
 	aspect-ratio: 1/1;
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	background: var(--bg);
+	border: 1px solid transparent;
+	border-radius: var(--r-md);
+	background: color-mix(in oklab, var(--fg) 5%, transparent);
 	display: grid;
 	place-items: center;
 	cursor: pointer;
 	transition: border-color 150ms ease, box-shadow 150ms ease;
 	color: var(--muted);
 }
-.cursorCellPreviews {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	gap: 2px;
-}
 .cursorCell:hover { border-color: var(--border-hi); color: var(--fg-2); }
 .cursorCell:disabled { opacity: 0.5; cursor: not-allowed; }
-.cursorCell:disabled:hover { border-color: var(--border); color: var(--muted); }
+.cursorCell:disabled:hover { border-color: transparent; color: var(--muted); }
 .cursorCell.isActive {
-	border-color: var(--brand);
-	box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand), transparent 75%);
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	color: var(--fg);
 }
+/* A cursor pictured in its cell (style and type pickers), sized by the cell rather than in
+   pixels: the art keeps the same share of it at any pane width. */
+.cursorSprite {
+	width: 60%;
+	height: auto;
+	aspect-ratio: 1;
+	object-fit: contain;
+	pointer-events: none;
+}
+/* The cursor types (CursorPane): a dimmed type is drawn as the arrow. The arrow's own cell is not
+   a control, it is what the others become. */
+.cursorCellOff img { opacity: 0.35; transition: opacity 150ms ease; }
+.cursorCellOff:hover:not(:disabled) img { opacity: 0.7; }
+.cursorCellFixed { cursor: default; }
+/* A row that belongs to the grid right above it: the 3D switch under the cursor style. */
+.paneRowTight { margin-top: calc(-1 * var(--sp-2)); }
 /* Same cell, reused for the icon+label rows (camera shape, camera background).
    `minmax(0, 1fr)` stopped a long label from pushing the grid, but the text still
    spilled over the button's own border and crowded its neighbour -- « Personnalisé »,
@@ -1282,10 +1482,8 @@
 	border-radius: var(--r-pill);
 	background: var(--success-soft);
 	color: var(--success);
-	font-family: var(--font-mono);
-	font-size: 10.5px;
-	font-weight: 500;
-	letter-spacing: 0.02em;
+	font: 500 12px/1.3 var(--font-body);
+	font-variant-numeric: tabular-nums;
 }
 .ctxPill .d {
 	width: 5px;
@@ -1299,12 +1497,12 @@
 	gap: 2px;
 }
 .stripActions button {
-	width: 24px;
-	height: 24px;
+	width: 30px;
+	height: 30px;
 	display: grid;
 	place-items: center;
 	border-radius: var(--r-sm);
-	color: var(--meta);
+	color: var(--muted);
 	background: transparent;
 	border: 0;
 	cursor: pointer;
@@ -1314,7 +1512,8 @@
 	background: var(--surface-3);
 	color: var(--fg-2);
 }
-.stripActions button:disabled {
+.stripActions button:disabled,
+.stripActions button[aria-disabled="true"] {
 	opacity: 0.4;
 	cursor: not-allowed;
 }
@@ -1336,11 +1535,8 @@
 	margin-bottom: var(--sp-1);
 }
 .msgAuthor {
-	font-family: var(--font-mono);
-	font-size: 10px;
-	letter-spacing: 0.08em;
-	color: var(--meta);
-	text-transform: uppercase;
+	font: 600 12px/1.3 var(--font-body);
+	color: var(--fg-2);
 }
 .msgHead .right {
 	margin-left: auto;
@@ -1365,13 +1561,21 @@
 }
 .msgBubble {
 	padding: var(--sp-3) var(--sp-4);
-	border-radius: var(--r-md);
-	background: var(--bg);
-	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: color-mix(in oklab, var(--fg) 5%, transparent);
+	border: 1px solid transparent;
 	font-size: var(--fs-app);
 	color: var(--fg-2);
 	line-height: 1.5;
+	/* Selectable: the message body exists to be read and copied, and without
+	 * this it inherits the shell's user-select: none — drag selection and
+	 * Ctrl+C silently do nothing (issue #739). Scoped to the bubble so
+	 * buttons, the timeline, and the inspector keep their non-selectable
+	 * behavior. */
+	user-select: text;
 }
+/* The user's own turns carry the accent, so the conversation reads at a glance. */
+.msgBubble.msgBubbleUser { background: var(--accent-soft); }
 .msgBubble .msgAuthor { color: var(--accent); }
 
 .chatInput {
@@ -1381,13 +1585,13 @@
 }
 .chatInput textarea {
 	width: 100%;
-	min-height: 36px;
+	min-height: 40px;
 	max-height: 120px;
 	resize: none;
-	padding: 8px var(--sp-3);
-	border-radius: var(--r-md);
-	border: 1px solid var(--border);
-	background: var(--bg);
+	padding: 10px var(--sp-3);
+	border-radius: 12px;
+	border: 1px solid transparent;
+	background: color-mix(in oklab, var(--fg) 7%, var(--surface-1));
 	font-family: var(--font-body);
 	font-size: var(--fs-app);
 	line-height: 1.4;
@@ -1413,10 +1617,10 @@
 	padding: 5px 4px 5px 10px;
 	border-radius: var(--r-pill);
 	background: var(--surface-2);
+	/* Mono stays: this is a model ID, not a word. */
 	font-family: var(--font-mono);
-	font-size: 11px;
+	font-size: 12px;
 	color: var(--fg-2);
-	letter-spacing: 0.01em;
 	cursor: pointer;
 	transition: background var(--motion-fast) var(--ease);
 	border: 0;
@@ -1435,9 +1639,8 @@
 	border-radius: var(--r-pill);
 	background: var(--success-soft);
 	color: var(--success);
-	font-size: 10.5px;
+	font-size: 12px;
 	font-weight: 500;
-	letter-spacing: 0.01em;
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
@@ -1450,6 +1653,7 @@
 	border-radius: 50%;
 	background: var(--success);
 }
+/* The composer's one action, so it carries the accent — a bare glyph read as decoration. */
 .sendBtn {
 	margin-left: auto;
 	width: 32px;
@@ -1457,14 +1661,19 @@
 	display: grid;
 	place-items: center;
 	border-radius: 50%;
-	background: transparent;
-	color: var(--fg);
+	background: var(--accent);
+	color: var(--accent-on);
 	border: 0;
 	cursor: pointer;
-	transition: color var(--motion-fast) var(--ease), transform var(--motion-fast) var(--ease);
+	transition: background var(--motion-fast) var(--ease), transform var(--motion-fast) var(--ease);
 }
-.sendBtn:hover { color: var(--accent); transform: scale(1.05); }
-.sendBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.sendBtn:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--brand-lo); transform: scale(1.05); }
+.sendBtn:disabled,
+.sendBtn[aria-disabled="true"] {
+	background: color-mix(in oklab, var(--fg) 8%, transparent);
+	color: var(--muted);
+	cursor: not-allowed;
+}
 
 /* ─── transcript pane content ─────────────────────────────────── */
 .transcriptClipHead {
@@ -1871,14 +2080,15 @@
 	backdrop-filter: blur(4px);
 	-webkit-backdrop-filter: blur(4px);
 }
+/* --surface, not --bg: on --bg the card was the colour of the dimmed editor behind it. */
 .modalCard {
 	position: relative;
 	width: min(960px, 92vw);
 	max-height: 88vh;
 	margin: 6vh auto 0;
-	background: var(--bg);
+	background: var(--surface);
 	border: 1px solid var(--border);
-	border-radius: var(--r-lg);
+	border-radius: 16px;
 	box-shadow: 0 24px 60px rgba(22, 23, 29, 0.5);
 	display: flex;
 	flex-direction: column;
@@ -1904,8 +2114,8 @@
 	color: var(--muted);
 }
 .modalHead .closeBtn {
-	width: 28px;
-	height: 28px;
+	width: 32px;
+	height: 32px;
 	display: grid;
 	place-items: center;
 	border-radius: var(--r-sm);
@@ -1924,22 +2134,29 @@
 }
 
 .btn {
-	height: 32px;
+	height: 34px;
 	padding: 0 14px;
 	border-radius: var(--r-md);
 	font: 500 var(--fs-app)/1 var(--font-body);
 	cursor: pointer;
 	display: inline-flex;
 	align-items: center;
+	/* Centred for when a column stretches it full width (the inspector's actions), and never
+	   squeezed there: a fixed height with no vertical padding lets a scrolling flex column
+	   shrink it to its text. */
+	justify-content: center;
+	flex-shrink: 0;
 	gap: 6px;
 	transition: background var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease);
 }
+/* Filled, not outlined: on the card's own --surface the old one was a hairline and nothing. */
 .btnSecondary {
-	background: var(--surface);
+	background: color-mix(in oklab, var(--fg) 8%, transparent);
 	color: var(--fg);
-	border: 1px solid var(--border);
+	border: 1px solid transparent;
 }
-.btnSecondary:hover { background: var(--surface-warm); border-color: var(--border-hi); }
+.btnSecondary:hover:not(:disabled) { background: color-mix(in oklab, var(--fg) 13%, transparent); }
+.btnSecondary:disabled { opacity: 0.5; cursor: not-allowed; }
 .btnPrimary {
 	background: var(--accent);
 	color: var(--accent-on);
@@ -1953,60 +2170,99 @@
 	cursor: not-allowed;
 }
 
-/* ─── Edit Clip modal — draggable source-range track ────────────── */
-.editClipRangeDragging {
-	box-shadow: 0 0 0 2px var(--accent-soft);
+/* The one-time star ask, inside the export-done panel. Separated from the panel's own actions
+   by a rule rather than a second box: it is an aside to a successful export, not a second
+   result. Shown at most once per installation — see electron/star-prompt.ts. */
+.starPrompt {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	width: 100%;
+	margin-top: 4px;
+	padding-top: 12px;
+	border-top: 1px solid var(--border);
 }
 
-.scrubBar {
-	flex: 1;
-	min-width: 0;
-	position: relative;
-	height: 24px;
+.starPromptText {
+	color: var(--muted);
+	font: 400 var(--fs-app)/1.5 var(--font-body);
+}
+
+.starPromptActions {
 	display: flex;
 	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+/* Declining must be as reachable as accepting, so it is a real button with the same hit area —
+   but quiet, because nothing is lost by taking it. */
+.starPromptDecline {
+	height: 32px;
+	padding: 0 10px;
+	border: 1px solid transparent;
+	border-radius: var(--r-md);
+	background: none;
+	color: var(--muted);
+	font: 500 var(--fs-app)/1 var(--font-body);
 	cursor: pointer;
 }
-.scrubTrack {
-	position: absolute;
-	left: 0;
-	right: 0;
-	height: 4px;
-	background: var(--border-hi);
-	border-radius: 9999px;
-	overflow: hidden;
+
+.starPromptDecline:hover { color: var(--fg); background: var(--surface-warm); }
+
+/* ─── Edit Clip modal — draggable source-range track ────────────── */
+/* The pan/zoom bar's shape in the clip's colour: a faint groove for the whole source and,
+   on it, the timeline's clip card (.tlClip's candy recipe) for the range the trim keeps. */
+.editClipTrack {
+	position: relative;
+	height: 32px;
+	flex-shrink: 0;
+	border-radius: var(--r-sm);
+	background: color-mix(in oklab, var(--fg) 8%, transparent);
 }
-.scrubProgress {
-	height: 100%;
-	background: var(--accent);
-	border-radius: 9999px;
-}
-.scrubInput {
+.editClipRange {
 	position: absolute;
-	inset: 0;
-	width: 100%;
-	height: 100%;
-	opacity: 0;
-	cursor: pointer;
-	z-index: 10;
-	margin: 0;
+	top: 0;
+	bottom: 0;
+	box-sizing: border-box;
+	border-radius: var(--r-sm);
+	border: 1px solid transparent;
+	background: linear-gradient(180deg, color-mix(in oklab, var(--clip) 78%, white), var(--clip)) border-box;
+	box-shadow: 0 3px 10px color-mix(in oklab, var(--clip) var(--candy-glow), transparent);
 }
-.scrubThumb {
+/* The selected clip's halo ring, its gap in the card's colour. */
+.editClipRangeDragging {
+	box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--clip);
+}
+/* A 12px grab area centred on each end, overhanging the range by 6px: a range dragged down
+   to its 0.05s minimum still leaves each grip a side of its own to grab. The notch in it sits
+   inside the card, like the pan/zoom bar's grips, in the card's dark ink. */
+.editClipGrip {
 	position: absolute;
-	width: 10px;
-	height: 10px;
-	background: #ffffff;
-	border-radius: 50%;
-	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-	pointer-events: none;
-	transform: translate(-50%, -50%);
+	top: 0;
+	bottom: 0;
+	width: 12px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	cursor: ew-resize;
+}
+.editClipGrip[data-edge="start"] { left: -6px; }
+.editClipGrip[data-edge="end"] { right: -6px; }
+.editClipGrip::before {
+	content: "";
+	position: absolute;
 	top: 50%;
-	opacity: 1;
-	transition: transform 100ms ease;
+	width: 3px;
+	height: 14px;
+	margin-top: -7px;
+	border-radius: 2px;
+	background: rgb(11 18 32 / 0.55);
+	transition: transform var(--motion-fast) var(--ease);
 }
-.scrubBar:hover .scrubThumb {
-	transform: translate(-50%, -50%) scale(1.2);
-}
+.editClipGrip[data-edge="start"]::before { left: 9px; }
+.editClipGrip[data-edge="end"]::before { right: 9px; }
+.editClipGrip:hover::before { transform: scaleY(1.25); }
 
 /* ─── AI provider settings (axcut parity) ────────────────────────── */
 
@@ -2020,9 +2276,9 @@
   flex-direction: column;
   gap: 6px;
   padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--fg) 5%, transparent);
   color: var(--fg-2);
   cursor: pointer;
   font: 500 13px/1.2 var(--font-body);
@@ -2046,21 +2302,19 @@
   font-size: 14px;
   color: var(--fg);
 }
+/* Mono stays: a model ID. */
 .providerCard .model {
-  font: 500 11px var(--font-mono);
+  font: 500 12px var(--font-mono);
   color: var(--muted);
-  letter-spacing: 0.02em;
   text-transform: lowercase;
 }
 .statusPill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: 9999px;
-  font: 600 10px/1 var(--font-mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font: 600 11px/1 var(--font-body);
   border: 1px solid transparent;
 }
 .statusPill.ready {
@@ -2249,17 +2503,17 @@
 
 .secondaryBtn {
   margin: 4px var(--sp-4) 12px;
-  min-height: 32px;
+  min-height: 34px;
   padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--fg) 8%, transparent);
   color: var(--fg-2);
-  font: 500 12px/1 var(--font-body);
+  font: 500 13px/1 var(--font-body);
   cursor: pointer;
 }
-.secondaryBtn:hover {
-  background: var(--surface-3);
+.secondaryBtn:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--fg) 13%, transparent);
   color: var(--fg);
 }
 .secondaryBtn:disabled {
@@ -2329,8 +2583,8 @@
 }
 
 .iconBtn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: inline-grid;
   place-items: center;
   border-radius: var(--r-sm);
@@ -2340,7 +2594,8 @@
   cursor: pointer;
 }
 .iconBtn:hover { background: var(--surface-3); color: var(--fg); }
-.iconBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.iconBtn:disabled,
+.iconBtn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 
 /* A labelled sibling of .iconBtn. Captions lost their own tab (issue #560), so the
    control that replaces it cannot be an icon you must hover to identify: the whole
@@ -2349,17 +2604,17 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
+  height: 30px;
   padding: 0 10px;
-  border-radius: var(--r-sm);
-  background: transparent;
-  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--fg) 7%, transparent);
+  border: 1px solid transparent;
   color: var(--fg-2);
-  font: 500 12px/1 var(--font-body);
+  font: 500 13px/1 var(--font-body);
   white-space: nowrap;
   cursor: pointer;
 }
-.paneHeadBtn:hover { background: var(--surface-3); color: var(--fg); }
+.paneHeadBtn:hover { background: color-mix(in oklab, var(--fg) 12%, transparent); color: var(--fg); }
 
 /* Two mutually exclusive readings of the same tab, so: one track, one lit half.
    Not tabs — tabs would say the two transcripts sit side by side, and only one of
@@ -2368,10 +2623,9 @@
   display: flex;
   gap: 2px;
   margin: 0 var(--sp-4) 6px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
+  padding: 3px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--fg) 6%, transparent);
 }
 .laneSwitchBtn {
   flex: 1;
@@ -2379,27 +2633,28 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 26px;
+  min-height: 30px;
   padding: 0 8px;
   border: 0;
-  border-radius: calc(var(--r-sm) - 2px);
+  border-radius: 9px;
   background: transparent;
   color: var(--muted);
-  font: 500 12px/1 var(--font-body);
+  font: 500 13px/1 var(--font-body);
   white-space: nowrap;
   cursor: pointer;
 }
 .laneSwitchBtn:hover { color: var(--fg-2); }
+/* Raised above its track, like .paneTabs: --surface was darker than the track in the dark theme. */
 .laneSwitchBtn.isActive {
-  background: var(--surface);
+  background: var(--surface-hi);
   color: var(--fg);
-  box-shadow: var(--elev-1, 0 1px 2px rgb(0 0 0 / 0.12));
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
 }
 /* The choice reaches past this tab — it decides the text burnt into the export. */
 .laneSwitchNote {
   margin: 0 var(--sp-4) 12px;
-  font: 400 11.5px/1.45 var(--font-body);
-  color: var(--meta);
+  font: 400 12px/1.5 var(--font-body);
+  color: var(--muted);
 }
 
 .backBtn {
@@ -2407,15 +2662,15 @@
   align-items: center;
   gap: 6px;
   padding: 0 10px;
-  height: 28px;
-  border-radius: var(--r-sm);
-  background: transparent;
+  height: 30px;
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--fg) 8%, transparent);
   color: var(--fg);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   cursor: pointer;
-  font: 500 12px var(--font-body);
+  font: 500 13px var(--font-body);
 }
-.backBtn:hover { background: var(--surface-3); }
+.backBtn:hover { background: color-mix(in oklab, var(--fg) 13%, transparent); }
 .backBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ─── chat welcome (no provider connected) ──────────────────────── */
@@ -2465,12 +2720,11 @@
   /* explicit: the global reset sets list-style: none on every ul */
   list-style: disc;
   margin: 0;
-  padding: 10px 12px;
-  padding-inline-start: 26px;
-  background: var(--surface);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--r-md);
-  font: 400 12px/1.45 var(--font-body);
+  padding: 12px 14px;
+  padding-inline-start: 28px;
+  background: color-mix(in oklab, var(--fg) 5%, transparent);
+  border-radius: 12px;
+  font: 400 13px/1.45 var(--font-body);
   color: var(--fg-2);
 }
 .chatWelcomeFeatures li + li { margin-top: 6px; }
@@ -2482,12 +2736,12 @@
   justify-content: center;
   gap: 6px;
   width: 100%;
-  height: 34px;
+  height: 36px;
   border-radius: var(--r-md);
   background: var(--accent);
   color: var(--accent-on);
   border: 1px solid var(--accent);
-  font: 600 12.5px var(--font-body);
+  font: 600 13px var(--font-body);
   cursor: pointer;
   transition: filter 120ms ease;
 }
@@ -2502,7 +2756,7 @@
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  font: 400 10.5px/1.45 var(--font-body);
+  font: 400 12px/1.45 var(--font-body);
   color: var(--muted);
 }
 

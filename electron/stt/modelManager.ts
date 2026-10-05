@@ -20,11 +20,14 @@ import { pipeline } from "node:stream/promises";
  * The file is verified by SHA-256 and written atomically (via .partial rename)
  * to prevent partial downloads from being treated as complete.
  *
- * Word timestamps come from whisper.cpp's native DTW token timestamps, so no
- * separate VAD model is required. See `technical-documentation/architecture/transcription-and-captions.md`.
+ * Word timestamps come from whisper.cpp's native DTW token timestamps. The
+ * Silero VAD model only decides which audio whisper decodes, and gives the
+ * speech edges phrases are anchored on. The CTC aligners (`CTC_ALIGNERS`) re-time
+ * the words for the languages that have one, and are fetched only when a
+ * transcription detects such a language. See `technical-documentation/architecture/transcription-and-captions.md`.
  */
 
-export type SttModelId = "whisper";
+export type SttModelId = "whisper" | "silero-vad";
 
 export interface SttModelFile {
 	/** Relative path within the model directory (e.g. "ggml-small-q8_0.bin"). */
@@ -62,6 +65,10 @@ const MODEL_FILE = "ggml-small-q8_0.bin";
 // LFS oid for MODEL_FILE is exactly the digest below.
 const MODEL_REVISION = "5359861c739e955e79d9a303bcbc70fb988958b1";
 
+const VAD_REPO = "ggml-org/whisper-vad";
+const VAD_FILE = "ggml-silero-v6.2.0.bin";
+const VAD_REVISION = "9ffd54a1e1ee413ddf265af9913beaf518d1639b";
+
 export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 	whisper: {
 		cacheDir: "whisper-ggml",
@@ -75,22 +82,126 @@ export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 			},
 		],
 	},
+	"silero-vad": {
+		cacheDir: "whisper-ggml",
+		repoId: VAD_REPO,
+		files: [
+			{
+				name: VAD_FILE,
+				url: `${MODEL_BASE}/${VAD_REPO}/resolve/${VAD_REVISION}/${VAD_FILE}`,
+				expectedSha256: "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
+				approximateBytes: 885_098,
+			},
+		],
+	},
 };
+
+/**
+ * The CTC aligners that re-time whisper's words (electron/stt/ctcAlign.ts), per
+ * language whisper reports. A language missing here keeps whisper's DTW times.
+ *
+ * Each file is a wav2vec2 CTC model converted to GGUF by
+ * `scripts/convert-wav2vec2-gguf.mjs` (deterministic: re-running it on the source
+ * named in `source` reproduces the digest below), then published under a `v0.0.0-*`
+ * release tag like the other binaries that need a permanent URL but are not a
+ * product version (see scripts/fetch-onnxruntime.mjs). Apache-2.0, both of them.
+ */
+const ALIGNER_RELEASE =
+	"https://github.com/getopenscreen/openscreen/releases/download/v0.0.0-ctc-aligners-1";
+
+export interface CtcAlignerFile extends SttModelFile {
+	/** HuggingFace repo and revision the file was converted from. */
+	source: string;
+}
+
+export const CTC_ALIGNERS: Record<string, CtcAlignerFile> = {
+	en: {
+		name: "w2v-en-base-q8_0.gguf",
+		url: `${ALIGNER_RELEASE}/w2v-en-base-q8_0.gguf`,
+		expectedSha256: "b7f21a97208f368d3505bd9a7bc9ff3795b1169d8e3b036028082eb25eb464ae",
+		approximateBytes: 109_040_064,
+		source: "facebook/wav2vec2-base-960h@22aad52d435eb6dbaf354bdad9b0da84ce7d6156",
+	},
+	fr: {
+		name: "w2v-fr-large-q8_0.gguf",
+		url: `${ALIGNER_RELEASE}/w2v-fr-large-q8_0.gguf`,
+		expectedSha256: "e3c284da3e27564db07ac226bf6402a4d7856b806455b3e0f5283f29f9495f48",
+		approximateBytes: 348_037_120,
+		// The repo's safetensors conversion PR: main only has pytorch_model.bin.
+		source: "jonatasgrosman/wav2vec2-large-xlsr-53-french@70db24a266633ffcc8edce4e72f3a5cb69d602d6",
+	},
+};
+
+const ALIGNER_DIR = "ctc-aligner";
+
+/** Where the aligner for `language` lives, or null when there is none for it. */
+export function alignerPath(baseDir: string, language: string): string | null {
+	const file = Object.keys(CTC_ALIGNERS).includes(language) ? CTC_ALIGNERS[language] : null;
+	return file ? path.join(baseDir, ALIGNER_DIR, file.name) : null;
+}
+
+/**
+ * The aligner for `language` when it is already on disk and intact, without
+ * touching the network: null when it is missing, corrupt, or the language has
+ * none. A local read, so a transcription can afford to wait for it.
+ */
+export async function cachedAligner(baseDir: string, language: string): Promise<string | null> {
+	const filePath = alignerPath(baseDir, language);
+	if (!filePath || !existsSync(filePath)) return null;
+	const actual = await sha256OfFile(filePath).catch(() => "");
+	return actual === CTC_ALIGNERS[language].expectedSha256 ? filePath : null;
+}
+
+/** Abort an aligner download that receives no bytes for this long. */
+export const ALIGNER_STALL_MS = 30_000;
+
+/**
+ * Make sure the aligner for `language` is on disk, downloading and verifying it
+ * like the whisper model. Null when the language has none; throws when the
+ * download fails, stalls for `stallMs` or is aborted through `signal`, which the
+ * caller turns into "keep whisper's times".
+ */
+export async function ensureAligner(opts: {
+	baseDir: string;
+	language: string;
+	signal?: AbortSignal;
+	stallMs?: number;
+	fetcher?: typeof fetch;
+}): Promise<string | null> {
+	const filePath = alignerPath(opts.baseDir, opts.language);
+	if (!filePath) return null;
+	const file = CTC_ALIGNERS[opts.language];
+	await ensureFile(filePath, file.url, file.expectedSha256, {
+		fetcher: opts.fetcher,
+		signal: opts.signal,
+		stallMs: opts.stallMs ?? ALIGNER_STALL_MS,
+	});
+	return filePath;
+}
 
 export function modelPaths(baseDir: string): Record<SttModelId, string> {
 	return {
 		whisper: path.join(baseDir, STT_MODELS.whisper.cacheDir, MODEL_FILE),
+		"silero-vad": path.join(baseDir, STT_MODELS["silero-vad"].cacheDir, VAD_FILE),
 	};
 }
 
 /**
- * True when the GGML model file exists and is non-empty.
+ * True when the GGML model files exist and are non-empty.
  */
-export async function areModelsPresent(baseDir: string): Promise<boolean> {
+export async function areModelsPresent(
+	baseDir: string,
+	only: SttModelId[] = ["whisper", "silero-vad"],
+): Promise<boolean> {
 	const paths = modelPaths(baseDir);
 	try {
-		const s = await stat(paths.whisper);
-		return s.isFile() && s.size > 0;
+		const results = await Promise.all(
+			only.map(async (id) => {
+				const s = await stat(paths[id]);
+				return s.isFile() && s.size > 0;
+			}),
+		);
+		return results.every(Boolean);
 	} catch {
 		return false;
 	}
@@ -106,8 +217,19 @@ export async function sha256OfFile(filePath: string): Promise<string> {
 const MAX_ATTEMPTS = 6;
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) return reject(signal.reason);
+		const timer = setTimeout(resolve, ms);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timer);
+				reject(signal.reason);
+			},
+			{ once: true },
+		);
+	});
 }
 
 function backoffMs(attempt: number, retryAfter: string | null): number {
@@ -120,19 +242,34 @@ function backoffMs(attempt: number, retryAfter: string | null): number {
 	return Math.min(60_000, 2_000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 1000);
 }
 
-async function fetchWithRetry(url: string, fetcher: typeof fetch): Promise<Response> {
+/**
+ * `signal` aborts the request and the waits between attempts; `waiting` is told
+ * when a backoff starts and ends, so a stall timer does not count it.
+ */
+async function fetchWithRetry(
+	url: string,
+	fetcher: typeof fetch,
+	signal?: AbortSignal,
+	waiting: (yes: boolean) => void = () => undefined,
+): Promise<Response> {
 	let lastErr: unknown;
+	const backoff = async (ms: number) => {
+		waiting(true);
+		await sleep(ms, signal);
+		waiting(false);
+	};
 	for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
 		try {
 			const res = await fetcher(url, {
 				headers: { "user-agent": "openscreen-stt" },
+				signal,
 			});
 			if (res.ok && res.body) return res;
 			if (res.status >= 400 && res.status < 500 && !RETRYABLE_STATUS.has(res.status)) {
 				throw new Error(`Failed to download ${url}: HTTP ${res.status} ${res.statusText}`);
 			}
 			if (RETRYABLE_STATUS.has(res.status) && attempt < MAX_ATTEMPTS) {
-				await sleep(backoffMs(attempt, res.headers.get("retry-after")));
+				await backoff(backoffMs(attempt, res.headers.get("retry-after")));
 				continue;
 			}
 			throw new Error(`Failed to download ${url}: HTTP ${res.status} ${res.statusText}`);
@@ -141,8 +278,8 @@ async function fetchWithRetry(url: string, fetcher: typeof fetch): Promise<Respo
 			if (err instanceof Error && err.message.startsWith("Failed to download")) {
 				throw err;
 			}
-			if (attempt >= MAX_ATTEMPTS) throw err;
-			await sleep(backoffMs(attempt, null));
+			if (signal?.aborted || attempt >= MAX_ATTEMPTS) throw signal?.reason ?? err;
+			await backoff(backoffMs(attempt, null));
 		}
 	}
 	throw lastErr;
@@ -153,6 +290,10 @@ export interface DownloadOptions {
 	onProgress?: (bytes: number) => void;
 	/** Override fetch (for tests); defaults to `globalThis.fetch`. */
 	fetcher?: typeof fetch;
+	/** Aborts the download (and the waits between attempts). */
+	signal?: AbortSignal;
+	/** Abort when no byte arrives for this long, backoffs aside. Off when unset. */
+	stallMs?: number;
 }
 
 /**
@@ -186,17 +327,44 @@ async function ensureFile(
 	await mkdir(path.dirname(filePath), { recursive: true });
 
 	const fetcher = options.fetcher ?? fetch;
-	const res = await fetchWithRetry(fileUrl, fetcher);
 	const tmp = `${filePath}.partial`;
-	let downloaded = 0;
-
-	const source = Readable.fromWeb(res.body as never);
-	source.on("data", (chunk: Buffer | Uint8Array) => {
-		downloaded += chunk.length;
-		options.onProgress?.(downloaded);
-	});
-	const { createWriteStream } = await import("node:fs");
-	await pipeline(source, createWriteStream(tmp));
+	// One controller for the caller's abort and the stall timer: a connection that
+	// stops sending leaves `pipeline` pending forever, with nothing else to end it.
+	const controller = new AbortController();
+	const onAbort = () => controller.abort(options.signal?.reason);
+	if (options.signal?.aborted) onAbort();
+	options.signal?.addEventListener("abort", onAbort, { once: true });
+	let stall: ReturnType<typeof setTimeout> | undefined;
+	const arm = (on = true) => {
+		clearTimeout(stall);
+		if (!on || !options.stallMs) return;
+		const ms = options.stallMs;
+		stall = setTimeout(
+			() => controller.abort(new Error(`download stalled: no data for ${ms / 1000}s`)),
+			ms,
+		);
+	};
+	try {
+		arm();
+		const res = await fetchWithRetry(fileUrl, fetcher, controller.signal, (waiting) =>
+			arm(!waiting),
+		);
+		let downloaded = 0;
+		const source = Readable.fromWeb(res.body as never);
+		source.on("data", (chunk: Buffer | Uint8Array) => {
+			arm();
+			downloaded += chunk.length;
+			options.onProgress?.(downloaded);
+		});
+		const { createWriteStream } = await import("node:fs");
+		await pipeline(source, createWriteStream(tmp), { signal: controller.signal });
+	} catch (error) {
+		await rm(tmp, { force: true }).catch(() => undefined);
+		throw controller.signal.aborted ? (controller.signal.reason ?? error) : error;
+	} finally {
+		arm(false);
+		options.signal?.removeEventListener("abort", onAbort);
+	}
 
 	if (expectedSha256) {
 		const actual = await sha256OfFile(tmp);
@@ -217,7 +385,7 @@ async function ensureFile(
 
 export interface EnsureModelsOptions {
 	baseDir: string;
-	/** Models to ensure; defaults to all (currently just `whisper`). */
+	/** Models to ensure; defaults to all (`whisper`, `silero-vad`). */
 	only?: SttModelId[];
 	onProgress?: (event: {
 		id: SttModelId;
@@ -228,9 +396,9 @@ export interface EnsureModelsOptions {
 	fetcher?: typeof fetch;
 }
 
-/** Ensure the GGML model file is present locally; downloads with progress + retry. */
+/** Ensure the GGML model files are present locally; downloads with progress + retry. */
 export async function ensureModels(opts: EnsureModelsOptions): Promise<void> {
-	const targets = (opts.only ?? (["whisper"] as SttModelId[])).map((id) => ({
+	const targets = (opts.only ?? (["whisper", "silero-vad"] as SttModelId[])).map((id) => ({
 		id,
 		descriptor: STT_MODELS[id],
 		filePath: modelPaths(opts.baseDir)[id],

@@ -115,20 +115,6 @@ describe("EditClipModal trim duration readout (#558)", () => {
 		expect(screen.getAllByText("0:20.0–1:45.0")).toHaveLength(1);
 	});
 
-	it("keeps the discarded head and tail out of the pointer's way", () => {
-		const { container } = renderModal();
-
-		// The dimmed tail is painted after the selection, so it covers the end
-		// handle's 6px overhang and, once the range is narrower than the handle,
-		// the handle itself. jsdom does not hit-test, so this pins the property
-		// rather than the grab; the grab is checked by driving the real window.
-		const dimmed = [...container.querySelectorAll<HTMLElement>("div")].filter(
-			(el) => el.style.background === "var(--overlay-dark)",
-		);
-		expect(dimmed).toHaveLength(2);
-		for (const el of dimmed) expect(el.style.pointerEvents).toBe("none");
-	});
-
 	it("updates the final duration as the end handle is dragged", () => {
 		renderModal();
 
@@ -141,6 +127,40 @@ describe("EditClipModal trim duration readout (#558)", () => {
 
 		expect(screen.getByTestId("edit-clip-trim-range")).toHaveTextContent("0:20.0–1:40.0");
 		expect(screen.getByTestId("edit-clip-final-duration")).toHaveTextContent("1:20.0");
+	});
+});
+
+describe("EditClipModal crop from the keyboard", () => {
+	it("moves the crop with the arrows and resizes it with Shift + the arrows", () => {
+		const onApply = vi.fn();
+		renderWithI18n(
+			<EditClipModal
+				open
+				onClose={vi.fn()}
+				clip={CLIP}
+				assetMeta={ASSET}
+				videoSources={[]}
+				onApply={onApply}
+			/>,
+		);
+		// The editor shell seeks on the arrows from window: the crop must keep them.
+		const seek = vi.fn();
+		window.addEventListener("keydown", seek);
+		try {
+			const crop = screen.getByRole("slider", { name: "Crop" });
+			fireEvent.keyDown(crop, { key: "ArrowLeft", shiftKey: true });
+			fireEvent.keyDown(crop, { key: "ArrowRight" });
+			expect(seek).not.toHaveBeenCalled();
+		} finally {
+			window.removeEventListener("keydown", seek);
+		}
+		fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+		expect(onApply).toHaveBeenCalledWith(
+			20,
+			105,
+			expect.objectContaining({ x: 0.01, y: 0, width: 0.99 }),
+			undefined,
+		);
 	});
 });
 

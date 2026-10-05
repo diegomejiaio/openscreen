@@ -26,7 +26,7 @@ No Windows, o caminho recomendado é a [Microsoft Store](#windows). Nos demais s
 | | Mínimo | Recomendado |
 |---|---|---|
 | **Windows** | Windows 10 versão 1903 (build 18362) ou posterior, x64, Intel de 8ª geração / AMD Ryzen série 2000 ou mais recente. A captura nativa exige o Windows 10 versão 2004 (build 19041) ou posterior; builds mais antigos gravam usando a [alternativa de captura pelo navegador](#platform-differences) | Windows 11, Intel de 12ª geração / AMD Ryzen série 4000 ou mais recente |
-| **macOS** | macOS 13 (Ventura) — exigido pelo ScreenCaptureKit para a captura | macOS 14 ou posterior |
+| **macOS** | macOS 13 (Ventura) — exigido pelo ScreenCaptureKit para a captura. Gravar o microfone exige o macOS 15 ou posterior | macOS 15.2 ou posterior |
 | **Linux** | x64. `xdg-desktop-portal` e PipeWire, necessários para gravar: o auxiliar de captura nativa passa por eles, e uma falha ali é informada como erro. A [alternativa de captura pelo navegador](#platform-differences) só entra em ação quando falta o próprio auxiliar no build. O áudio do sistema também exige o PipeWire como servidor de som (o padrão no [Ubuntu 22.10+](https://discourse.ubuntu.com/t/kinetic-kudu-release-notes/27976) e no [Fedora 34+](https://fedoraproject.org/wiki/Changes/DefaultPipeWire)). Gravar os cliques do mouse no Wayland exige que seu usuário esteja no grupo `input` — veja [Cliques do mouse no Wayland](#mouse-clicks-on-wayland) | O mesmo, mantido atualizado |
 | **RAM** | 8 GB | 16 GB |
 
@@ -38,11 +38,12 @@ Máquinas com gráficos integrados anteriores, aproximadamente, à 8ª geração
 
 Baixe o instalador `.dmg` em [Releases](https://github.com/getopenscreen/openscreen/releases) e arraste o OpenScreen para a pasta Aplicativos. Os builds a partir da 1.9.0 são assinados com um certificado Developer ID e notarizados pela Apple, então o Gatekeeper não os bloqueia e nenhum passo no terminal é necessário.
 
-Depois, vá em **Ajustes do Sistema → Privacidade e Segurança** e conceda **Gravação de Tela** e **Acessibilidade** ao OpenScreen. A Gravação de Tela é o que permite qualquer captura. A Acessibilidade é necessária para que o cursor editável padrão grave o formato do cursor e os cliques: nesse modo, apertar gravar sem ela abre um aviso com um link para o ajuste, e a gravação começa quando você concede a permissão e aperta gravar de novo.
+Na primeira vez que você o abre, o OpenScreen mostra uma janela de permissões que lista todas as permissões que ele usa, cada uma com um botão para concedê-la. Você pode reabri-la a qualquer momento pelo ícone do OpenScreen na barra de menus: **Permissões…**. O que o macOS pede depende da versão:
 
-:::note No macOS 15 e posterior, o pedido volta de tempos em tempos
-O macOS volta a pedir a permissão de gravação de tela de tempos em tempos para todo gravador de tela de terceiros. Esse pedido vem do sistema operacional — não significa que sua instalação esteja com defeito nem que uma atualização tenha dado errado. Conceda de novo quando for solicitado.
-:::
+- **macOS 15.2 e posterior:** você escolhe a tela ou a janela no seletor do sistema da Apple, e essa escolha é o seu consentimento, então a permissão de **Gravação de Tela** não é necessária. O áudio do sistema pede a sua própria permissão, mais restrita: **Apenas Gravação do Áudio do Sistema**.
+- **macOS 13 a 15.1:** o OpenScreen usa o próprio seletor de fonte e precisa da **Gravação de Tela**, que também cobre o áudio do sistema. Nas versões 15.0 e 15.1, o macOS também pergunta de tempos em tempos se o OpenScreen pode acessar a tela diretamente, sem o seletor do sistema: permita.
+
+A **Acessibilidade** é necessária para que o cursor editável padrão grave o formato do cursor e os cliques: nesse modo, apertar gravar sem ela abre a janela de permissões, e a gravação começa quando você concede a permissão e aperta gravar de novo.
 
 :::tip Atualizando de uma versão anterior à 1.9.0?
 Esses builds não eram assinados com um certificado Developer ID, e o macOS vincula as permissões de Gravação de Tela e Acessibilidade à assinatura do app — então ele não tem como saber que o novo build é o mesmo app, e as permissões concedidas ao antigo não são transferidas. Se uma nova versão não gravar mesmo depois de você concedê-las, remova as entradas do OpenScreen nas duas permissões em Ajustes do Sistema, abra o app de novo e conceda-as do zero.
@@ -151,15 +152,15 @@ As ferramentas de edição são as mesmas em todos os sistemas — zooms, fundos
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | Pipeline de captura | Nativo (ScreenCaptureKit) | Nativo (Windows Graphics Capture) no build 19041 e posteriores; captura pelo navegador em builds mais antigos ou sem o auxiliar | Nativo (PipeWire via portal ScreenCast); captura pelo navegador sem o auxiliar, perdendo a codificação por hardware e a telemetria do cursor |
-| Temas de cursor personalizados / efeitos de clique | ✅ — cliques e formato do cursor exigem a permissão de Acessibilidade | ✅ | ✅ no Wayland — a captura de cliques exige o grupo `input` ([detalhes](#mouse-clicks-on-wayland)) |
+| Cursor personalizado / efeitos de clique | ✅ — cliques e formato do cursor exigem a permissão de Acessibilidade | ✅ | ✅ no Wayland — a captura de cliques exige o grupo `input` ([detalhes](#mouse-clicks-on-wayland)) |
 | Webcam | Captura pelo navegador, salva em arquivo separado (continua funcionando como PiP) | Captura nativa, salva em arquivo separado | Captura pelo navegador, salva em arquivo separado (continua funcionando como PiP) |
-| Áudio do sistema | Funciona sem configuração; pedido de permissão no macOS 14.2+ | Funciona sem configuração | Exige o PipeWire como servidor de som (padrão no Ubuntu 22.10+ e no Fedora 34+) |
-| Exportação MP4 | ✅ | ✅ | ✅ — H.264 na GPU via VAAPI quando a pilha da GPU permite (veja a nota abaixo), por software nos demais casos; H.265 só por software |
+| Áudio do sistema | Funciona sem configuração; pedido de permissão próprio no macOS 15.2+, coberto pela Gravação de Tela nas versões anteriores | Funciona sem configuração | Exige o PipeWire como servidor de som (padrão no Ubuntu 22.10+ e no Fedora 34+) |
+| Exportação MP4 | ✅ | ✅ | ✅ — H.264 na GPU via VAAPI quando a pilha da GPU permite (veja a nota abaixo), por software nos demais casos |
 | Exportação GIF | ✅ | ✅ | ✅ |
 | Transcrição local | Metal (Apple Silicon) / CPU | Vulkan / CPU | Vulkan / CPU |
 
 :::note Exportação MP4 no Linux
-O compositor de GPU por trás da pré-visualização ao vivo e da exportação MP4 tem três backends — Direct3D 11 no Windows, Metal no macOS, wgpu/WGSL no Linux — e vem nos três builds. No Linux, uma exportação H.264 entrega cada quadro composto ao `h264_vaapi` sem cópia pela CPU quando o driver da GPU expõe VAAPI *e* o dispositivo Vulkan consegue repassar o quadro como dmabuf (`VK_KHR_external_memory_fd` e `VK_EXT_external_memory_dma_buf`). Quando falta qualquer um desses itens — nenhum render node, um driver sem VAAPI, um dispositivo Vulkan sem essas extensões —, a exportação recorre a um codificador por software e simplesmente demora mais; nada mais muda. As exportações H.265 sempre usam o codificador por software no Linux.
+O compositor de GPU por trás da pré-visualização ao vivo e da exportação MP4 tem três backends — Direct3D 11 no Windows, Metal no macOS, wgpu/WGSL no Linux — e vem nos três builds. No Linux, uma exportação H.264 entrega cada quadro composto ao `h264_vaapi` sem cópia pela CPU quando o driver da GPU expõe VAAPI *e* o dispositivo Vulkan consegue repassar o quadro como dmabuf (`VK_KHR_external_memory_fd` e `VK_EXT_external_memory_dma_buf`). Quando falta qualquer um desses itens — nenhum render node, um driver sem VAAPI, um dispositivo Vulkan sem essas extensões —, a exportação recorre a um codificador por software e simplesmente demora mais; nada mais muda.
 :::
 
 O que o OpenScreen faz em cada sistema, e quando outra ferramenta atende melhor, está resumido nas páginas sobre [Windows](/screen-recorder-windows/), [Mac](/screen-recorder-mac/) e [Linux](/screen-recorder-linux/).

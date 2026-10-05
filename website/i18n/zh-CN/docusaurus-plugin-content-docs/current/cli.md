@@ -135,13 +135,13 @@ openscreen export demo.openscreen -o out.mp4 --auto-zoom --json
 | `--quality <medium\|good\|source>` | 输出尺寸：`medium` 为 720p，`good` 为 1080p，`source` 以裁剪后最小的片段为准，因此绝不会放大。GIF 也以这个尺寸为起点 |
 | `--gif-fps <15\|20\|25\|30>` | GIF 帧率 |
 | `--gif-size <medium\|large\|original>` | 在上述尺寸基础上施加的 GIF 高度上限：720、1080 或不限 |
-| `--auto-zoom` | 渲染之前，在录制的指针停顿处添加缩放，使用与编辑器[自动缩放](/features/auto-zoom/)相同的引擎。已有的缩放会保留，新的缩放绝不会与它们重叠 |
+| `--auto-zoom` | 渲染之前，在录制的点击处添加缩放，使用与编辑器[自动缩放](/features/auto-zoom/)相同的引擎。已有的缩放会保留，新的缩放会与它们保持间隔 |
 | `--audio <file>` | 把一个配音文件（mp3、wav 或 m4a）混入 MP4。仅限 MP4 |
 | `--audio-mode <mix\|replace>` | `mix`（默认）会以 40% 增益把录制原声保留在配音之下；`replace` 则去掉原声 |
 | `--audio-offset <seconds>` | 配音开始前的延迟（默认为 0） |
 | `--json` | 在 stdout 上输出 NDJSON 格式的进度和结果 |
 
-CLI 导出的 MP4 始终是 **60 fps 的 H.264**。没有编码格式或帧率选项。桌面应用的[导出](./export.md)对话框另外还提供 H.265 以及 24 或 30 fps。
+CLI 导出的 MP4 始终是 **60 fps 的 H.264**。没有编码格式或帧率选项。桌面应用的[导出](./export.md)对话框另外还提供 24 或 30 fps。
 
 `--audio` 在渲染完成后才起作用：视频流会原样复制，然后混合出一条新的 AAC 音轨，并覆盖写入同一个输出文件。
 
@@ -158,7 +158,7 @@ openscreen captions demo.openscreen --min-words 2 --max-words 7
 openscreen export demo.openscreen -o demo.mp4   # captions are burned into the video
 ```
 
-- `--min-words` 和 `--max-words` 设置每条字幕的词数。默认值分别为 2 和 7。
+- `--min-words` 和 `--max-words` 设置每条字幕的词数。取值范围均为 1 到 12，与编辑器一致。默认值分别为 2 和 7。
 - 再次运行会替换它之前添加的字幕。你自己添加的标注会保留。
 - 项目的屏幕视频必须带有音轨，例如由 `record --mic` 录制的视频。
 - 字幕会烧录进导出的视频中，不会输出字幕文件。请参阅[字幕](./captions.md)。
@@ -247,7 +247,7 @@ node -e '
   fs.writeFileSync("demo.openscreen", JSON.stringify(p, null, 2));
 '
 
-# 4. Render, with automatic zooms added where the pointer paused
+# 4. Render, with automatic zooms added on the recorded clicks
 openscreen export demo.openscreen -o demo.mp4 --auto-zoom --json
 ```
 

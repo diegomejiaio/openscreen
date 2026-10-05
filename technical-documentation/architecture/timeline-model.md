@@ -153,20 +153,21 @@ those three now share is that **a named clip is believed over anything inferred 
 
 ### Cursor telemetry is source time, and belongs to every clip that replays it
 
-Auto-zoom reads recorded cursor movement, which is captured against the ORIGINAL media
-file: `timeMs` is the asset's SOURCE time, the same axis `cursor-track.ts` maps through
-`locateSourcePosition`. Zoom regions are authored in RAW TIMELINE ms — that is what
-`anchorRegionsWithDerivedMs` ventilates across clips. The two axes coincide for exactly
+Auto-zoom reads the clicks in the recorded cursor telemetry, which is captured against the
+ORIGINAL media file: `timeMs` is the asset's SOURCE time, the same axis `cursor-track.ts`
+maps through `locateSourcePosition`. Zoom regions are authored in RAW TIMELINE ms — that is
+what `anchorRegionsWithDerivedMs` ventilates across clips. The two axes coincide for exactly
 one layout: a single clip, starting at 0, covering the whole recording. Feeding the
-detector's source-time output straight to the store therefore dropped every suggestion
+planner's source-time output straight to the store therefore dropped every suggestion
 wherever `[0, assetDuration]` happens to fall on the ruler, i.e. on the first clip —
 "automatic zooms only decorate the first clip". `buildAutoZoomSuggestionsForClips`
 ([`zoom-suggestions.ts`](../../src/lib/ai-edition/timeline/zoom-suggestions.ts)) does the
-projection: per clip of the asset, a plain shift (a raw clip is identity between source and
-raw-virtual time), so a dwell replayed by two clips over one recording yields one zoom on
-each. Each clip sees only the samples inside its own source window, so a dwell a cut split
-across two clips is no longer one dwell — the cursor did not sit still across the cut on
-the timeline the user is watching.
+projection: per clip, a plain shift (a raw clip is identity between source and raw-virtual
+time), so a click replayed by two clips over one recording yields one zoom on each. Each
+clip plans its own zooms from the samples inside its own source window, so no zoom spans a
+cut. The plans are then settled over the whole timeline, every recording at once: two
+zooms must leave a wide shot between them, even across a cut, and the edit's first and
+last seconds stay wide.
 
 ### The same ambiguity in the transcript pane
 
@@ -215,7 +216,7 @@ the contract a reviewer can grade against. Each is asserted in
   the region hard on its own span: full strength inside, nothing outside, no ease-in/out
   window and no chaining with a neighbouring zoom. An export never composes a frame at
   those source times, so the entry is inert there — without the gate a zoom's ease-in
-  (1.5 s before its start) would reach the kept frames beside the cut and the preview
+  (up to 1.5 s before its start) would reach the kept frames beside the cut and the preview
   would show what the export does not.
 - **A named clip beats anything inferred from (assetId, sourceTime), and clip ORDER is
   never an input.** Asserted in

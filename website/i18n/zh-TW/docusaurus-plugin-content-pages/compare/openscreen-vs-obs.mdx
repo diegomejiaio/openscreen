@@ -25,10 +25,10 @@ OpenScreen 與 OBS Studio 都是支援 Windows、macOS 與 Linux 的免費開源
 | 錄製內容 | 螢幕畫面或單一視窗，含攝影機、麥克風與系統音訊，之後可在編輯器中裁切 | 組合螢幕、視窗、攝影機、圖片、文字、瀏覽器視窗與擷取卡的場景。來源可在錄製前先行裁切 |
 | 直播 | 無 | 有，可直播至內建服務或自訂伺服器 |
 | 內建編輯器 | 有。多片段時間軸、剪切、變速、縮放與標註 | 無。其功能列表涵蓋擷取、混音、場景與直播 |
-| 自動縮放 | 是，根據錄下的游標放置 | 社群製作的「Zoom to Mouse」腳本，由快捷鍵觸發 |
+| 自動縮放 | 是，放置在錄下的點擊處 | 社群製作的「Zoom to Mouse」腳本，由快捷鍵觸發 |
 | 字幕 | 裝置端 Whisper，一個約 264 MB 的模型，下載一次。燒錄進影片 | 內建字幕工具僅支援 Windows。免費的 LocalVocal 外掛可在三個系統上本機轉錄，並寫出 .srt 檔 |
 | 錄製格式 | 原生擷取搭配 H.264 MP4 | H.264、AV1、以硬體編碼器編碼的 HEVC，或在 Mac 上使用 ProRes。預設為 Hybrid MP4 或 MOV，另外也支援 MKV、FLV、MPEG-TS 等格式 |
-| 輸出 | MP4（H.264 或 H.265）或 GIF，最高 60 fps，無浮水印 | 錄製的檔案本身 |
+| 輸出 | MP4（H.264）或 GIF，最高 60 fps，無浮水印 | 錄製的檔案本身 |
 | 擴充方式 | 可輸出 JSON 的命令列介面 | 外掛管理員、Lua 與 Python 腳本、WebSocket 遠端控制 |
 
 ## 兩者共通的功能 {#what-both-tools-do}
@@ -47,7 +47,7 @@ OpenScreen 與 OBS Studio 都是支援 Windows、macOS 與 Linux 的免費開源
 ### 在同一個應用程式中剪輯 {#editing-in-the-same-app}
 
 - **錄完後的時間軸。** 可匯入錄影或現有影片，重新排序，並為每個片段設定入點、出點與裁切範圍。可剪切區段，並將速度從 0.1× 調整到 100×。詳見[剪輯與時間軸](/docs/editing-timeline/)與[媒體庫](/docs/media-library/)。
-- **錄完後才放置的縮放。** **自動加強 → 自動縮放**會讀取錄下的游標移動，在指標停留處放上縮放區域，不需要連線，也不需要模型。另外還有六種深度的手動縮放可搭配使用。OBS 的「Zoom to Mouse」腳本會在你按下快捷鍵時，對畫面擷取進行縮放，因此每個縮放都是在錄製當下決定的。詳見[自動縮放](/features/auto-zoom/)。
+- **錄完後才放置的縮放。** **自動加強 → 自動縮放**會讀取錄下的點擊，並在這些點擊處放大，不需要連線，也不需要模型。另外還有六種深度的手動縮放可搭配使用。OBS 的「Zoom to Mouse」腳本會在你按下快捷鍵時，對畫面擷取進行縮放，因此每個縮放都是在錄製當下決定的。詳見[自動縮放](/features/auto-zoom/)。
 - **可在事後更改的游標。** OpenScreen 預設會將指標記錄為資料而非像素。你可以在錄完後調整大小、使路徑平滑，並加上動態模糊與點擊彈跳效果。各系統會擷取哪些內容，列於[游標模式](/docs/recording/#cursor-mode)。
 - **構圖。** 在錄影後方加上桌布、純色、漸層或自訂圖片，並提供內邊距、圓角與陰影。可輸出為 16:9、9:16、1:1、4:3、4:5、16:10、10:16，或片段本身的形狀。
 - **時間軸上的標註。** 六種動畫效果的文字、八個方向的箭頭、圖片，以及高斯或馬賽克模糊區域。OBS 是在錄製時把文字與圖片當作場景來源加入。OpenScreen 則是在錄完後放置，之後仍可移動。
@@ -60,7 +60,7 @@ OpenScreen 與 OBS Studio 都是支援 Windows、macOS 與 Linux 的免費開源
 
 ### 匯出與聊天剪輯 {#export-and-chat-editing}
 
-- **可調整的匯出步驟。** MP4 可選 720p、1080p 或原始尺寸，24、30 或 60 fps，編碼為 H.264 或 H.265，或輸出為 GIF。無浮水印。在 OBS 中，輸出解析度、影格率與編碼器要在錄製前於設定中先行設定。詳見[匯出](/docs/export/)。
+- **可調整的匯出步驟。** MP4 可選 720p、1080p 或原始尺寸，24、30 或 60 fps，編碼為 H.264，或輸出為 GIF。無浮水印。在 OBS 中，輸出解析度、影格率與編碼器要在錄製前於設定中先行設定。詳見[匯出](/docs/export/)。
 - **可選用自己金鑰的聊天剪輯。** 用一般語言描述剪切、縮放、變速或標註。每項變更都會成為一般可復原的編輯。在你連接提供者之前，這項功能是關閉的。詳見 [AI 剪輯](/docs/ai-editing/)。
 
 ## OBS Studio 更適合的情況 {#when-obs-studio-is-the-better-choice}
@@ -84,8 +84,8 @@ OpenScreen 與 OBS Studio 都是支援 Windows、macOS 與 Linux 的免費開源
 ## 開始使用 {#getting-started}
 
 1. 從[下載頁面](/download/)下載 OpenScreen。在 Windows 上，建議使用 Microsoft Store。
-2. 依照[安裝](/docs/installation/)步驟進行。在 macOS 上，請在第一次錄影前授予「螢幕錄製」與「輔助使用」權限。
-3. 依照[快速入門](/docs/quick-start/)錄下第一段影片，然後執行**自動加強 → 自動縮放**。若要改為剪輯 OBS 錄下的內容，請從[媒體庫](/docs/media-library/)開始，並加上[字幕](/docs/captions/)。
+2. 依照[安裝](/docs/installation/)步驟進行。在 macOS 上，請在首次啟動時開啟的視窗中授予權限。
+3. 依照[快速入門](/docs/quick-start/)錄下第一段影片。影片會在編輯器中開啟，自動縮放已經放好。若要改為剪輯 OBS 錄下的內容，請從[媒體庫](/docs/media-library/)開始，並加上[字幕](/docs/captions/)。
 
 也想比較其他工具嗎？請見[取代 Screen Studio](/alternatives/screen-studio/)、[OpenScreen 與 Cap 比較](/compare/openscreen-vs-cap/)、[取代 Camtasia](/alternatives/camtasia/)與[取代 Loom](/alternatives/loom/)。想看完整的實作流程，請閱讀[產品示範影片指南](/docs/guides/product-demo-video/)，或回到 [OpenScreen 首頁](/)。
 

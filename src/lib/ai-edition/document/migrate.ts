@@ -21,6 +21,7 @@ import type {
 	TrimRegion,
 	ZoomRegion,
 } from "@/components/video-editor/types";
+import { readBackgroundBlur } from "@/lib/projectDefaults";
 import type { ProjectMedia } from "@/lib/recordingSession";
 import {
 	type AxcutAnnotationRegion,
@@ -72,6 +73,27 @@ function toLegacyMedia(input: ProjectMedia | undefined): ProjectMedia | null {
 	if (typeof input.webcamOffsetMs === "number") media.webcamOffsetMs = input.webcamOffsetMs;
 	if (input.cursorCaptureMode) media.cursorCaptureMode = input.cursorCaptureMode;
 	return media;
+}
+
+/**
+ * A v2 `editor.cropRegion` becomes the migrated clip's crop. The region is
+ * normalised to the unit square: x/y clamp to [0, 1], width/height clamp so the
+ * region stays inside it. Returns null for a missing, non-finite, empty, or
+ * identity region so the clip stays lean (see clipSchema).
+ */
+function toClipCropRegion(region: CropRegion | undefined): CropRegion | null {
+	if (!region) return null;
+	const finite = [region.x, region.y, region.width, region.height].every(
+		(v) => typeof v === "number" && Number.isFinite(v),
+	);
+	if (!finite) return null;
+	const x = Math.min(1, Math.max(0, region.x));
+	const y = Math.min(1, Math.max(0, region.y));
+	const width = Math.min(1 - x, Math.max(0, region.width));
+	const height = Math.min(1 - y, Math.max(0, region.height));
+	if (width <= 0 || height <= 0) return null;
+	if (x === 0 && y === 0 && width === 1 && height === 1) return null;
+	return { x, y, width, height };
 }
 
 /**
@@ -130,6 +152,8 @@ export function migrateProjectDataToAxcutDocument(
 		? input.editor.annotationRegions
 		: [];
 
+	const migratedCropRegion = toClipCropRegion(input.editor?.cropRegion);
+
 	const clip = primaryAssetId
 		? {
 				id: createId("clip"),
@@ -140,6 +164,10 @@ export function migrateProjectDataToAxcutDocument(
 				wordRefs: [] as string[],
 				origin: "system" as const,
 				reason: "migrated from v2",
+				// Crop lives on the clip in v3 (sceneDescription reads clip.cropRegion),
+				// so a v2 editor.cropRegion left only in legacyEditor is never applied.
+				// Identity stays absent so untouched clips remain lean.
+				...(migratedCropRegion ? { cropRegion: migratedCropRegion } : {}),
 			}
 		: null;
 
@@ -194,7 +222,9 @@ export function migrateProjectDataToAxcutDocument(
 			...(typeof region.customScale === "number" ? { customScale: region.customScale } : {}),
 			...(region.source === "auto" || region.source === "manual" ? { source: region.source } : {}),
 			...(region.hideCursor ? { hideCursor: true } : {}),
-			...(region.clickImpact === true ? { clickImpact: true as const } : {}),
+			// Up to v1.13.0 a zoom stored its click impact; it is a cursor setting now. Carried on
+			// the draft so `migrateRawDocumentToCurrent` lifts it there, as for a stored document.
+			...("clickImpact" in region && region.clickImpact === true ? { clickImpact: true } : {}),
 		}));
 
 	const migratedAnnotations: AxcutAnnotationRegion[] = annotationRegions
@@ -289,7 +319,7 @@ export function migrateAxcutDocumentToProjectData(input: AxcutDocument): EditorP
 		wallpaper: "",
 		wallpaperMotion: "none",
 		shadowIntensity: 0,
-		showBlur: false,
+		backgroundBlur: 0,
 		motionBlurAmount: 0,
 		depthOfField: true,
 		borderRadius: 0,
@@ -320,6 +350,9 @@ export function migrateAxcutDocumentToProjectData(input: AxcutDocument): EditorP
 	const legacy = document.legacyEditor;
 	if (legacy && typeof legacy === "object") {
 		Object.assign(editor, legacy);
+		// A document from before the amount holds only the `showBlur` switch; the default 0
+		// above would otherwise win over it once the project is read back.
+		editor.backgroundBlur = readBackgroundBlur(legacy, 0);
 	}
 
 	const reverseZoomRegions: ZoomRegion[] = (document.zoomRanges ?? []).map((region) => ({
@@ -333,7 +366,6 @@ export function migrateAxcutDocumentToProjectData(input: AxcutDocument): EditorP
 		...(typeof region.customScale === "number" ? { customScale: region.customScale } : {}),
 		...(region.source ? { source: region.source } : {}),
 		...(region.hideCursor ? { hideCursor: true } : {}),
-		...(region.clickImpact ? { clickImpact: true as const } : {}),
 	}));
 	editor.zoomRegions = reverseZoomRegions;
 

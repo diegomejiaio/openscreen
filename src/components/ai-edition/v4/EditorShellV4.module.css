@@ -23,6 +23,13 @@
 }
 /* rows set inline per mode (topbar / body / timeline) */
 
+/* One visible keyboard focus for the whole shell: most controls here reset the
+   outline and put nothing back. */
+.app :focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
 /* ─── TOP BAR ──────────────────────────────────────────────────────── */
 /* Every slot on the left half is width-STABLE by construction: the chat toggle
    reserves its box even in the modes that don't have one, the project name and
@@ -37,8 +44,6 @@
 	--topbar-gap: 14px;
 	--topbar-icon: 32px;
 	--topbar-project-w: 180px;
-	/* Widest of the short locale labels — "PT-BR", and the CJK "简中". */
-	--topbar-lang-label-w: 38px;
 	/* The topbar doubles as the window titlebar, so it keeps clear of the native
 	   window controls: the macOS traffic lights (--titlebar-inset-left, injected
 	   per-platform by the main process) on the left, and the Windows/Linux Window
@@ -49,7 +54,7 @@
 		18px + 100vw - env(titlebar-area-width, 100vw) - env(titlebar-area-x, 0px)
 	);
 	background: transparent;
-	border-bottom: 1px solid var(--border-soft);
+	border-bottom: 1px solid var(--shell-rule-soft);
 	min-width: 0;
 	-webkit-app-region: drag;
 	app-region: drag;
@@ -138,7 +143,13 @@
 	position: absolute;
 	top: calc(100% + 6px);
 	left: 0;
+	/* Sized to its widest row. Left to the default shrink-to-fit, an absolute box measures its
+	   available width against the anchor, which is only as wide as the wordmark, so it settled
+	   on min-width and long locales wrapped: "Changer de langue" on two lines, the version split
+	   as "2.0.0-" / "rc.8" (#969). The max-width only keeps it inside the window. */
+	width: max-content;
 	min-width: 232px;
+	max-width: calc(100vw - 24px);
 	/* The trigger sits 13px from the top of a 58px bar, so the menu's first 7px overlap the
 	   titlebar's drag region. Only `.topbar button` is opted out of dragging, and that strip is
 	   the menu's padding, not a row — without this a mousedown on it drags the window out from
@@ -165,6 +176,8 @@
 	cursor: pointer;
 	text-align: left;
 	font: 500 12.5px var(--font-body);
+	/* One line per row, in every locale: the menu grows to fit instead (see .appMenu). */
+	white-space: nowrap;
 	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
 }
 .appMenuRow:hover,
@@ -183,9 +196,33 @@
 /* Pushes the version to the right edge of the row it shares with "About". */
 .appMenuVersion {
 	margin-left: auto;
+	/* Never squeezed or broken at the hyphen of a pre-release tag like "2.0.0-rc.8". */
+	flex-shrink: 0;
+	white-space: nowrap;
 	color: var(--muted);
 	font-variant-numeric: tabular-nums;
 	font-size: 11.5px;
+}
+/* The language row's chevron turns to show its list is open. */
+.appMenuChevron {
+	color: var(--muted);
+	flex-shrink: 0;
+	transition: transform var(--motion-fast) var(--ease);
+}
+.appMenuRow[aria-expanded="true"] .appMenuChevron {
+	transform: rotate(180deg);
+}
+/* The languages, unfolded under their row: indented to read as its children, and capped so
+   fifteen of them scroll inside the menu instead of running off the window. */
+.appMenuSub {
+	max-height: 220px;
+	overflow-y: auto;
+	padding-left: 25px;
+	scrollbar-width: thin;
+}
+.appMenuSub .appMenuRow[aria-checked="true"] {
+	color: var(--accent);
+	font-weight: 600;
 }
 .appMenuSep {
 	height: 1px;
@@ -209,7 +246,8 @@
 	background: var(--surface-2);
 	color: var(--fg);
 }
-.iconBtn:disabled {
+.iconBtn:disabled,
+.iconBtn[aria-disabled="true"] {
 	opacity: 0.45;
 	cursor: not-allowed;
 }
@@ -244,8 +282,19 @@
 /* The project name keeps one width whatever it is called — and the read view and
    the edit input keep the SAME width, so clicking to rename doesn't nudge the
    bar either. A long title truncates rather than pushing its neighbours. */
-.projectNameBtn {
+/* The name and its saved dot share one fixed-width slot: the dot follows a short name instead
+   of waiting at the far end, and the slot keeps the bar still when the name or its state changes. */
+.projectSlot {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
 	width: var(--topbar-project-w);
+	min-width: 0;
+	flex-shrink: 0;
+}
+.projectNameBtn {
+	/* Room for the 7px dot and the slot's gap. */
+	max-width: calc(100% - 11px);
 	justify-content: flex-start;
 	box-sizing: border-box;
 }
@@ -257,7 +306,7 @@
 }
 .projectNameInput {
 	height: 30px;
-	width: var(--topbar-project-w);
+	width: 100%;
 	box-sizing: border-box;
 	padding: 0 10px;
 	border-radius: 9px;
@@ -267,103 +316,23 @@
 	font: 500 13px var(--font-display);
 	outline: none;
 }
-/* Both states are rendered into the SAME grid cell, so the slot is as wide as
-   the longer of the two and never resizes when the document goes dirty — which
-   happens on every keystroke. Sizing to the longer string beats guessing a width:
-   "Saved"/"Unsaved" differ by 2 characters in English and by 4 in French, and a
-   hard-coded width would clip somewhere among the 13 locales. */
-.saved {
-	display: inline-grid;
-	grid-template-areas: "state";
-	align-items: center;
-	justify-items: start;
-	font-family: var(--font-mono);
-	font-size: 11px;
-	color: var(--muted);
-	flex-shrink: 0;
-}
-.savedState {
-	grid-area: state;
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	white-space: nowrap;
-}
-/* visibility (not display) so the hidden state still contributes its width —
-   and stays out of the accessibility tree. */
-.savedState[data-on="false"] {
-	visibility: hidden;
-}
-.saved .dot {
-	width: 6px;
-	height: 6px;
+/* The saved state, one dot beside the project name (EditorTopBar). Mint when the file on
+   disk matches the screen, amber when it does not; visibility, not display, with no project,
+   so loading one moves nothing in the bar. */
+.saveDot {
+	width: 7px;
+	height: 7px;
 	border-radius: 50%;
+	flex-shrink: 0;
 	background: var(--accent);
 	box-shadow: 0 0 0 3px var(--accent-soft);
 }
-
-.langAnchor {
-	position: relative;
-	flex-shrink: 0;
+.saveDot[data-dirty="true"] {
+	background: var(--warn);
+	box-shadow: 0 0 0 3px var(--warn-soft);
 }
-.langBtn {
-	width: auto;
-	padding: 0 8px;
-	gap: 6px;
-	display: inline-flex;
-	align-items: center;
-}
-.langIcon {
-	flex-shrink: 0;
-}
-.langChevron {
-	color: var(--muted);
-	flex-shrink: 0;
-}
-.langMenu {
-	position: absolute;
-	top: calc(100% + 4px);
-	right: 0;
-	min-width: 160px;
-	background: var(--surface);
-	border: 1px solid var(--border);
-	border-radius: var(--r-md);
-	box-shadow: var(--elev-pop);
-	padding: 4px;
-	z-index: 60;
-}
-.langMenuItem {
-	display: block;
-	width: 100%;
-	text-align: left;
-	padding: 6px 10px;
-	border: 0;
-	background: transparent;
-	color: var(--fg-2);
-	border-radius: var(--r-sm);
-	cursor: pointer;
-	font: 500 12px var(--font-body);
-	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
-}
-.langMenuItem:hover {
-	background: var(--surface-2);
-	color: var(--fg);
-}
-.langMenuItem[data-active="true"] {
-	background: var(--accent-wash);
-	color: var(--accent);
-}
-
-/* One box for every short locale label — see --topbar-lang-label-w. Without it
-   the language button resized between "EN", "PT-BR" and the CJK "简中", moving
-   everything to its right. */
-.langShort {
-	width: var(--topbar-lang-label-w);
-	text-align: center;
-	font-family: var(--font-mono);
-	font-size: 11px;
-	font-weight: 600;
-	white-space: nowrap;
+.saveDot[data-hidden="true"] {
+	visibility: hidden;
 }
 
 /* mode switch (Media / Edit / Rec) */
@@ -381,18 +350,18 @@
 	padding: 3px;
 	background: var(--surface-1);
 	border: 1px solid var(--border);
-	border-radius: 11px;
+	border-radius: 12px;
 	flex-shrink: 0;
 	min-width: fit-content;
 }
 .modeSwitch button {
-	padding: 5px 14px;
+	padding: 5px 16px;
 	white-space: nowrap;
 	border: 0;
-	border-radius: 7px;
+	border-radius: 9px;
 	background: transparent;
 	color: var(--muted);
-	font-size: 11.5px;
+	font-size: 13px;
 	font-weight: 500;
 	cursor: pointer;
 	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
@@ -440,7 +409,7 @@
 	gap: 7px;
 	height: var(--topbar-icon);
 	padding: 0 14px;
-	border-radius: 9px;
+	border-radius: 10px;
 	background: var(--accent);
 	color: var(--accent-on);
 	border: 1px solid var(--accent);
@@ -448,7 +417,7 @@
 	font-weight: 600;
 	cursor: pointer;
 	flex-shrink: 0;
-	box-shadow: 0 2px 10px -3px var(--accent-soft);
+	box-shadow: 0 4px 14px -4px var(--brand-glow);
 	transition: background var(--motion-fast) var(--ease);
 }
 .exportBtn:hover {
@@ -487,16 +456,9 @@
 		margin: 0;
 		padding: 4px;
 	}
-	.langBtn {
-		padding: 0 5px;
-		gap: 4px;
-	}
-	.langChevron {
-		display: none;
-	}
 	.modeSwitch button {
 		padding: 4px 8px;
-		font-size: 11px;
+		font-size: 12px;
 		max-width: 90px;
 	}
 	.exportBtn {
@@ -522,22 +484,6 @@
 		width: var(--topbar-icon);
 		gap: 0;
 	}
-	.savedLabel {
-		display: none;
-	}
-	.saved {
-		width: auto;
-	}
-	.savedState {
-		gap: 0;
-	}
-	.langIcon {
-		display: none;
-	}
-	.langShort {
-		width: auto;
-		font-size: 11px;
-	}
 }
 
 @media (max-width: 850px) {
@@ -547,7 +493,7 @@
 	}
 	.modeSwitch button {
 		padding: 3px 6px;
-		font-size: 10.5px;
+		font-size: 11px;
 		max-width: 70px;
 	}
 	.exportLabel {
@@ -557,12 +503,6 @@
 		padding: 0;
 		width: var(--topbar-icon);
 		justify-content: center;
-	}
-	.langBtn {
-		padding: 0 4px;
-	}
-	.langShort {
-		font-size: 10px;
 	}
 }
 
@@ -618,6 +558,10 @@
 	min-width: 0;
 	min-height: 0;
 	overflow: hidden;
+	/* The inspector takes a little more of a wide stage and never less than 300px, which is what
+	   its rows are laid out for. One value for the panel and for the room the preview leaves it. */
+	container-type: inline-size;
+	--inspector-w: clamp(300px, 22cqw, 380px);
 	background: radial-gradient(ellipse 68% 54% at 52% 32%, var(--surface-1) 0%, var(--bg) 66%);
 }
 
@@ -638,7 +582,7 @@
 }
 .inspector {
 	pointer-events: auto;
-	width: 300px;
+	width: var(--inspector-w, 300px);
 	max-height: 100%;
 	display: flex;
 	flex-direction: column;
@@ -770,10 +714,13 @@
 	overflow: hidden;
 	cursor: grab;
 	text-align: left;
-	transition: border-color var(--motion-fast) var(--ease);
+	transition: border-color var(--motion-fast) var(--ease), transform var(--motion-base) var(--ease),
+		box-shadow var(--motion-base) var(--ease);
 }
 .mediaCard:hover {
 	border-color: var(--border-hi);
+	transform: translateY(-2px);
+	box-shadow: var(--elev-pop);
 }
 .mediaCard.selected {
 	border-color: var(--accent);
@@ -809,13 +756,13 @@
 	gap: 8px;
 }
 .mediaCardStats .dur {
-	font-family: var(--font-mono);
-	font-size: 10.5px;
+	font-size: 11.5px;
+	font-variant-numeric: tabular-nums;
 	color: var(--muted);
 }
 .mediaCardStats .size {
-	font-family: var(--font-mono);
-	font-size: 10.5px;
+	font-size: 11.5px;
+	font-variant-numeric: tabular-nums;
 	color: var(--muted);
 }
 .mediaHint {
@@ -825,7 +772,7 @@
 	gap: 7px;
 	padding: 7px 0 3px;
 	color: var(--meta);
-	font-size: 11.5px;
+	font-size: 12px;
 }
 .importBtn {
 	display: flex;
@@ -918,13 +865,13 @@
 	flex-direction: column;
 	align-items: center;
 	gap: 8px;
-	color: rgba(255, 255, 255, 0.45);
+	color: rgba(255, 255, 255, 0.7);
 	font-size: 13px;
 	font-weight: 500;
 }
 .recPreviewHint {
-	color: rgba(255, 255, 255, 0.3);
-	font-size: 11.5px;
+	color: rgba(255, 255, 255, 0.55);
+	font-size: 12.5px;
 	font-weight: 400;
 }
 .recBadge {
@@ -941,8 +888,8 @@
 	-webkit-backdrop-filter: blur(12px);
 	border: 1px solid rgba(255, 255, 255, 0.14);
 	color: #fff;
-	font-family: var(--font-mono);
-	font-size: 11px;
+	font-size: 12px;
+	font-weight: 500;
 }
 .recDot {
 	width: 7px;
@@ -1036,7 +983,7 @@
 	padding: 0 12px;
 	border-radius: 9px;
 	border: 1px solid var(--border);
-	background: var(--surface);
+	background: var(--surface-hi);
 	color: var(--fg);
 	font-size: 12.5px;
 	font-weight: 500;
@@ -1064,7 +1011,7 @@
 	padding: 0 8px;
 	border-radius: 9px;
 	border: 1px solid var(--border);
-	background: var(--surface);
+	background: var(--surface-hi);
 	color: var(--fg);
 	font-size: 12.5px;
 	cursor: pointer;
@@ -1081,11 +1028,11 @@
 	/* The toggle keeps its size; the device dropdown yields space instead, so the
 	   On/Off control is always fully visible (issue #624). */
 	flex-shrink: 0;
-	height: 28px;
-	padding: 0 10px;
-	border-radius: 8px;
+	height: 32px;
+	padding: 0 12px;
+	border-radius: 9px;
 	border: 1px solid var(--border);
-	background: var(--surface);
+	background: var(--surface-hi);
 	color: var(--muted);
 	font-size: 12px;
 	font-weight: 600;
@@ -1112,7 +1059,7 @@
 	flex-shrink: 0;
 	text-align: center;
 	color: var(--muted);
-	font-size: 11.5px;
+	font-size: 12px;
 	margin: -6px 0 0;
 }
 .recCancelBtn {
@@ -1165,7 +1112,7 @@
 	border: 1px solid var(--border-soft);
 	background: var(--surface-2);
 	color: var(--muted);
-	font-size: 10.5px;
+	font-size: 11px;
 	font-weight: 600;
 	line-height: 1.4;
 }
@@ -1376,9 +1323,9 @@
 	/* The pan/zoom bar's band, kept here (not just on .tlNav) because the playhead
 	   layer stretches by exactly this much to run behind it, down to the panel's
 	   bottom edge. */
-	--tl-nav-h: 20px;
-	--tl-nav-gap-top: 8px;
-	--tl-nav-gap-bottom: 12px;
+	--tl-nav-h: 14px;
+	--tl-nav-gap-top: 6px;
+	--tl-nav-gap-bottom: 8px;
 	--tl-nav-band: calc(var(--tl-nav-h) + var(--tl-nav-gap-top) + var(--tl-nav-gap-bottom));
 }
 .tlToolbar {
@@ -1386,30 +1333,39 @@
 	align-items: center;
 	gap: 8px;
 	padding: 0 16px;
-	height: 40px;
+	/* Room above AND below the 34px play button: at 40px it sat on the bottom rule. */
+	height: 48px;
 	flex-shrink: 0;
-	border-bottom: 1px solid var(--border-soft);
+	border-bottom: 1px solid var(--shell-rule-soft);
 }
 .tlTools {
+	/* Both side groups take an equal share of the row, so the transport between
+	   them sits in its centre. */
+	flex: 1;
 	display: flex;
 	align-items: center;
-	gap: 1px;
+	gap: 6px;
 }
 .tlToolBtn {
-	width: 28px;
-	height: 28px;
+	width: 32px;
+	height: 32px;
 	display: grid;
 	place-items: center;
 	border: 0;
 	background: transparent;
 	color: var(--muted);
-	border-radius: 6px;
+	border-radius: 9px;
 	cursor: pointer;
 	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
 }
 .tlToolBtn:hover {
 	background: var(--surface-3);
 	color: var(--fg);
+}
+/* Busy (Auto-enhance while a pass runs): still hoverable, so its tooltip opens. */
+.tlToolBtn[aria-disabled="true"] {
+	opacity: 0.55;
+	cursor: not-allowed;
 }
 /* Toggle tools (Auto-Focus) read their lit state off aria-pressed, so the styling can't
    drift from what assistive tech announces. */
@@ -1418,7 +1374,8 @@
 	color: var(--accent, var(--fg));
 }
 .tlHints {
-	margin-left: auto;
+	flex: 1;
+	justify-content: flex-end;
 	display: flex;
 	align-items: center;
 	gap: 10px;
@@ -1428,17 +1385,13 @@
 	align-items: center;
 	gap: 7px;
 	height: 26px;
-	padding: 0 10px;
-	background: var(--surface-1);
-	border: 1px solid var(--border);
-	border-radius: 7px;
-	font-size: 11px;
+	padding: 0 2px;
+	font-size: 12px;
 	font-weight: 500;
-	color: var(--muted);
+	color: var(--meta);
 }
 .tlKbd {
-	font-family: var(--font-mono);
-	font-size: 10.5px;
+	font-size: 12px;
 	font-weight: 600;
 	color: var(--fg-2);
 }
@@ -1591,11 +1544,11 @@
 }
 .tlTickLabel {
 	position: absolute;
-	top: 12px;
+	top: 11px;
 	left: 50%;
 	transform: translateX(-50%);
-	font-family: var(--font-mono);
-	font-size: 10px;
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
 	color: var(--meta);
 	white-space: nowrap;
 	pointer-events: none;
@@ -1604,7 +1557,7 @@
 	position: relative;
 	height: 24px;
 	margin-bottom: 5px;
-	border-radius: 6px;
+	border-radius: 8px;
 	background: var(--surface-1);
 }
 .laneEmpty {
@@ -1616,7 +1569,7 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 11px;
+	font-size: 12px;
 	font-weight: 500;
 	/* Deliberately quieter than lane content: it's a standing hint on every empty
 	   lane, so at --muted five of them shout over the clips. */
@@ -1637,11 +1590,18 @@
 	align-items: center;
 	gap: 5px;
 	padding: 0 8px 0 7px;
-	border-radius: 6px;
-	border: 1.5px solid var(--accent);
-	background: var(--accent-soft);
-	color: var(--fg);
-	font-size: 11px;
+	/* "Candy": a saturated gradient in the lane's colour (--_c, set per lane below)
+	   and a glow under it, the same recipe as the clip card. No border and no gloss line:
+	   on the light theme either one reads as an outline. Dark ink on every colour: the
+	   light ones (mint, yellow, orange, pink) cannot carry white. */
+	--_c: var(--accent);
+	border-radius: 8px;
+	/* Transparent, gradient painted under it (border-box): kept at 1px so sizes don't move. */
+	border: 1px solid transparent;
+	background: linear-gradient(180deg, color-mix(in oklab, var(--_c) 72%, white), var(--_c)) border-box;
+	box-shadow: 0 2px 6px color-mix(in oklab, var(--_c) var(--candy-glow), transparent);
+	color: #0b1220;
+	font-size: 12px;
 	font-weight: 600;
 	white-space: nowrap;
 	overflow: hidden;
@@ -1653,7 +1613,7 @@
 	cursor: grabbing;
 }
 .lanePillSel {
-	box-shadow: 0 0 0 3px var(--accent-ring);
+	box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--_c);
 }
 /* Narrower than its own chrome (PILL_HANDLES_MIN_PX): the handles mount OUTSIDE
    the box instead of inside it, so overflow must not clip them away — there is
@@ -1671,9 +1631,11 @@
 	inset: 0 -4px;
 }
 /* An outside handle sits on bare lane background, where a transparent grab strip
-   is undiscoverable — on hover it shows itself as a bar flanking the pill. */
+   is undiscoverable — on hover it shows itself as a bar flanking the pill. In the
+   lane's colour, not currentColor: the label ink is dark, which vanishes on the dark
+   theme's lanes. */
 .lanePillCompact:hover .lanePillHandle {
-	background: color-mix(in oklch, currentColor 35%, transparent);
+	background: color-mix(in oklab, var(--_c) 70%, transparent);
 	border-radius: 2px;
 }
 .lanePillLabel {
@@ -1681,26 +1643,21 @@
 	text-overflow: ellipsis;
 }
 .laneAnnotation {
-	border-color: var(--annotation);
-	background: var(--annotation-wash);
+	--_c: var(--annotation);
 }
 .laneSpeed {
-	border-color: var(--speed);
-	background: var(--speed-wash);
+	--_c: var(--speed);
 }
 .laneTrim {
-	border-color: var(--danger);
-	background: var(--danger-soft);
+	--_c: var(--danger);
 }
 .laneZoom {
-	border-color: var(--accent);
-	background: var(--accent-soft);
+	--_c: var(--zoom);
 }
 .laneCameraFullscreen {
-	border-color: #a855f7;
-	background: rgba(168, 85, 247, 0.14);
+	--_c: #a855f7;
 }
-/* Imported audio tracks (issue #350). A distinct teal so a BGM/voiceover track
+/* Imported audio tracks (issue #350). A distinct pink so a BGM/voiceover track
    reads apart from the effect pills, and taller than a lane pill so the waveform
    inside it is legible. */
 /* The rest of an audio pill's tape (audioGhostExtent): where its file's content still
@@ -1714,7 +1671,7 @@
 	position: absolute;
 	min-width: 1px;
 	overflow: hidden;
-	border-radius: 6px;
+	border-radius: 8px;
 	/* Faint enough to read as "not the pill". Louder than this and it draws the eye to
 	   the part you are NOT editing — and on a long file it spans the whole ruler. */
 	border: 1px dashed color-mix(in oklch, var(--accent) 18%, transparent);
@@ -1736,14 +1693,14 @@
 	border: 1px solid var(--border-hi);
 	background: var(--bg);
 	color: var(--fg);
-	font-size: 11px;
+	font-size: 12px;
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
 	pointer-events: none;
 }
 .laneAudio {
-	border-color: #14b8a6;
-	background: rgba(20, 184, 166, 0.16);
+	/* Pink, not teal: teal sat next to the mint zoom pills and read as the same. */
+	--_c: #f472b6;
 	height: 30px;
 	top: 1px;
 	cursor: pointer;
@@ -1853,21 +1810,27 @@
 	/* px, like .lanePill's: the gutter is subtracted from the clip's width, so a
 	   clip narrower than 6px would otherwise compute to nothing. */
 	min-width: 1px;
-	border-radius: 11px;
-	border: 1.5px solid var(--border);
-	background: var(--surface-1);
+	/* The brand's green (--clip): the recording is the main object, and the zoom pills
+	   are blue so they never read as it. A solid "candy" card, same recipe as .lanePill,
+	   with the pills' dark ink on it (.tlClipDuration, the waveform), in both themes. */
+	border-radius: 12px;
+	border: 1px solid transparent;
+	background: linear-gradient(180deg, color-mix(in oklab, var(--clip) 78%, white), var(--clip)) border-box;
+	box-shadow: 0 3px 10px color-mix(in oklab, var(--clip) var(--candy-glow), transparent);
 	overflow: hidden;
 	cursor: grab;
 	box-sizing: border-box;
-	box-shadow: inset 0 1px 8px rgba(255, 255, 255, 0.06);
 	/* pointer-driven reorder: suppress native touch scroll + text selection */
 	touch-action: none;
 	user-select: none;
 	transition: box-shadow var(--motion-fast) var(--ease), opacity var(--motion-fast) var(--ease),
 		transform 150ms var(--ease);
 }
+/* A halo ring set off by a gap in the panel colour: a border alone does not show on a
+   card that is already solid colour. */
 .tlClipSel {
-	border-color: var(--accent);
+	box-shadow: 0 0 0 2px var(--bg),
+		0 0 0 4px var(--clip);
 }
 /* A generated clip: the media behind an inserted word, which nobody shot. Amber on the box
    itself rather than a badge inside it, so it stays legible at the zoom levels where a clip
@@ -1891,22 +1854,17 @@
 	top: 50%;
 	transform: translateY(-50%);
 	max-width: none;
-	padding: 3px 6px;
-	cursor: pointer;
 }
-.tlClipSel.tlClipNarrow .tlClipName {
-	display: none;
-}
-/* Clear of the pencil chip beside it. */
+/* Clear of the edit button beside it. */
 .tlClipDelete[data-narrow] {
 	right: auto;
-	left: calc(100% + 43px);
+	left: calc(100% + 42px);
 	top: 50%;
 	transform: translateY(-50%);
 }
 .tlClipGenerated {
-	border-color: var(--warn);
-	background: color-mix(in srgb, var(--warn) 18%, var(--surface-1));
+	background: linear-gradient(180deg, color-mix(in oklab, var(--warn) 78%, white), var(--warn)) border-box;
+	box-shadow: 0 3px 10px color-mix(in oklab, var(--warn) var(--candy-glow), transparent);
 }
 /* The clip being carried during a reorder drag — follows the pointer 1:1
    (no transition lag) while its siblings slide out of the way with the
@@ -1915,65 +1873,78 @@
 	cursor: grabbing;
 	opacity: 0.9;
 	z-index: 5;
-	border-color: var(--accent);
-	box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5), inset 0 1px 8px rgba(255, 255, 255, 0.06);
+	box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
 	transition: box-shadow var(--motion-fast) var(--ease), opacity var(--motion-fast) var(--ease);
 }
+/* Stands on the bottom edge and takes a little over half the height: the top of the card
+   is the controls' row. Stretched to the box (`preserveAspectRatio="none"`), while the line
+   keeps its width however wide the clip is. */
 .tlWave {
 	position: absolute;
-	inset: 0;
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 1px;
-	padding: 0 2px;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	width: 100%;
+	height: 58%;
 	pointer-events: none;
 }
-.tlWave span {
-	flex: 1 1 0;
-	align-self: center;
-	min-height: 2px;
-	max-width: 2px;
-	border-radius: 2px;
-	background: var(--accent);
+.tlWaveArea {
+	fill: color-mix(in oklab, var(--accent) 24%, transparent);
+}
+.tlWaveLine {
+	fill: none;
+	stroke: color-mix(in oklab, var(--accent) 70%, transparent);
+	stroke-width: 1.5px;
+	stroke-linejoin: round;
+	vector-effect: non-scaling-stroke;
+}
+/* Inside an audio pill or on the clip card it is dark ink, like the label on the candy. */
+.lanePill .tlWaveArea,
+.tlClip .tlWaveArea {
+	fill: rgb(11 18 32 / 0.16);
+}
+.lanePill .tlWaveLine,
+.tlClip .tlWaveLine {
+	stroke: rgb(11 18 32 / 0.5);
 }
 .tlClipLabel {
 	position: absolute;
-	left: 10px;
+	left: 8px;
 	top: 8px;
 	z-index: 2;
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
 	max-width: calc(100% - 50px);
-	padding: 3px 9px 3px 6px;
-	border-radius: 8px;
-	background: color-mix(in srgb, #080a0d 55%, transparent);
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	backdrop-filter: blur(8px);
-	-webkit-backdrop-filter: blur(8px);
 }
-.tlClipIcon {
-	width: 16px;
-	height: 16px;
+/* Round, raised and a size a pointer finds without aiming: the clip's main action. */
+.tlClipEdit,
+.tlClipDelete {
+	width: 30px;
+	height: 30px;
+	flex-shrink: 0;
 	display: grid;
 	place-items: center;
-	border-radius: 5px;
-	background: var(--surface);
+	padding: 0;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	background: var(--surface-hi);
 	color: var(--fg);
-	flex-shrink: 0;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+	cursor: pointer;
+	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease),
+		border-color var(--motion-fast) var(--ease);
 }
-.tlClipName {
-	font-size: 11px;
-	font-weight: 500;
-	color: #fff;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
+.tlClipEdit:hover {
+	/* The clip is accent-filled: an accent-tinted hover vanishes into it. */
+	border-color: #fff;
+	background: #fff;
+	color: var(--accent);
 }
 .tlClipDuration {
-	font: 500 10px/1.2 var(--font-mono);
-	color: rgba(255, 255, 255, 0.7);
+	font: 500 12px/1.2 var(--font-body);
+	font-variant-numeric: tabular-nums;
+	color: #0b1220;
 	white-space: nowrap;
 	flex-shrink: 0;
 }
@@ -1982,25 +1953,9 @@
 	right: 8px;
 	top: 8px;
 	z-index: 2;
-	width: 26px;
-	height: 26px;
-	display: grid;
-	place-items: center;
-	border-radius: 7px;
-	/* The chip itself is a fixed dark frosted-glass overlay regardless of
-	   theme (it sits on top of an arbitrary video thumbnail), so its icon
-	   needs the "light text on a dark overlay" token, not --muted — which
-	   is tuned for the app's own light/dark surfaces and reads as
-	   near-invisible against this chip in light theme. */
-	color: var(--overlay-text);
-	background: color-mix(in srgb, #080a0d 55%, transparent);
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	backdrop-filter: blur(8px);
-	-webkit-backdrop-filter: blur(8px);
-	cursor: pointer;
-	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
 }
 .tlClipDelete:hover {
+	border-color: var(--danger-soft);
 	background: var(--danger-soft);
 	color: var(--danger);
 }
@@ -2033,46 +1988,61 @@
 	   of the panel, and this bar is meant to sit ON TOP of it, not be crossed. */
 	z-index: 7;
 }
+/* A scrollbar and nothing more: a faint groove and one candy thumb, violet like the
+   playhead and the transport's progress bar (violet = navigation). */
 .tlNavTrack {
 	position: absolute;
-	top: 7px;
+	top: 5px;
+	bottom: 5px;
 	left: 0;
 	right: 0;
-	height: 6px;
-	border-radius: 3px;
-	background: var(--surface-3);
+	border-radius: 999px;
+	background: color-mix(in oklab, var(--fg) 8%, transparent);
 }
 .tlNavWindow {
 	position: absolute;
-	top: 5px;
-	height: 10px;
-	border-radius: 5px;
-	background: var(--surface-hi);
-	border: 1px solid var(--border-hi);
+	top: 0;
+	bottom: 0;
+	border-radius: 999px;
+	border: 1px solid transparent;
+	background: linear-gradient(180deg, color-mix(in oklab, var(--playhead) 72%, white), var(--playhead)) border-box;
+	box-shadow: 0 2px 6px color-mix(in oklab, var(--playhead) var(--candy-glow), transparent);
 	box-sizing: border-box;
 	cursor: grab;
 }
 .tlNavWindow:active {
 	cursor: grabbing;
 }
-.tlNavHandle {
+/* Nothing zoomed: the same thumb, just toned down, so a full-width bar that does
+   nothing yet is not the loudest thing on screen. */
+.tlNavWindow[data-full] {
+	filter: saturate(0.45);
+}
+/* Grips INSIDE the thumb's ends, a short notch each: they say "pull me" without the
+   thumb growing handles that stick out of the bar. 10px each, so the
+   narrowest thumb (2% of the bar) still leaves room to grab it by the middle. */
+.tlNavGrip {
 	position: absolute;
 	top: 0;
 	bottom: 0;
-	width: 12px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
+	width: 10px;
+	display: grid;
+	place-items: center;
 	cursor: ew-resize;
-	z-index: 3;
+	z-index: 1;
 }
-.tlNavHandle span {
-	width: 4px;
-	height: 14px;
+.tlNavGrip[data-edge="start"] { left: 0; }
+.tlNavGrip[data-edge="end"] { right: 0; }
+.tlNavGrip::before {
+	content: "";
+	width: 3px;
+	height: 8px;
 	border-radius: 2px;
-	background: var(--fg-2);
-	box-shadow: 0 0 0 2px var(--surface);
+	background: #fff;
+	box-shadow: 0 0 2px rgb(0 0 0 / 0.35);
+	transition: transform var(--motion-fast) var(--ease);
 }
+.tlNavGrip:hover::before { transform: scaleY(1.25); }
 
 /* V4Timeline — region resize handles, toolbar aspect control */
 .lanePillHandle {
@@ -2098,7 +2068,7 @@
 	border: 0;
 	background: transparent;
 	color: var(--fg-2);
-	font-size: 11.5px;
+	font-size: 12px;
 	font-weight: 500;
 	border-radius: 7px;
 	cursor: pointer;
@@ -2156,7 +2126,7 @@
 	color: var(--fg);
 }
 .voiceoverBarTitle span {
-	font-size: 11px;
+	font-size: 12px;
 	color: var(--muted);
 }
 

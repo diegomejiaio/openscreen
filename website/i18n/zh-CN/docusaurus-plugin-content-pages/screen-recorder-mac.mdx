@@ -28,7 +28,7 @@ OpenScreen 是一款面向 Mac 的免费录屏软件，采用 MIT 许可证，�
 | 摄像头 | 录制为独立文件，之后在编辑器中放置 |
 | 光标 | 以数据形式录制，录制结束后可编辑；形状和点击需要辅助功能权限 |
 | 字幕 | 本机 Whisper，在 Apple Silicon 上使用 Metal，在 Intel 上使用 CPU，烧录进视频 |
-| 导出 | 通过 VideoToolbox 导出 MP4（H.264 或 H.265），或 GIF，最高 60 fps，无水印 |
+| 导出 | 通过 VideoToolbox 导出 MP4（H.264），或 GIF，最高 60 fps，无水印 |
 
 ## OpenScreen 在 Mac 上的录制方式 {#how-openscreen-records-on-a-mac}
 
@@ -36,7 +36,7 @@ OpenScreen 是一款面向 Mac 的免费录屏软件，采用 MIT 许可证，�
 
 - **一个显示器或一个窗口。** 在录制器中选择来源，以 60 fps、最高 3840×2160 进行采集。之后可在编辑器中裁剪画面。
 - **可在崩溃后保留的文件。** 该辅助程序使用 AVAssetWriter 以 H.264 编码写入分段式 MP4，每段一秒。如果录制程序在中途被终止，文件仍可播放到最后一个完整片段。
-- **系统音频。** ScreenCaptureKit 会采集 Mac 播放的声音，OpenScreen 自身发出的声音会被排除在外。在 macOS 14.2 及以上版本中，系统会请求你允许音频采集。
+- **系统音频。** OpenScreen 会录制 Mac 播放的声音。在 macOS 15.2 及更高版本中，系统会请求你允许；在更早的版本中，由“屏幕录制”权限涵盖。
 - **麦克风。** 选择设备后，可在录制控件中查看五格音量表。
 - **可编辑的光标。** 默认情况下，系统指针不会出现在像素画面中，而是以数据形式记录。录制结束后，你可以修改其大小、平滑度和主题，并添加点击回弹效果。可通过开关切换为系统光标，直接烧录进画面。
 - **摄像头。** 摄像头画面在录制过程中被录制为独立文件。编辑器可以将其放置为画中画、垂直堆叠或双画框布局，并可去除、模糊或替换其背景，无需绿幕。应用支持苹果的连续互通相机（Continuity Camera）功能，可将 iPhone 用作摄像头。
@@ -48,7 +48,7 @@ OpenScreen 是一款面向 Mac 的免费录屏软件，采用 MIT 许可证，�
 编辑器在 macOS、Windows 和 Linux 上是同一套。在 Mac 上发生变化的是它所使用的硬件。
 
 - **基于 Metal 渲染。** 实时预览和 MP4 导出共用同一个原生合成器，在 macOS 上运行于 Metal。
-- **使用 VideoToolbox 编码。** H.264 和 H.265 导出都交给苹果的 VideoToolbox 编码器处理。对于 H.264，会优先尝试零拷贝路径，即合成后的帧不会再返回 CPU。如果 VideoToolbox 不可用，则由软件编码器接管。MP4 导出支持 24、30 或 60 fps，从 720p 到原始尺寸。GIF 导出同样可用。参见[导出](/docs/export/)。
+- **使用 VideoToolbox 编码。** H.264 导出交给苹果的 VideoToolbox 编码器处理，优先尝试零拷贝路径，即合成后的帧不会再返回 CPU。如果 VideoToolbox 不可用，则由软件编码器接管。MP4 导出支持 24、30 或 60 fps，从 720p 到原始尺寸。GIF 导出同样可用。参见[导出](/docs/export/)。
 - **基于 Mac 自身芯片的字幕。** 转录运行 whisper.cpp，使用一个约 264 MB 的 Whisper Small 模型，仅下载一次。在 Apple Silicon 上使用 Metal，在 Intel Mac 上使用 CPU。字幕会烧录进视频。详见[字幕](/features/captions/)。
 - **编辑器的其余功能。** 根据录制光标放置的[自动缩放](/features/auto-zoom/)、背景、多片段时间轴、文字和箭头标注、模糊区域，以及配音和音乐轨道。参见[编辑与时间轴](/docs/editing-timeline/)。
 - **可选的聊天式编辑。** 使用你自己的密钥连接提供方，用日常语言描述剪切、缩放或变速。在你连接提供方之前处于关闭状态，每次修改都是一次可撤销的普通编辑。参见 [AI 编辑](/docs/ai-editing/)。
@@ -65,8 +65,8 @@ OpenScreen 是一款面向 Mac 的免费录屏软件，采用 MIT 许可证，�
 ## 开始使用 {#getting-started}
 
 1. 从[下载页面](/download/)下载 Apple Silicon 或 Intel 版 `.dmg`（约 210 MB），并将 OpenScreen 拖入应用程序文件夹。该构建版本已签名并经过公证，无需任何终端操作。
-2. 在**系统设置 → 隐私与安全性**中，为 OpenScreen 授予**屏幕录制**和**辅助功能**权限。[安装指南](/docs/installation/#macos)对两者都有说明。
-3. 参照[快速上手](/docs/quick-start/)完成第一次录制，然后对它运行**自动增强 → 自动缩放**。[屏幕录制](/docs/recording/)页面介绍了录制器的各项选项。
+2. 在首次启动时打开的窗口中授予权限。[安装指南](/docs/installation/#macos)说明了各个 macOS 版本需要哪些权限。
+3. 参照[快速上手](/docs/quick-start/)完成第一次录制。录制内容会在编辑器中打开，自动缩放已经放置好。[屏幕录制](/docs/recording/)页面介绍了录制器的各项选项。
 
 在使用其他系统？参见 OpenScreen 的 [Windows](/screen-recorder-windows/) 和 [Linux](/screen-recorder-linux/) 页面。在权衡其他 Mac 录屏工具？阅读 [Screen Studio 替代方案](/alternatives/screen-studio/)、[OpenScreen 对比 Cap](/compare/openscreen-vs-cap/)和 [Loom 替代方案](/alternatives/loom/)页面。许可、网络使用和签名相关内容参见[常见问题](/docs/faq/)，完整介绍参见 [OpenScreen 首页](/)。
 

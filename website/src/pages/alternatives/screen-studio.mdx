@@ -9,9 +9,12 @@ keywords:
   - open source screen studio alternative
 ---
 
+import DemoLoop from "@site/src/components/DemoLoop";
+import DemoLoopPair from "@site/src/components/DemoLoop/Pair";
+
 # A free, open-source Screen Studio alternative
 
-OpenScreen is a free, MIT-licensed Screen Studio alternative for Windows, macOS and Linux. Like Screen Studio, it zooms in where your cursor goes, restyles the cursor after the take, adds backgrounds and on-device captions, and exports MP4 or GIF. Unlike Screen Studio, which runs only on macOS and needs a paid plan to export, it costs nothing and needs no account. Screen Studio is still the better choice if you share recordings as hosted links with comments, or record an iPhone or iPad.
+OpenScreen is a free, MIT-licensed Screen Studio alternative for Windows, macOS and Linux. Like Screen Studio, it zooms in where you click, restyles the cursor after the take, adds backgrounds and on-device captions, and exports MP4 or GIF. Unlike Screen Studio, which runs only on macOS and needs a paid plan to export, it costs nothing and needs no account. Screen Studio is still the better choice if you share recordings as hosted links with comments, or record an iPhone or iPad.
 
 This page is published by the OpenScreen project. The Screen Studio details come from screen.studio and were checked in September 2026. The sources are listed at the end.
 
@@ -24,12 +27,12 @@ This page is published by the OpenScreen project. The Screen Studio details come
 | Source code | Open source, MIT license | Proprietary |
 | Platforms | Windows 10 (1903 or later) and 11, x64. macOS 13 or later, Apple Silicon and Intel. Linux, x64 | macOS only, Ventura 13.1 or later (as of September 2026) |
 | What it records | A display or one window. Crop afterward in the editor | A display, one window, or a selected area |
-| Automatic zooms | Yes, placed from the recorded cursor | Yes |
+| Automatic zooms | Yes, placed on recorded clicks | Yes |
 | Captions | On-device Whisper, one model of about 264 MB, downloaded once. Burned into the video | On-device Whisper (Base, Small or Medium), or Apple Speech Recognition on macOS 26 or later. Transcript can be exported as a file |
 | Caption translation | 15 languages, through an AI provider you connect | No translation step in its captions guide |
 | Multi-clip timeline | Yes | "Multi-clip recordings" listed as planned on its roadmap |
 | Text, arrow and image annotations | Yes | "Annotations" listed as paused on its roadmap |
-| Export | MP4 (H.264 or H.265) or GIF, up to 60 fps, no watermark | MP4 or GIF, with frame rate, output size and quality settings. No codec setting documented |
+| Export | MP4 (H.264) or GIF, up to 60 fps, no watermark | MP4 or GIF, with frame rate, output size and quality settings |
 | Hosted share links | No | Yes, up to 30 minutes per recording (as of September 2026), with timestamped comments |
 | iPhone and iPad recording | No | Yes, over USB, with device frames |
 | Command-line interface | Yes | None in its guide |
@@ -38,7 +41,7 @@ This page is published by the OpenScreen project. The Screen Studio details come
 
 Both apps cover the following. None of it is unique to either one.
 
-- **Automatic zooms.** Both zoom in on the action. In OpenScreen, **Auto-enhance → Automatic zooms** places the zooms from the recorded cursor movement, with no network call and no model. Manual zooms at six depths sit alongside them. More on [auto-zoom](/features/auto-zoom/).
+- **Automatic zooms.** Both zoom in on the action. In OpenScreen, **Auto-enhance → Automatic zooms** places the zooms on the recorded clicks, with no network call and no model. Manual zooms at six depths sit alongside them. More on [auto-zoom](/features/auto-zoom/).
 - **A cursor you can change afterward.** Both let you resize, smooth or hide the cursor after the take and add click effects. By default, OpenScreen records the pointer apart from the video to do this.
 - **Backgrounds and framing.** Both add a background, padding and a shadow, and output horizontal or vertical video. OpenScreen offers wallpapers, solid colors, gradients or your own image, and aspect ratios including 16:9, 9:16 and 1:1.
 - **Webcam, microphone and system audio** in the same recording.
@@ -48,6 +51,11 @@ Both apps cover the following. None of it is unique to either one.
 - **Hiding sensitive content.** Screen Studio blurs sensitive data with masks. OpenScreen has blur regions, Gaussian or mosaic.
 - **Notes while you record.** Both have speaker notes. On Windows and macOS, OpenScreen's notes window also has a teleprompter mode.
 - **Local processing.** Screen Studio says it never sends data about your recordings to its servers. OpenScreen has no account, no server of its own and no analytics. The [FAQ](/docs/faq/#does-openscreen-work-offline) lists the few connections it still makes.
+
+<DemoLoopPair>
+  <DemoLoop name="background-picker" />
+  <DemoLoop name="sensitive-data-mask" />
+</DemoLoopPair>
 
 ## Where OpenScreen differs
 
@@ -63,9 +71,13 @@ Both apps cover the following. None of it is unique to either one.
 - **Annotations.** Text with six animations, arrows in eight directions, images, and blur regions. Screen Studio's roadmap lists "Annotations", described as visual or textual descriptions of clicks, as paused. See [Editing & timeline](/docs/editing-timeline/).
 - **Webcam background.** Remove, blur or replace the camera background without a green screen, in the stable release. Screen Studio lists camera background removal as a beta feature.
 
+<DemoLoopPair>
+  <DemoLoop name="every-layout" />
+  <DemoLoop name="camera-blur" />
+</DemoLoopPair>
+
 ### Export and automation
 
-- **Codec choice.** MP4 exports in H.264 or H.265. Screen Studio's export guide does not document a codec setting. See [Export](/docs/export/).
 - **A command-line interface.** Scripts, CI and coding agents can drive OpenScreen from its [command line](/docs/cli/). Screen Studio's guide has no command-line entry.
 - **Optional chat editing with your own key.** Connect Claude, OpenAI, Gemini, Mistral, OpenRouter, MiniMax or any OpenAI-compatible endpoint, and describe cuts, zooms, speed changes or annotations in plain language. Each change lands as an ordinary undoable edit. It is off until you connect a provider, and the same provider translates captions into 15 languages. See [AI editing](/docs/ai-editing/).
 
@@ -78,8 +90,8 @@ Both apps cover the following. None of it is unique to either one.
 ## Getting started
 
 1. Download OpenScreen from the [download page](/download/). On Windows, the Microsoft Store is the recommended route.
-2. Follow [Installation](/docs/installation/). On macOS, grant the Screen Recording and Accessibility permissions before the first take.
-3. Make a first recording with the [quick start](/docs/quick-start/), then run **Auto-enhance → Automatic zooms** on it.
+2. Follow [Installation](/docs/installation/). On macOS, grant permissions from the window that opens on first launch.
+3. Make a first recording with the [quick start](/docs/quick-start/). It opens in the editor with automatic zooms already placed.
 
 Comparing other tools as well? See [OpenScreen vs Cap](/compare/openscreen-vs-cap/), [OpenScreen vs OBS Studio](/compare/openscreen-vs-obs/), the [Camtasia alternative](/alternatives/camtasia/) and the [Loom alternative](/alternatives/loom/), or go back to the [OpenScreen home page](/).
 

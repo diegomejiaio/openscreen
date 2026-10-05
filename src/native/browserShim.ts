@@ -58,6 +58,7 @@ type ShimRecordingPrefs = {
 	camDeviceName: string | null;
 	systemAudioEnabled: boolean;
 	cursorCaptureMode: "editable-overlay" | "system";
+	autoZoomEnabled: boolean;
 };
 const recordingPrefsStorageKey = "browser-shim-recording-prefs";
 let shimRecordingPrefs: ShimRecordingPrefs = {
@@ -69,6 +70,7 @@ let shimRecordingPrefs: ShimRecordingPrefs = {
 	camDeviceName: null,
 	systemAudioEnabled: false,
 	cursorCaptureMode: "editable-overlay",
+	autoZoomEnabled: true,
 };
 const shimRecordingPrefsListeners = new Set<(prefs: ShimRecordingPrefs) => void>();
 const shimSelectedSourceListeners = new Set<(source: ShimDesktopSource | null) => void>();
@@ -408,6 +410,23 @@ function createShimBridgeClient() {
 			});
 		}
 	};
+	// The preset new projects start from; the shim creates no project, so it is only shown.
+	const presetMarkerKey = "browser-shim-style-preset-new-projects-v1";
+	const readPresetMarker = (): string | null => {
+		try {
+			return localStorage.getItem(presetMarkerKey);
+		} catch {
+			return null;
+		}
+	};
+	const writePresetMarker = (id: string | null) => {
+		try {
+			if (id === null) localStorage.removeItem(presetMarkerKey);
+			else localStorage.setItem(presetMarkerKey, id);
+		} catch {
+			// Only the mark is lost; the presets themselves are untouched.
+		}
+	};
 	const presetError = (code: "NAME_TAKEN" | "NOT_FOUND" | "INVALID_REQUEST", message: string) =>
 		new NativeBridgeRequestError({ code, message, retryable: false });
 	const toPreset = (id: string, record: ShimPresetRecord): StylePreset => ({ id, ...record });
@@ -442,6 +461,17 @@ function createShimBridgeClient() {
 		);
 		if (taken) throw presetError("NAME_TAKEN", `A style preset named "${name}" already exists.`);
 	};
+
+	const shimMcp = { enabled: false, port: 47821, allowEdits: false, token: "shim-token" };
+	const shimMcpStatus = () => ({
+		enabled: shimMcp.enabled,
+		port: shimMcp.port,
+		allowEdits: shimMcp.allowEdits,
+		running: false,
+		url: `http://127.0.0.1:${shimMcp.port}/mcp`,
+		token: shimMcp.enabled ? shimMcp.token : null,
+		error: shimMcp.enabled ? "The MCP server only runs in the desktop app." : null,
+	});
 
 	const summarize = (s: ShimSession) => ({
 		id: s.id,
@@ -578,6 +608,25 @@ function createShimBridgeClient() {
 				if (activeConfig?.provider === providerId) activeConfig = null;
 				saveLlmState();
 				return Promise.resolve({ success: true, snapshot: buildLlmSnapshot() });
+			},
+			// No MCP server runs in a browser: the settings keep their state so the
+			// section can be exercised, and say plainly that nothing is listening.
+			mcpGetStatus: () => Promise.resolve(shimMcpStatus()),
+			mcpSetEnabled: (enabled: boolean) => {
+				shimMcp.enabled = enabled;
+				return Promise.resolve(shimMcpStatus());
+			},
+			mcpSetPort: (port: number) => {
+				shimMcp.port = port;
+				return Promise.resolve(shimMcpStatus());
+			},
+			mcpSetAllowEdits: (allowEdits: boolean) => {
+				shimMcp.allowEdits = allowEdits;
+				return Promise.resolve(shimMcpStatus());
+			},
+			mcpRegenerateToken: () => {
+				shimMcp.token = `shim-token-${Date.now()}`;
+				return Promise.resolve(shimMcpStatus());
 			},
 			llmListProviderModels: (providerId: string) =>
 				Promise.resolve({
@@ -756,7 +805,8 @@ function createShimBridgeClient() {
 						.flatMap(([id, record]) => {
 							try {
 								const appearance = parseStylePresetAppearance(record.appearance);
-								return [toPreset(id, { ...record, appearance })];
+								const preset = toPreset(id, { ...record, appearance });
+								return [id === readPresetMarker() ? { ...preset, forNewProjects: true } : preset];
 							} catch {
 								return [];
 							}
@@ -787,6 +837,7 @@ function createShimBridgeClient() {
 					const { [id]: _previous, ...rest } = records;
 					const record = { ...current, name: cleanName, updatedAt: new Date().toISOString() };
 					writePresets({ ...rest, [nextId]: record });
+					if (readPresetMarker() === id) writePresetMarker(nextId);
 					return toPreset(nextId, record);
 				}),
 			update: (id: string, appearance: StylePresetAppearance) =>
@@ -805,6 +856,13 @@ function createShimBridgeClient() {
 				presetCall(() => {
 					const { [id]: _removed, ...rest } = readPresets();
 					writePresets(rest);
+					if (readPresetMarker() === id) writePresetMarker(null);
+					return { success: true as const };
+				}),
+			setForNewProjects: (id: string | null) =>
+				presetCall(() => {
+					if (id !== null) requirePreset(readPresets(), id);
+					writePresetMarker(id);
 					return { success: true as const };
 				}),
 			// No folder to open in a browser tab.

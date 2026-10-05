@@ -16,8 +16,7 @@
     "message": "x86_64 · .dmg"
   },
   "download.macos.footnote": {
-    "message": "Firmado y notarizado: se abre sin pasar por la terminal. En el primer inicio, concede los permisos Grabación de pantalla y Accesibilidad.",
-    "description": "Screen Recording and Accessibility are macOS privacy settings: use the names macOS shows in your language."
+    "message": "Firmado y notarizado: se abre sin pasar por la terminal. En el primer inicio, concede los permisos desde la ventana que muestra."
   },
   "download.windows.store.label": {
     "message": "Microsoft Store"
@@ -110,29 +109,13 @@
     "message": "Grabador de pantalla y editor de video gratis y de código abierto"
   },
   "home.meta.description": {
-    "message": "OpenScreen, grabador de pantalla y editor de video gratis y de código abierto (Windows, macOS, Linux): captura nativa, subtítulos locales, sin marca de agua."
-  },
-  "home.hero.badge.new": {
-    "message": "NUEVO"
-  },
-  "home.hero.badge.text": {
-    "message": "1.11 exporta más rápido en macOS y Linux",
-    "description": "Links to an English-only blog post. Must fit on one line on a 375px phone."
-  },
-  "home.hero.titleTagline": {
-    "message": "Un grabador de pantalla y editor de video gratis y de código abierto"
+    "message": "Convierte tus grabaciones de pantalla en demos cuidadas con zooms automáticos, fondos personalizados y un cursor editable. Gratis y de código abierto para Windows, macOS y Linux. Sin marca de agua."
   },
   "home.hero.tagline": {
-    "message": "Grabación de pantalla con captura nativa, IA local y sin muro de pago."
+    "message": "Zooms automáticos, un cursor fluido y un marco cuidado. Graba, ajusta y comparte."
   },
   "home.hero.download": {
     "message": "Descargar"
-  },
-  "home.hero.readDocs": {
-    "message": "Leer la documentación"
-  },
-  "home.hero.scrollHint": {
-    "message": "Desplázate hacia abajo"
   },
   "home.features.kicker": {
     "message": "Además"
@@ -293,16 +276,16 @@
     "message": "Después escribe el archivo."
   },
   "showcase.export.body": {
-    "message": "MP4 de 720p hasta la resolución de origen, a 24, 30 o 60 fps, en H.264 o H.265, o bien un GIF. La codificación se hace en tu equipo y cuenta los fotogramas mientras avanza. Sin cola, sin cuenta, sin marca de agua, y el archivo está en el disco cuando la barra se llena."
+    "message": "MP4 de 720p hasta la resolución de origen, a 24, 30 o 60 fps, en H.264 — o un GIF. La codificación se hace en tu equipo y cuenta los fotogramas mientras avanza. Sin cola, sin cuenta, sin marca de agua, y el archivo está en el disco cuando la barra se llena."
   },
   "showcase.export.fact": {
-    "message": "H.264 / H.265 · 24, 30, 60 fps · sin marca de agua"
+    "message": "H.264 · 24, 30, 60 fps · sin marca de agua"
   },
   "showcase.export.link.docs": {
     "message": "Documentación de exportación de video"
   },
   "showcase.export.label": {
-    "message": "Dibujo del panel de exportación: recording-1783066227227.mp4 exportándose como MP4, con H.265 elegido junto a H.264, 1080p, 60 fps y GIF, y una barra de progreso al 62 por ciento que indica el fotograma 1 488 de 2 400, con destino a la carpeta Movies.",
+    "message": "Dibujo del panel de exportación: recording-1783066227227.mp4 exportándose como MP4 a 1080p y 60 fps, con las filas de calidad y tasa de fotogramas por encima de una barra de progreso al 62 por ciento que indica el fotograma 1 488 de 2 400, con destino a la carpeta Movies.",
     "description": "Describes a drawing of the app for screen readers. The drawing is in English: keep the quoted words as drawn."
   },
   "showcase.captions.kicker": {
@@ -324,15 +307,11 @@
     "message": "Comparativa de subtítulos locales",
     "description": "Link label under the panel."
   },
-  "showcase.captions.label": {
-    "message": "Dibujo del panel de subtítulos: la línea “amber day on the validator, and it” en tamaño grande sobre el video y, al lado, los subtítulos activados, una nota que indica que siete líneas de subtítulos se derivan en vivo de la transcripción, y una fila de idiomas que ofrece English, Français, un botón Translate y la opción de eliminar una traducción.",
-    "description": "Describes a drawing of the app for screen readers. The drawing is in English: keep the quoted words as drawn."
-  },
   "showcase.agent.kicker": {
     "message": "agente"
   },
   "showcase.agent.claim": {
-    "message": "O indica qué partes cortar."
+    "message": "Describe la edición. El agente la hace."
   },
   "showcase.agent.body": {
     "message": "El asistente de más arriba en esta página coloca zooms observando por dónde pasó tu cursor. El agente va más allá: lee la transcripción real y la línea de tiempo real, así que responde con códigos de tiempo que puedes ir a comprobar (qué tramos va a cortar y cuánto tiempo ahorra eso). Cada edición que hace es una edición normal que se puede deshacer, y necesita una clave de proveedor que tú proporcionas. No se ejecuta nada hasta que conectes una."
@@ -346,10 +325,6 @@
   "showcase.agent.link.feature": {
     "message": "Cómo funcionan los zooms automáticos",
     "description": "Link label under the panel."
-  },
-  "showcase.agent.label": {
-    "message": "Dibujo de la respuesta del agente. Cuando se le pide que corte los tiempos muertos, responde con códigos de tiempo: de 0 a 2.19 segundos de entrada antes de “Hi” y de 35.12 a 40.03 segundos de cola después de “think.”, lo que deja el video en 33 segundos reproducibles en lugar de 40, con los zooms existentes en los mismos momentos; luego, una línea verde que dice “applied: added 2 trims”.",
-    "description": "Describes a drawing of the app for screen readers. The drawing is in English: keep the quoted words as drawn."
   },
   "showcase.title": {
     "message": "Grabador, subtítulos, agente, codificador."
@@ -762,5 +737,349 @@
   "download.option.size": {
     "message": "{size} MB",
     "description": "{size} is a whole number of megabytes. Use your language's unit symbol (Mo in French)."
+  },
+  "download.started.title": {
+    "message": "Descarga iniciada"
+  },
+  "download.started.blurb": {
+    "message": "OpenScreen es gratuito y tiene licencia MIT. Una estrella en GitHub ayuda a que otras personas lo encuentren."
+  },
+  "download.started.cta": {
+    "message": "Dar una estrella en GitHub"
+  },
+  "demoLoop.pause": {
+    "message": "Pausar el vídeo"
+  },
+  "demoLoop.play": {
+    "message": "Reproducir el vídeo"
+  },
+  "demoLoop.classic-zoom": {
+    "message": "Un tablero de tareas grabado en OpenScreen. La vista hace zoom sobre un elemento de una lista y un botón Ship cuando se hace clic en ellos, y luego se aleja hasta mostrar todo el tablero.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.3d-camera": {
+    "message": "La misma grabación vista con la cámara 3D, que inclina la pantalla y gira a su alrededor mientras sigue el cursor.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.3d-cursors": {
+    "message": "Un mismo puntero grabado, redibujado en cinco estilos de cursor uno tras otro mientras la grabación sigue reproduciéndose.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.automatic-subtitles": {
+    "message": "Una grabación narrada con subtítulos debajo, que pasan del inglés al francés, al español y al coreano.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.caption-styles": {
+    "message": "Un mismo subtítulo en cinco estilos: uno sencillo, uno amarillo en negrita, uno manuscrito, uno monoespaciado y uno que muestra una sola palabra cada vez.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.edit-by-transcript": {
+    "message": "En la transcripción del editor se selecciona y elimina una frase, y el corte correspondiente aparece en la línea de tiempo.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.tighten-pauses": {
+    "message": "Dos clics en los marcadores de silencio de la transcripción, y ambas pausas se cortan de la línea de tiempo.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.background-picker": {
+    "message": "El selector de fondo del editor recorre fondos de pantalla, un degradado y un color sólido, y después activa el fondo animado Aurora.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.every-format": {
+    "message": "La misma grabación exportada en 16:9, luego cuadrada y luego vertical, con el encuadre siguiendo el cursor.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.sensitive-data-mask": {
+    "message": "Un formulario de inicio de sesión mientras se rellena. Los campos de correo y contraseña siguen difuminados mientras se escriben.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.every-layout": {
+    "message": "Una grabación con webcam que recorre los diseños: imagen en imagen, lado a lado, apilado, cámara completa y, por último, solo pantalla.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.device-frames": {
+    "message": "La misma grabación, en reproducción, enmarcada sucesivamente como ventana de navegador, teléfono, portátil y monitor de escritorio.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.animated-backgrounds": {
+    "message": "Una grabación sobre un fondo liso y después sobre una foto difuminada que se mueve lentamente detrás de ella.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.beautiful-by-default": {
+    "message": "Una captura de pantalla sin editar, luego la misma toma tal como la abre OpenScreen, ya con zoom, encuadrada y con el cursor rediseñado, y después con varios estilos.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.simpler-editor": {
+    "message": "El editor de OpenScreen. Un clic en la miniatura de un fondo cambia el estilo de todo el vídeo y luego el panel lateral pasa a la transcripción.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.edit-like-a-doc": {
+    "message": "El texto seleccionado en la transcripción se elimina como en un documento, y el vídeo se corta en consecuencia.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.ask-the-agent": {
+    "message": "Una petición escrita en el panel de chat del editor, y los cambios del agente apareciendo en la línea de tiempo.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "films.default.kicker": {
+    "message": "Listo de serie"
+  },
+  "films.default.title": {
+    "message": "Bien desde la primera toma."
+  },
+  "films.default.lead": {
+    "message": "Cada grabación nueva se abre {zoomed}, sobre un fondo de pantalla, con margen, sombra y esquinas redondeadas. Cambia lo que quieras o expórtala tal cual."
+  },
+  "films.default.lead.zoomed": {
+    "message": "ya con zoom en tus clics"
+  },
+  "films.default.note.zooms": {
+    "message": "{t} Cada toma recibe zoom donde hiciste clic, según una regla fija: sin IA ni llamadas de red. Se desactiva en el modo Grabar."
+  },
+  "films.default.note.zooms.t": {
+    "message": "Zooms a partir de tus clics."
+  },
+  "films.default.note.frame": {
+    "message": "{t} Fondo de pantalla, margen, sombra, esquinas redondeadas y un poco de desenfoque de movimiento están activos antes de que toques nada."
+  },
+  "films.default.note.frame.t": {
+    "message": "Un encuadre terminado."
+  },
+  "films.default.note.cursor": {
+    "message": "{t} El puntero se graba aparte de los píxeles, así que su tamaño y su estilo pueden cambiar después de la toma."
+  },
+  "films.default.note.cursor.t": {
+    "message": "Un cursor que se puede rehacer."
+  },
+  "films.depth.kicker": {
+    "message": "3D"
+  },
+  "films.depth.title": {
+    "message": "Profundidad, no solo zoom."
+  },
+  "films.depth.lead": {
+    "message": "Inclina la pantalla o {orbit} mientras haces zoom, dibuja el puntero como {cursor} con sombra y coloca toda la toma {device}, sobre un fondo que se mueve."
+  },
+  "films.depth.lead.orbit": {
+    "message": "gira a su alrededor"
+  },
+  "films.depth.lead.cursor": {
+    "message": "un cursor 3D"
+  },
+  "films.depth.lead.device": {
+    "message": "dentro de un dispositivo"
+  },
+  "films.depth.tab.camera": {
+    "message": "Cámara 3D"
+  },
+  "films.depth.tab.cursors": {
+    "message": "Cursores"
+  },
+  "films.depth.tab.frames": {
+    "message": "Marcos de dispositivo"
+  },
+  "films.depth.tab.backgrounds": {
+    "message": "Fondos animados"
+  },
+  "films.depth.note.camera": {
+    "message": "{t} Cada zoom puede quedarse plano, girar la pantalla a la izquierda o a la derecha, u orbitar a su alrededor siguiendo el foco del zoom. La profundidad de campo suaviza el lado lejano."
+  },
+  "films.depth.note.camera.t": {
+    "message": "Cámara 3D."
+  },
+  "films.depth.note.cursors": {
+    "message": "{t} Studio Ink, Prism Glow, Pop Coral, Pixel Candy y Star Sprout, y cada uno puede dibujarse como un objeto 3D con sombra."
+  },
+  "films.depth.note.cursors.t": {
+    "message": "Cinco paquetes de cursores."
+  },
+  "films.depth.note.frames": {
+    "message": "{t} Una ventana, un portátil, un teléfono o una pantalla, claro u oscuro, sobre un fondo animado con Deriva, Aurora u Ondas."
+  },
+  "films.depth.note.frames.t": {
+    "message": "Marcos y movimiento."
+  },
+  "films.camera.kicker": {
+    "message": "Cámara"
+  },
+  "films.camera.title": {
+    "message": "Tu cámara, tu pantalla, o ambas."
+  },
+  "films.camera.lead": {
+    "message": "Una toma con webcam puede ser {layouts}, y la habitación detrás de ti puede {blurred}, recortarse o reemplazarse en tu propio ordenador, sin pantalla verde."
+  },
+  "films.camera.lead.layouts": {
+    "message": "imagen en imagen, lado a lado, apilada o a pantalla completa"
+  },
+  "films.camera.tab.layouts": {
+    "message": "Diseños"
+  },
+  "films.camera.note.layouts": {
+    "message": "{t} Imagen en imagen, marco dual, apilado vertical o sin webcam."
+  },
+  "films.camera.note.layouts.t": {
+    "message": "Cuatro diseños."
+  },
+  "films.camera.note.full": {
+    "message": "{t} Dale un tramo de la línea de tiempo a la cámara: pasa a pantalla completa y luego vuelve con suavidad."
+  },
+  "films.camera.note.full.t": {
+    "message": "Cámara a pantalla completa."
+  },
+  "films.camera.note.background": {
+    "message": "{t} Un modelo de segmentación te separa de la habitación en tu propio ordenador. No se sube nada."
+  },
+  "films.camera.note.background.t": {
+    "message": "Desenfocar, recortar o reemplazar."
+  },
+  "films.ship.kicker": {
+    "message": "Antes de publicar"
+  },
+  "films.ship.title": {
+    "message": "Adáptalo a cualquier formato. Difumina lo que no debe verse."
+  },
+  "films.ship.lead": {
+    "message": "Una toma se convierte en {formats}, y lo que no debe verse queda {blur}."
+  },
+  "films.ship.lead.formats": {
+    "message": "horizontal, cuadrada o vertical"
+  },
+  "films.ship.lead.blur": {
+    "message": "bajo un desenfoque"
+  },
+  "films.ship.formats": {
+    "message": "{t} La misma toma, encuadrada en 16:9, 9:16, 1:1, 4:3, 4:5, 16:10 o 10:16."
+  },
+  "films.ship.formats.t": {
+    "message": "Cualquier relación de aspecto."
+  },
+  "films.ship.blur": {
+    "message": "{t} Gaussiano o mosaico, en rectángulo, óvalo o a mano alzada, sobre un correo, una clave o una contraseña."
+  },
+  "films.ship.blur.t": {
+    "message": "Zonas de desenfoque."
+  },
+  "films.label": {
+    "message": "Más de la app, en movimiento",
+    "description": "Read by screen readers only: names the section of feature videos"
+  },
+  "demoLoop.camera-blur": {
+    "message": "Una viñeta cuadrada de webcam sobre una grabación de pantalla. La vista se acerca mientras la habitación detrás de la persona se desenfoca, y luego se aleja.",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "films.camera.lead.blurred": {
+    "message": "desenfocarse"
+  },
+  "films.camera.tab.blur": {
+    "message": "Desenfoque de fondo"
+  },
+  "demoLoop.title.classic-zoom": {
+    "message": "Zoom automático en los clics",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.3d-camera": {
+    "message": "Una cámara 3D que orbita la pantalla",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.3d-cursors": {
+    "message": "Paquetes de cursores, dibujados en 3D",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.automatic-subtitles": {
+    "message": "Subtítulos traducidos a otros idiomas",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.caption-styles": {
+    "message": "Cinco estilos de subtítulos",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.edit-by-transcript": {
+    "message": "Cortar vídeo borrando texto en la transcripción",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.tighten-pauses": {
+    "message": "Cortar silencios desde la transcripción",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.background-picker": {
+    "message": "Cambiar el fondo de una grabación",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.every-format": {
+    "message": "Una grabación en 16:9, 1:1 y 9:16",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.sensitive-data-mask": {
+    "message": "Difuminar un correo y una contraseña",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.camera-blur": {
+    "message": "Desenfoque de fondo de la webcam",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.every-layout": {
+    "message": "Diseños de webcam",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.device-frames": {
+    "message": "Marcos de dispositivo",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.animated-backgrounds": {
+    "message": "Fondos animados",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.beautiful-by-default": {
+    "message": "De una captura sin editar a una demo terminada",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.simpler-editor": {
+    "message": "El editor de OpenScreen",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.edit-like-a-doc": {
+    "message": "Editar un vídeo como un documento",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.ask-the-agent": {
+    "message": "Pedir una edición al agente del editor",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "home.hero.title": {
+    "message": "Demos atractivas a la primera."
+  },
+  "home.hero.reassurance": {
+    "message": "Gratis y de código abierto. Sin marca de agua. Sin cuenta."
+  },
+  "home.hero.explore": {
+    "message": "Desplázate para explorar el editor"
+  },
+  "recreation.pause": {
+    "message": "Pausar la animación"
+  },
+  "recreation.play": {
+    "message": "Reproducir la animación"
+  },
+  "announcement.v2.title": {
+    "message": "OpenScreen v2 ya está aquí"
+  },
+  "announcement.v2.link": {
+    "message": "Ver las novedades (en inglés)",
+    "description": "Links to an English-only blog post. Mention English in translated labels."
+  },
+  "download.cta.mac": {
+    "message": "Descargar para Mac"
+  },
+  "download.cta.windows": {
+    "message": "Descargar para Windows"
+  },
+  "download.cta.linux": {
+    "message": "Descargar para Linux"
+  },
+  "download.cta.chooseMac": {
+    "message": "Elige tu Mac"
+  },
+  "download.cta.otherVersions": {
+    "message": "Otras versiones"
   }
 }

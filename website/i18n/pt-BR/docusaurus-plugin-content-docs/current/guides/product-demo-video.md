@@ -33,14 +33,14 @@ No Windows, o OpenScreen mantém o HUD e a janela de notas fora da captura. No m
 
 ## 2. Grave a tela ou uma janela {#2-record-the-screen-or-a-window}
 
-1. No Windows e no macOS, abra o seletor de fonte e escolha uma tela em **Telas** ou uma única janela em **Janelas**. No Linux não há seletor no app: o portal do sistema pede a fonte a cada tomada. O OpenScreen não tem captura de região, então grave a janela ou a tela e depois corte a imagem do clipe no editor.
+1. No Windows e no macOS, abra o seletor de fonte e escolha uma tela em **Telas** ou uma única janela em **Janelas**. No macOS 15.2 e posterior, em vez disso, você escolhe a tela ou a janela no seletor do sistema da Apple. No Linux não há seletor no app: o portal do sistema pede a fonte a cada tomada. O OpenScreen não tem captura de região, então grave a janela ou a tela e depois corte a imagem do clipe no editor.
 2. Ative o microfone e confira o medidor de nível. Ative o áudio do sistema se o produto emitir som, e a webcam se você quiser aparecer na tela.
 3. Mantenha o modo de cursor editável, que é o padrão: o ponteiro é gravado como dados, então você pode mudar o estilo dele depois. Os cliques são gravados no Windows. No macOS, eles exigem a permissão de Acessibilidade. No Linux, seu usuário precisa estar no grupo `input`, e o toque para clicar do touchpad não é capturado ([detalhes](../installation.md#mouse-clicks-on-wayland)).
 4. Aperte gravar. Uma contagem regressiva 3-2-1 roda antes e não pode ser desativada.
 
 O OpenScreen captura com uma meta de 60 fps, até 3840×2160 no Windows e no macOS. No Linux, o tamanho é o que o compositor entregar. Durante a gravação, você pode pausar, reiniciar a tomada, cancelá-la ou parar.
 
-**Ritmo para os zooms.** Leve o ponteiro até o que você vai explicar e deixe-o parado. Os zooms automáticos do passo 4 procuram essas pausas: um ponteiro parado por cerca de meio segundo até 2,6 segundos. Um ponteiro que fica parado por mais tempo que isso não recebe zoom.
+**Ritmo para os zooms.** Clique onde está a ação e deixe o resultado aparecer antes de seguir em frente. Os zooms automáticos do passo 4 seguem seus cliques: cliques próximos entre si compartilham o mesmo zoom quando cabem juntos nele, e ele se mantém por 1,5 segundo depois do último. Os primeiros 2,5 segundos do vídeo ficam sem zoom, então deixe a tomada correr um momento antes do primeiro clique.
 
 **Demos longas no Linux.** O Linux grava um MP4 comum, que só é finalizado quando você para, então um travamento no meio da tomada deixa um arquivo ilegível. Em vez disso, grave várias tomadas mais curtas; o passo 5 mostra como juntá-las.
 
@@ -52,18 +52,18 @@ A webcam é gravada em um arquivo próprio, então a posição dela é uma decis
 
 - **Picture in Picture**, **Empilhamento Vertical**, **Quadro Duplo** ou **Sem Webcam**.
 - Em todos os layouts: espelhamento e um enquadramento da imagem da câmera.
-- Só em **Picture in Picture**: **Formato da Câmera** (Ret., Círculo, Quadrado ou Arredondado), um tamanho de 10 a 50% (25% por padrão) e **Encolher ao ampliar**, ativado por padrão, que deixa a câmera menor enquanto um zoom é exibido, para que ela não cubra o detalhe. Arraste a câmera no canvas para movê-la.
+- Só em **Picture in Picture**: **Formato da Câmera** (Quadrado por padrão, ou Original, que mantém as proporções da própria câmera), **Arredondamento** (70% para Quadrado e 40% para Original por padrão; a 100% uma câmera quadrada vira um círculo), um tamanho de 15 a 60% (40% por padrão), **Posição** (um canto ou o meio de uma borda, embaixo à direita por padrão) e **Encolher ao ampliar**, ativado por padrão, que deixa a câmera menor enquanto um zoom é exibido, para que ela não cubra o detalhe. Arraste a câmera no canvas e ela se encaixa na posição mais próxima.
 - **Plano de fundo da câmera**: Original, Desfocado, Recorte ou Personalizado. Recorte remove o fundo sem tela verde, usando um modelo de segmentação que roda na sua CPU. Esta seção só aparece quando o runtime de segmentação carrega no seu computador.
 
 Para uma introdução ou um encerramento, pressione `C` para adicionar um segmento de **Câmera em Tela Cheia**: a câmera preenche o quadro inteiro nesse trecho.
 
-A aba **Composição** define o estilo do quadro. A seção de fundo oferece 18 papéis de parede integrados, uma cor sólida, um gradiente ou a sua própria imagem, além de um desfoque do fundo. Abaixo dela ficam sombra, arredondamento, espaçamento e desfoque de movimento.
+A aba **Composição** define o estilo do quadro. A seção de fundo oferece 18 papéis de parede integrados, uma cor sólida, um gradiente ou a sua própria imagem, uma animação que movimenta tanto gradientes quanto imagens, além de um desfoque do fundo. Abaixo dela ficam sombra, espaçamento, arredondamento e desfoque de movimento.
 
 ## 4. Adicione zooms automáticos {#4-add-automatic-zooms}
 
-Na barra de ferramentas da linha do tempo, abra **Melhoria automática** e escolha **Zooms automáticos**. O OpenScreen lê o movimento gravado do cursor e coloca regiões de zoom nessas pausas, sem rede e sem modelo. Se não colocar nenhuma, ele avisa. As causas mais comuns são uma gravação sem dados de cursor, nenhuma pausa naquele intervalo ou zooms existentes que já cobrem esses momentos.
+O OpenScreen os adiciona quando a gravação abre no editor: ele lê os cliques gravados e dá zoom neles, sem rede e sem modelo. Se a gravação abriu sem eles, abra **Melhoria automática** na barra de ferramentas da linha do tempo e escolha **Zooms automáticos**. Se não colocar nenhum, ele avisa. As causas mais comuns são uma gravação sem cliques registrados, cliques só nos primeiros ou nos últimos segundos dela ou zooms existentes que já os cobrem ou ficam perto demais deles.
 
-Depois, revise os zooms. Clique em um zoom para definir o nível (de 1.25× a 5×), o modo de foco (Automático segue o cursor, Manual mantém um ponto fixo) e uma rotação 3D opcional. Pressione `Z` para adicionar um zoom manualmente e `Ctrl/Cmd+D` para excluir um que você não quiser.
+Depois, revise os zooms. Clique em um zoom para definir o nível (de 1.25× a 5×), o modo de foco (Automático segue o cursor, Manual mantém um ponto fixo) e uma câmera 3D opcional. Pressione `Z` para adicionar um zoom manualmente e `Ctrl/Cmd+D` para excluir um que você não quiser.
 
 Mais sobre como os zooms são posicionados: [Zoom automático](/features/auto-zoom/).
 
@@ -73,7 +73,7 @@ Mais sobre como os zooms são posicionados: [Zoom automático](/features/auto-zo
 
 **Corte pelo texto.** Na transcrição, selecione palavras e pressione `Delete`: esse trecho é cortado da reprodução e da exportação. Os silêncios aparecem no texto como marcadores: clique em um para cortá-lo e clique de novo para restaurá-lo. Passe o mouse sobre uma palavra cortada para restaurá-la. Você também pode pressionar `T` para adicionar uma região de recorte na linha do tempo.
 
-**Acelere o que não dá para cortar**, como carregamentos de página ou digitação. Pressione `S` para adicionar uma região de velocidade e escolha uma predefinição de 0.25× a 5× ou digite qualquer valor de 0.1× a 100×. O áudio é esticado no tempo para acompanhar.
+**Acelere o que não dá para cortar**, como carregamentos de página ou digitação. Pressione `S` para adicionar uma região de velocidade e escolha uma predefinição (0.5×, 1×, 1.5×, 2× ou 4×) ou digite qualquer valor de 0.25× a 16×. O áudio é esticado no tempo para acompanhar.
 
 **Junte várias tomadas.** Mude para **Mídia**, use **Importar mídia** se uma tomada ainda não estiver na lista e arraste o cartão dela para a fileira de clipes. Se você soltar o cartão sobre um clipe existente, o app oferece **Adicionar antes**, **Adicionar depois** ou **Dividir aqui e inserir**. Veja [Biblioteca de mídia](../media-library.md).
 
@@ -102,11 +102,11 @@ As legendas são embutidas no vídeo. O OpenScreen não grava nenhum arquivo `.s
 
 ## 8. Exporte {#8-export}
 
-**Escolha o formato.** O controle **Formato** na aba **Composição** oferece 16:9 (o padrão), 9:16, 1:1, 4:3, 4:5, 16:10, 10:16 ou a proporção original dos seus clipes.
+**Escolha o formato.** O controle **Formato** na aba **Composição** oferece **Auto** (o padrão para projetos novos), que ajusta o quadro à gravação, ao layout da câmera e ao espaçamento, depois 16:9, 9:16, 1:1, 4:3, 4:5, 16:10, 10:16 ou a proporção original dos seus clipes.
 
 **Exporte.** Clique em **Exportar** na barra superior:
 
-- **MP4**: Baixa (720p), Média (1080p) ou Alta (resolução de origem); 24, 30 ou 60 fps; H.264 ou H.265. A caixa de diálogo marca o H.264 como a opção de **Melhor compatibilidade**. O bitrate do vídeo não é ajustável: cerca de 8 Mbit/s em 1080p.
+- **MP4**: Baixa (720p), Média (1080p) ou Alta (resolução de origem); 24, 30 ou 60 fps; H.264. O bitrate do vídeo não é ajustável: cerca de 8 Mbit/s em 1080p.
 - **GIF**: 15, 20, 25 ou 30 fps; tamanho Medium, Large ou Original; repetição ativada ou desativada. Os GIFs usam 256 cores, sem dithering, então servem para clipes curtos de interfaces com cores chapadas.
 
 Não há marca d'água. Para exportar em outro formato, mude o formato e exporte de novo.

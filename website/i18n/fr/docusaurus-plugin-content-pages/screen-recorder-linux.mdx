@@ -11,7 +11,7 @@ keywords:
 
 # Un enregistreur d'écran pour Linux, avec l'éditeur intégré
 
-OpenScreen est un enregistreur d'écran gratuit, sous licence MIT, pour Linux, qui capture un écran ou une fenêtre via PipeWire et le portail ScreenCast du bureau, ce qui lui permet d'enregistrer sous Wayland. La même application monte ensuite la prise : zooms automatiques depuis le menu **Amélioration auto**, curseur éditable, sous-titres locaux avec Whisper et export MP4 ou GIF. OBS Studio reste le meilleur choix si vous diffusez en direct. Les paquets publiés sont en x64  sur ARM64, OpenScreen se compile via son flake Nix.
+OpenScreen est un enregistreur d'écran gratuit, sous licence MIT, pour Linux, qui capture un écran ou une fenêtre via PipeWire et le portail ScreenCast du bureau, ce qui lui permet d'enregistrer sous Wayland. La même application monte ensuite la prise : zooms automatiques depuis le menu **Amélioration auto**, curseur éditable, sous-titres locaux avec Whisper et export MP4 ou GIF. OBS Studio reste le meilleur choix si vous diffusez en direct. Les paquets publiés sont en x64 ; sur ARM64, OpenScreen se compile via son flake Nix.
 
 Cette page est publiée par le projet OpenScreen. Les informations sur Screen Studio et OBS Studio proviennent de screen.studio et obsproject.com, et les réglages par défaut des distributions proviennent des notes de version d'Ubuntu et de Fedora. Le tout a été vérifié en septembre 2026. Les sources sont listées à la fin.
 
@@ -27,7 +27,7 @@ Cette page est publiée par le projet OpenScreen. Les informations sur Screen St
 | Audio système | Le moniteur du sink PipeWire, mixé avec le microphone |
 | Curseur | Position et forme depuis le portail. Clics gauches avec le groupe `input` |
 | Sous-titres | Whisper local sur Vulkan, avec repli sur le CPU. Incrustés dans la vidéo |
-| Export | MP4 (H.264 ou H.265) ou GIF, sans filigrane. H.264 sur le GPU via VAAPI quand le pilote le permet |
+| Export | MP4 (H.264) ou GIF, sans filigrane. H.264 sur le GPU via VAAPI quand le pilote le permet |
 | Mises à jour intégrées | AppImage, `.deb`, `.rpm` et `.pacman`. Pas pour Nix |
 
 ## Wayland et PipeWire {#wayland-and-pipewire}
@@ -46,13 +46,13 @@ OpenScreen enregistre l'écran sous Linux avec son propre module auxiliaire nati
 
 Screen Studio ne prend en charge que macOS (en septembre 2026). OpenScreen offre le même type de finition sur Linux, et ses outils de montage sont les mêmes sous Windows, macOS et Linux.
 
-- **Zooms automatiques.** **Amélioration auto → Zooms automatiques** place les zooms à partir du mouvement enregistré du curseur, sans appel réseau ni modèle. Les zooms manuels ont six profondeurs. Plus de détails sur le [zoom automatique](/features/auto-zoom/).
+- **Zooms automatiques.** **Amélioration auto → Zooms automatiques** place les zooms sur les clics enregistrés, sans appel réseau ni modèle. Les zooms manuels ont six profondeurs. Plus de détails sur le [zoom automatique](/features/auto-zoom/).
 - **Style du curseur.** Afficher ou masquer le curseur, le redimensionner et le lisser, et ajouter un flou de mouvement et un rebond au clic. Les effets de clic ont besoin de clics enregistrés, donc à nouveau le groupe `input`.
 - **Arrière-plans et cadrage.** 18 fonds d'écran fournis, une couleur unie, un dégradé ou votre propre image, avec marge, coins arrondis et ombre. Sortie en 16:9, 9:16, 1:1 et d'autres formats.
 - **Sous-titres locaux.** whisper.cpp tourne sur votre machine, sur Vulkan avec repli sur le CPU. Il utilise un modèle Whisper Small d'environ 264 Mo, téléchargé une fois. Les sous-titres sont incrustés dans la vidéo, et supprimer des mots dans la transcription les coupe de la vidéo. Plus de détails sur les [sous-titres](/features/captions/).
 - **Dispositions de webcam.** Incrustation d'image et autres dispositions, avec l'arrière-plan de la caméra retiré, flouté ou remplacé sans écran vert.
 - **Une timeline multiclip.** Plusieurs clips par projet, coupes, régions de vitesse, annotations texte, flèche, image et flou, une piste de voix off et de la musique. Voir [Montage et timeline](/docs/editing-timeline/).
-- **Export sans filigrane.** MP4 en H.264 ou H.265 jusqu'à 60 fps, ou GIF. Sous Linux, le compositeur rend via Vulkan, et le H.264 va sur le GPU via `h264_vaapi` quand le pilote expose VAAPI et que le périphérique Vulkan peut transmettre les images. Voir [Export](/docs/export/).
+- **Export sans filigrane.** MP4 en H.264 jusqu'à 60 fps, ou GIF. Sous Linux, le compositeur rend via Vulkan, et le H.264 va sur le GPU via `h264_vaapi` quand le pilote expose VAAPI et que le périphérique Vulkan peut transmettre les images. Voir [Export](/docs/export/).
 - **Montage par chat en option, avec votre propre clé.** Décrivez des coupes, des zooms ou des annotations en langage courant. C'est désactivé tant que vous n'avez pas connecté de fournisseur, et chaque modification s'applique comme une modification ordinaire, que vous pouvez annuler. Voir [Montage par IA](/docs/ai-editing/).
 
 ## Paquets {#packages}
@@ -72,9 +72,9 @@ Screen Studio ne prend en charge que macOS (en septembre 2026). OpenScreen offre
 
 1. Téléchargez le paquet pour votre distribution depuis la [page de téléchargement](/download/), ou utilisez le flake Nix.
 2. Suivez les [étapes d'installation Linux](/docs/installation/#linux). Ajoutez votre utilisateur au groupe `input` si vous voulez que les clics soient enregistrés, et acceptez ce que ce groupe permet.
-3. Faites un premier enregistrement avec le [démarrage rapide](/docs/quick-start/), répondez à la boîte de dialogue du portail quand elle s'ouvre, puis lancez **Amélioration auto → Zooms automatiques** sur la prise.
+3. Faites un premier enregistrement avec le [démarrage rapide](/docs/quick-start/) et répondez à la boîte de dialogue du portail quand elle s'ouvre. La prise s'ouvre dans l'éditeur avec ses zooms automatiques déjà placés.
 
-Sur un autre système  Voir les pages [Windows](/screen-recorder-windows/) et [macOS](/screen-recorder-mac/). Vous venez d'une application Mac  Voir l'[alternative à Screen Studio](/alternatives/screen-studio/). Ou retournez à la [page d'accueil d'OpenScreen](/).
+Sur un autre système ? Voir les pages [Windows](/screen-recorder-windows/) et [macOS](/screen-recorder-mac/). Vous venez d'une application Mac ? Voir l'[alternative à Screen Studio](/alternatives/screen-studio/). Ou retournez à la [page d'accueil d'OpenScreen](/).
 
 ## Sources {#sources}
 

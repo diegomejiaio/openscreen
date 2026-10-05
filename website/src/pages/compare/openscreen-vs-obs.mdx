@@ -25,10 +25,10 @@ This page is published by the OpenScreen project. The OBS Studio details come fr
 | What it records | A display or one window, with webcam, microphone and system audio. Crop afterward in the editor | Scenes that combine displays, windows, webcams, images, text, browser windows and capture cards. Sources can be cropped before recording |
 | Live streaming | No | Yes, to built-in services or a custom server |
 | Built-in editor | Yes. Multi-clip timeline, cuts, speed changes, zooms and annotations | None. Its feature list covers capture, mixing, scenes and streaming |
-| Automatic zooms | Yes, placed from the recorded cursor | Community "Zoom to Mouse" script, triggered by a hotkey |
+| Automatic zooms | Yes, placed on recorded clicks | Community "Zoom to Mouse" script, triggered by a hotkey |
 | Captions | On-device Whisper, one model of about 264 MB, downloaded once. Burned into the video | Built-in captions tool on Windows only. The free LocalVocal plugin transcribes locally on all three systems and writes .srt files |
 | Recording format | H.264 MP4 with native capture | H.264, AV1, HEVC with a hardware encoder, or ProRes on a Mac. Hybrid MP4 or MOV by default, also MKV, FLV, MPEG-TS and others |
-| Output | MP4 (H.264 or H.265) or GIF, up to 60 fps, no watermark | The recording file itself |
+| Output | MP4 (H.264) or GIF, up to 60 fps, no watermark | The recording file itself |
 | Extending it | A command-line interface with JSON output | Plugin manager, Lua and Python scripts, WebSocket remote control |
 
 ## What both tools do
@@ -47,7 +47,7 @@ The two overlap more than the "streamer versus editor" split suggests. None of t
 ### Editing in the same app
 
 - **A timeline after the take.** Import recordings or existing videos, reorder them, and set in and out points and a crop for each clip. Cut spans, and change speed from 0.1× up to 100×. See [Editing & timeline](/docs/editing-timeline/) and [Media library](/docs/media-library/).
-- **Zooms placed afterward.** **Auto-enhance → Automatic zooms** reads the recorded cursor movement and drops zoom regions where the cursor dwells, with no network call and no model. Manual zooms at six depths sit alongside them. The OBS "Zoom to Mouse" script zooms a display capture when you press its hotkey, so each zoom is decided during the take. More on [auto-zoom](/features/auto-zoom/).
+- **Zooms placed afterward.** **Auto-enhance → Automatic zooms** reads the recorded clicks and zooms in on them, with no network call and no model. Manual zooms at six depths sit alongside them. The OBS "Zoom to Mouse" script zooms a display capture when you press its hotkey, so each zoom is decided during the take. More on [auto-zoom](/features/auto-zoom/).
 - **A cursor you can change afterward.** By default, OpenScreen records the pointer as data rather than pixels. You can resize it, smooth its path, and add motion blur and a click bounce after recording. What each system captures is listed under [Cursor mode](/docs/recording/#cursor-mode).
 - **Framing.** Add a wallpaper, a solid color, a gradient or your own image behind the recording, with padding, rounded corners and a shadow. Output as 16:9, 9:16, 1:1, 4:3, 4:5, 16:10, 10:16, or the clips' own shape.
 - **Annotations on the timeline.** Text with six animations, arrows in eight directions, images, and blur regions, Gaussian or mosaic. OBS adds text and images as scene sources while you record. OpenScreen places them after the take, where you can move them.
@@ -60,7 +60,7 @@ The two overlap more than the "streamer versus editor" split suggests. None of t
 
 ### Export and chat editing
 
-- **An export step with choices.** MP4 at 720p, 1080p or source size, at 24, 30 or 60 fps, in H.264 or H.265, or a GIF. No watermark. In OBS, the output resolution, frame rate and encoder are set in Settings before you record. See [Export](/docs/export/).
+- **An export step with choices.** MP4 at 720p, 1080p or source size, at 24, 30 or 60 fps, in H.264, or a GIF. No watermark. In OBS, the output resolution, frame rate and encoder are set in Settings before you record. See [Export](/docs/export/).
 - **Optional chat editing with your own key.** Describe cuts, zooms, speed changes or annotations in plain language. Each change lands as an ordinary undoable edit. It is off until you connect a provider. See [AI editing](/docs/ai-editing/).
 
 ## When OBS Studio is the better choice
@@ -84,8 +84,8 @@ Some features will not apply to an OBS file. Automatic zooms, cursor-following z
 ## Getting started
 
 1. Download OpenScreen from the [download page](/download/). On Windows, the Microsoft Store is the recommended route.
-2. Follow [Installation](/docs/installation/). On macOS, grant the Screen Recording and Accessibility permissions before the first take.
-3. Make a first recording with the [quick start](/docs/quick-start/), then run **Auto-enhance → Automatic zooms** on it. To edit an OBS recording instead, start from [Media library](/docs/media-library/) and add [captions](/docs/captions/).
+2. Follow [Installation](/docs/installation/). On macOS, grant permissions from the window that opens on first launch.
+3. Make a first recording with the [quick start](/docs/quick-start/). It opens in the editor with automatic zooms already placed. To edit an OBS recording instead, start from [Media library](/docs/media-library/) and add [captions](/docs/captions/).
 
 Comparing other tools as well? See the [Screen Studio alternative](/alternatives/screen-studio/), [OpenScreen vs Cap](/compare/openscreen-vs-cap/), the [Camtasia alternative](/alternatives/camtasia/) and the [Loom alternative](/alternatives/loom/). For a start-to-finish walkthrough, read the [product demo video guide](/docs/guides/product-demo-video/), or go back to the [OpenScreen home page](/).
 

@@ -9,14 +9,21 @@ import type { DesktopCapturerSource, Rectangle } from "electron";
 import {
 	app,
 	BrowserWindow,
+	clipboard,
 	desktopCapturer,
 	dialog,
 	ipcMain,
+	safeStorage,
 	screen,
 	shell,
 	systemPreferences,
 } from "electron";
-import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
+import { DEFAULT_WEBCAM_QUALITY, type WebcamQualityId } from "../../src/hooks/webcamCaptureTarget";
+import {
+	type AxcutDocument,
+	isAxcutDocumentFile,
+	parseDocumentFile,
+} from "../../src/lib/ai-edition/schema";
 import {
 	type NativeLinuxRecordingRequest,
 	portalCursorMode,
@@ -62,6 +69,9 @@ import { isDiagnosticModeEnabled, mainLogBuffer } from "../diagnostics/main-log-
 import { mainT } from "../i18n";
 import { getInstallChannel } from "../install-channel";
 import { RECORDINGS_DIR } from "../main";
+import { EditorDocumentHost } from "../mcp/editor-document-host";
+import { McpController } from "../mcp/mcp-controller";
+import { McpSettingsStore } from "../mcp/mcp-settings-store";
 import { type AudioPeaksResult, getAudioPeaks } from "../media/audioPeaks";
 import {
 	readCursorRecordingFile as readCursorRecordingFileFrom,
@@ -70,6 +80,7 @@ import {
 } from "../media/cursorSidecar";
 import { findMediaLinksByFingerprint, registerMediaLinks } from "../media/mediaLinksRegistry";
 import { relinkProjectMedia } from "../media/projectMediaRelinker";
+import { showOpenDialogOver, showSaveDialogOver } from "../messageBox";
 import {
 	type LinuxCaptureSourceKind,
 	LinuxNativeCaptureSession,
@@ -82,6 +93,16 @@ import {
 import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { toHelperRect } from "../native-bridge/helperCoordinates";
+import {
+	isMacPickerSourceId,
+	MAC_PICKER_SOURCE_PREFIX,
+	type MacPickerSelection,
+	MacPickerSession,
+	macSystemPickerEnabled,
+	markMacSystemPickerUnavailable,
+} from "../native-bridge/screen/macPickerSession";
+import { CompositorViewService } from "../native-bridge/services/compositorViewService";
+import { getMacPermissions, showPermissionsWindow } from "../permissions";
 import { scoreDeviceNameMatch } from "../recording/deviceNameMatching";
 import {
 	describeSalvagedTake,
@@ -98,6 +119,8 @@ import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
 	readMicrophoneDefaulted,
+	readMicrophoneUnavailable,
+	readSecondaryWindowsApplied,
 	readWebcamFormat,
 	readWebcamUnavailable,
 	terminateNativeWindowsCapture,
@@ -106,9 +129,11 @@ import {
 import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
 import {
+	describeMacPickerSource,
 	describeRecordingSource,
 	enumerationIncludesSourceKind,
 	mergeEnumeratedSources,
+	rememberedPickerSourceName,
 	resolveRecordingSource,
 	restoreRecordingSourceAfterEnumeration,
 	shouldEnumerateRecordingSources,
@@ -203,17 +228,6 @@ function resolveApprovedVideoPath(videoPath?: string | null): string | null {
 }
 
 // Attach the parent window only when valid, to avoid passing a destroyed BrowserWindow to dialogs.
-function buildDialogOptions<T extends Electron.OpenDialogOptions | Electron.SaveDialogOptions>(
-	baseOptions: T,
-	parentWindow: BrowserWindow | null,
-): T & { parent?: BrowserWindow } {
-	const mainWindow = parentWindow;
-	if (mainWindow && !mainWindow.isDestroyed()) {
-		return { ...baseOptions, parent: mainWindow };
-	}
-	return baseOptions;
-}
-
 function hasAllowedImportVideoExtension(filePath: string): boolean {
 	return ALLOWED_IMPORT_VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
@@ -425,12 +439,21 @@ function readableApprovedPath(filePath?: string | null): string | null {
 
 /** Grant the media a loaded project declares. The document is the app's own file, and this
  *  is what the picker's approval decays into once the app restarts. */
-function approveDocumentMedia(document: AxcutDocument): void {
+/**
+ * `trustedDirs`, when given, confines the grant to media inside them: a project file read from
+ * an arbitrary path gets the same rule as a v2 project (`getApprovedProjectSession`). Without
+ * it, as for the editor's own projects, every declared path is granted.
+ */
+function approveDocumentMedia(document: AxcutDocument, trustedDirs?: string[]): void {
+	const trusted = (filePath: string) =>
+		!trustedDirs || trustedDirs.some((dir) => isPathWithinDir(filePath, dir));
 	for (const asset of document.assets ?? []) {
 		const media = normalizeVideoSourcePath(asset.originalPath);
-		if (media && hasAllowedImportMediaExtension(media)) approveFilePath(media);
+		if (media && hasAllowedImportMediaExtension(media) && trusted(media)) approveFilePath(media);
 		const camera = normalizeVideoSourcePath(asset.cameraTrack?.sourcePath);
-		if (camera && hasAllowedImportMediaExtension(camera)) approveFilePath(camera);
+		if (camera && hasAllowedImportMediaExtension(camera) && trusted(camera)) {
+			approveFilePath(camera);
+		}
 	}
 }
 
@@ -633,8 +656,13 @@ export interface RecordingPrefs {
 	camDeviceId: string | null;
 	/** Camera label paired with the preferred id for restart-safe resolution. */
 	camDeviceName: string | null;
+	/** Capture resolution for the camera. See WEBCAM_QUALITY_PRESETS. */
+	camQuality: WebcamQualityId;
 	systemAudioEnabled: boolean;
 	cursorCaptureMode: CursorCaptureMode;
+	hideDesktopIcons: boolean;
+	/** Whether a fresh take gets automatic zooms on import. Persisted; defaults on. */
+	autoZoomEnabled: boolean;
 }
 const defaultRecordingPrefs: RecordingPrefs = {
 	micEnabled: false,
@@ -643,8 +671,11 @@ const defaultRecordingPrefs: RecordingPrefs = {
 	camEnabled: false,
 	camDeviceId: null,
 	camDeviceName: null,
+	camQuality: DEFAULT_WEBCAM_QUALITY,
 	systemAudioEnabled: false,
 	cursorCaptureMode: "editable-overlay",
+	hideDesktopIcons: false,
+	autoZoomEnabled: true,
 };
 
 // Cached source from the user's pick. Used by setDisplayMediaRequestHandler in main.ts for cursor-free capture.
@@ -779,6 +810,11 @@ async function removeNativeWindowsCaptureOutputs(
 	}
 }
 let nativeMacCaptureProcess: ChildProcessWithoutNullStreams | null = null;
+/**
+ * Apple's system picker session (macOS 15.2+), started on first use and kept for the app's
+ * life: the pick it holds cannot leave that process. See macPickerSession.ts.
+ */
+let macPickerSession: MacPickerSession | null = null;
 let nativeMacCaptureOutput = "";
 let nativeMacCaptureTargetPath: string | null = null;
 let nativeMacCaptureRecordingId: number | null = null;
@@ -1003,7 +1039,57 @@ function resolveAssetBasePath() {
 	}
 }
 
+/** Whether sources come from Apple's picker in this run. */
+function macPickerOwnsSources() {
+	return macSystemPickerEnabled();
+}
+
+async function getMacPickerSession(): Promise<MacPickerSession | null> {
+	if (!macPickerOwnsSources()) {
+		return null;
+	}
+	if (macPickerSession) {
+		return macPickerSession;
+	}
+	const helperPath = await findNativeMacCaptureHelperPath();
+	const session = helperPath ? new MacPickerSession(helperPath) : null;
+	if (!session || !(await session.start())) {
+		// A helper that predates `--picker-session`, or none at all: the app's own picker
+		// and the Screen Recording grant, for the rest of this run.
+		console.warn("[mac-picker] falling back to the app's own source picker");
+		markMacSystemPickerUnavailable();
+		return null;
+	}
+	macPickerSession = session;
+	return session;
+}
+
+function selectedSourceFromPick(
+	pick: MacPickerSelection,
+): SelectedSource & { id: string; display_id: string } {
+	const display =
+		pick.displayId !== null
+			? screen.getAllDisplays().find((candidate) => candidate.id === pick.displayId)
+			: undefined;
+	const name =
+		pick.kind === "window" ? pick.title || pick.appName || "Window" : display?.label || "Screen";
+	return {
+		id: `${MAC_PICKER_SOURCE_PREFIX}${pick.kind}:${pick.windowId ?? pick.displayId ?? 0}`,
+		name,
+		display_id: pick.displayId !== null ? String(pick.displayId) : "",
+	};
+}
+
 function getSelectedSourceBounds() {
+	// A pick from Apple's picker carries its own frame; there is no desktopCapturer
+	// display to look up for it.
+	if (isMacPickerSourceId(selectedSource?.id)) {
+		const pick = macPickerSession?.getSelection();
+		if (pick) {
+			return pick.bounds;
+		}
+	}
+
 	// Single-window capture records only the window's region, not the whole display.
 	// Normalizing the cursor against display bounds leaves a fixed offset in the export,
 	// so prefer the helper-reported window frame when capturing a window.
@@ -1531,6 +1617,7 @@ function inspectNativeMacCaptureOutput() {
 function attachNativeMacCaptureOutputDrain(
 	proc: ChildProcessWithoutNullStreams,
 	onTakeEnded: () => void,
+	onSystemAudioUnavailable: () => void,
 ) {
 	let lineBuffer = "";
 	// Hooked here rather than on `nativeMacCaptureEvents`, which the start wait
@@ -1538,6 +1625,7 @@ function attachNativeMacCaptureOutputDrain(
 	const watchLiveTake = createNativeMacMidCaptureErrorWatch(
 		() => nativeMacCaptureProcess === proc && !nativeMacStopInFlight,
 		onTakeEnded,
+		onSystemAudioUnavailable,
 	);
 	const drain = (chunk: Buffer) => {
 		const text = chunk.toString();
@@ -1863,42 +1951,18 @@ export function registerIpcHandlers(
 	const sameSelectedSource = (left: SelectedSource | null, right: SelectedSource | null) =>
 		left?.id === right?.id && left?.name === right?.name && left?.display_id === right?.display_id;
 
-	async function requestScreenAccess() {
-		if (process.platform !== "darwin") {
-			return { success: true, granted: true, status: "granted" };
+	// Issue #738: the renderer's `navigator.clipboard.writeText` is always denied
+	// here (NotAllowedError: Write permission denied — Electron withholds the
+	// clipboard-sanitized-write permission from the renderer), so chat's
+	// "Copy message" fell to its error toast and the clipboard kept its old
+	// content. Main's `clipboard` module has no such permission gate; the
+	// preload exposes this as `copyToClipboard`.
+	ipcMain.handle("clipboard:write-text", (_event, text: unknown) => {
+		if (typeof text !== "string") {
+			throw new TypeError("clipboard:write-text expects a string");
 		}
-
-		try {
-			const status = systemPreferences.getMediaAccessStatus("screen");
-			if (status === "granted") {
-				return { success: true, granted: true, status };
-			}
-
-			// Screen recording has no askForMediaAccess equivalent, so trigger the
-			// TCC prompt without opening OpenScreen's source selector above it.
-			if (status === "not-determined") {
-				const mainWin = getMainWindow();
-				if (mainWin && !mainWin.isDestroyed()) {
-					if (!mainWin.isVisible()) {
-						mainWin.show();
-					}
-					mainWin.focus();
-				}
-				app.focus({ steal: true });
-				desktopCapturer
-					.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
-					.catch(() => {
-						// Permission probing failure is reported by the explicit status check below.
-					});
-				return { success: true, granted: false, status: "not-determined" };
-			}
-
-			return { success: true, granted: false, status };
-		} catch (error) {
-			console.error("Failed to request screen access:", error);
-			return { success: false, granted: false, status: "unknown", error: String(error) };
-		}
-	}
+		clipboard.writeText(text);
+	});
 
 	ipcMain.handle("get-sources", async (_, opts) => {
 		// desktopCapturer.getSources can never settle where the GL stack cannot be
@@ -2031,6 +2095,76 @@ export function registerIpcHandlers(
 		},
 	);
 
+	/**
+	 * The HUD and the notes window belong to this process, not to the helper, so a display
+	 * pick would record them unless the picker is told to leave them out.
+	 */
+	function macPickerExcludedWindowIds() {
+		const appWindowSourceIds = [getMainWindow(), getNotesWindow()]
+			.filter((window): window is BrowserWindow => !!window && !window.isDestroyed())
+			.map((window) => window.getMediaSourceId());
+		return collectMacCaptureExcludedWindowIds(appWindowSourceIds);
+	}
+
+	async function presentMacSystemPicker(session: MacPickerSession) {
+		const excludedWindowIds = macPickerExcludedWindowIds();
+		// Out of the way while the picker is up. The HUD window is far larger than the bar
+		// it draws (a transparent reserve above it), and Apple's picker targets windows by
+		// their frame, not by where clicks land -- so that invisible rectangle hid every
+		// window behind it from the picker. Its exclusion from the capture is by window id,
+		// so hiding it does not bring it back into a display pick.
+		const hud = getMainWindow();
+		const hideHud = !!hud && !hud.isDestroyed() && hud.isVisible();
+		if (hideHud) {
+			hud.hide();
+		}
+		let pick: MacPickerSelection | null;
+		try {
+			pick = await session.present(
+				excludedWindowIds,
+				appSettings.getSnapshot().recording.hideDesktopIcons,
+			);
+		} finally {
+			if (hideHud && !hud.isDestroyed()) {
+				hud.showInactive();
+			}
+		}
+		if (!pick) {
+			// Same signal our own picker window sends when it closes without a choice: the HUD
+			// stops waiting to record after a selection.
+			for (const window of BrowserWindow.getAllWindows()) {
+				if (!window.isDestroyed()) {
+					window.webContents.send("source-selector-closed");
+				}
+			}
+			return;
+		}
+		const picked = selectedSourceFromPick(pick);
+		selectedSource = picked;
+		selectedDesktopSource = null;
+		// Written only so the next launch can name it: the pick itself dies with the helper.
+		try {
+			appSettings.setLastSource(describeMacPickerSource(picked, pick.kind));
+		} catch (error) {
+			console.warn("Failed to persist the picked recording source:", error);
+		}
+		broadcastSelectedSource(selectedSource);
+	}
+
+	app.on("will-quit", () => {
+		macPickerSession?.dispose();
+	});
+
+	// For the renderer's own source lists (the AI editor's recording stage): with Apple's
+	// picker they must hand the choice to `open-source-selector` rather than enumerate.
+	ipcMain.handle("uses-system-source-picker", () => macPickerOwnsSources());
+
+	// Named in the HUD and Record mode after a relaunch, while `get-selected-source` still
+	// answers null: the pick cannot be restored, so it is never reported as selected.
+	ipcMain.handle("get-last-picked-source", () =>
+		rememberedPickerSourceName(appSettings.getSnapshot().lastSource, macPickerOwnsSources()),
+	);
+
 	ipcMain.handle("get-selected-source", async () => {
 		const previousSelectedSource = selectedSource;
 		if (process.platform === "linux" && findPipeWireCursorHelperPath()) {
@@ -2040,6 +2174,25 @@ export function registerIpcHandlers(
 				broadcastSelectedSource(null);
 			}
 			return null;
+		}
+		if (macPickerOwnsSources()) {
+			// Apple's picker owns the choice. A pick lives only as long as the helper session
+			// that holds it, so there is nothing to restore -- and enumerating here would ask
+			// for the very Screen Recording grant the picker makes unnecessary. A source the
+			// CLI selected by id in this run is still answered as it is: `record` picks by
+			// name, headless, and keeps the per-take helper.
+			if (!isMacPickerSourceId(selectedSource?.id)) {
+				return selectedDesktopSource ? selectedSource : null;
+			}
+			// A screen pick that would record the current HUD or notes window is no pick at all:
+			// answering null makes the next Record present the picker again (#965).
+			macPickerSession?.forgetSelectionUnlessExcluding(macPickerExcludedWindowIds());
+			if (!macPickerSession?.getSelection()) {
+				selectedSource = null;
+				selectedDesktopSource = null;
+				broadcastSelectedSource(null);
+			}
+			return selectedSource;
 		}
 		const lastSource = appSettings.getSnapshot().lastSource;
 		const liveSelected =
@@ -2092,8 +2245,29 @@ export function registerIpcHandlers(
 		return selectedSource;
 	});
 
-	registerRecordingPrefsHandlers(defaultRecordingPrefs, getMainWindow, () =>
-		BrowserWindow.getAllWindows(),
+	registerRecordingPrefsHandlers(
+		defaultRecordingPrefs,
+		getMainWindow,
+		() => BrowserWindow.getAllWindows(),
+		(previous, next) => {
+			// Apple's picker bakes the exclusions into the filter it hands back, so a pick made
+			// before "Hide desktop icons" changed would still record the desktop the old way.
+			// Dropping it makes the HUD ask for a new pick instead of ignoring the toggle.
+			if (
+				previous.hideDesktopIcons !== next.hideDesktopIcons &&
+				isMacPickerSourceId(selectedSource?.id)
+			) {
+				selectedSource = null;
+				broadcastSelectedSource(null);
+			}
+			// Turning system audio on is when its grant becomes wanted: ask now, so the prompt
+			// never lands on a take that is already counting down.
+			if (!previous.systemAudioEnabled && next.systemAudioEnabled && macPickerOwnsSources()) {
+				void getMacPermissions()
+					.askForSystemAudioOnce()
+					.catch((error) => console.warn("[permissions] system audio request failed:", error));
+			}
+		},
 	);
 
 	ipcMain.handle("request-camera-access", async () => {
@@ -2128,10 +2302,6 @@ export function registerIpcHandlers(
 		}
 	});
 
-	ipcMain.handle("request-screen-access", async () => {
-		return requestScreenAccess();
-	});
-
 	ipcMain.handle("request-native-mac-cursor-access", async () => {
 		const access = await requestMacCursorAccessibilityAccess();
 
@@ -2153,26 +2323,11 @@ export function registerIpcHandlers(
 				return access;
 			}
 
-			const mainWin = getMainWindow();
-			const detail =
-				"Allow OpenScreen under System Settings → Privacy & Security → Accessibility, then press record again to start the countdown.";
-			const messageOptions = {
-				type: "warning",
-				buttons: ["Open Accessibility Settings", "Cancel"],
-				defaultId: 0,
-				cancelId: 1,
-				message: "Accessibility access is required for the editable cursor",
-				detail,
-			} satisfies Electron.MessageBoxOptions;
-			const result =
-				mainWin && !mainWin.isDestroyed()
-					? await dialog.showMessageBox(mainWin, messageOptions)
-					: await dialog.showMessageBox(messageOptions);
-			if (result.response === 0) {
-				await shell.openExternal(
-					"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-				);
-			}
+			// Accessibility improves cursor shape hints but is not required to record.
+			// Remember that the helper raised the system prompt so a later visit to the
+			// permissions window can direct the user to Settings, but don't reopen that
+			// window from every Record press.
+			getMacPermissions().noteRequested("accessibility");
 		}
 
 		return access;
@@ -2192,34 +2347,24 @@ export function registerIpcHandlers(
 			return { opened: false, reason: "portal-owns-selection" };
 		}
 
-		const access = await requestScreenAccess();
-		if (!access.granted) {
-			if (process.platform === "darwin" && access.status !== "not-determined") {
-				const mainWin = getMainWindow();
-				const messageOptions = {
-					type: "warning",
-					buttons: ["Open System Settings", "Cancel"],
-					defaultId: 0,
-					cancelId: 1,
-					message: "Screen Recording permission is required",
-					detail:
-						"Allow OpenScreen in macOS System Settings, then come back and choose a screen or window.",
-				} satisfies Electron.MessageBoxOptions;
-				const result =
-					mainWin && !mainWin.isDestroyed()
-						? await dialog.showMessageBox(mainWin, messageOptions)
-						: await dialog.showMessageBox(messageOptions);
-				if (result.response === 0) {
-					await shell.openExternal(
-						"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-					);
-				}
+		const pickerSession = await getMacPickerSession();
+		if (pickerSession) {
+			// Answered at once: the pick arrives later through `selected-source-changed`, which
+			// is how the HUD already learns about a choice made in our own picker window.
+			void presentMacSystemPicker(pickerSession);
+			return { opened: true };
+		}
+
+		// Chromium's picker can only list sources once THIS process can capture, which on
+		// macOS means granted, and granted before launch: the app's own read is cached for
+		// the life of the process. Anything short of that belongs in the permissions
+		// window, which says what is missing and offers the relaunch when that is all.
+		if (process.platform === "darwin") {
+			const permissions = await getMacPermissions().read();
+			if (permissions.screen !== "granted" || permissions.screenRequiresRelaunch) {
+				showPermissionsWindow();
+				return { opened: false, reason: "screen-access-required" };
 			}
-			return {
-				opened: false,
-				reason: "screen-access-required",
-				access,
-			};
 		}
 
 		const sourceSelectorWin = getSourceSelectorWindow();
@@ -2707,6 +2852,9 @@ export function registerIpcHandlers(
 					webcamFps: request.webcam.fps,
 					captureCursor: cursorCaptureMode === "system",
 					cursorCaptureMode,
+					hideDesktopIcons:
+						request.source.type === "display" &&
+						appSettings.getSnapshot().recording.hideDesktopIcons,
 					outputs: {
 						screenPath: outputPath,
 						webcamPath: webcamOutputPath,
@@ -2791,6 +2939,9 @@ export function registerIpcHandlers(
 					cursorOffsetMs: nativeWindowsCursorOffsetMs,
 					webcamFormat,
 					encoderSelection,
+					// Logged only: menus missing from a window take on Windows before 11
+					// 24H2 are a platform limit, not something to put in front of the user.
+					secondaryWindowsApplied: readSecondaryWindowsApplied(nativeWindowsCaptureOutput),
 				});
 
 				const source = selectedSource || { name: "Screen" };
@@ -2872,13 +3023,36 @@ export function registerIpcHandlers(
 			const outputPath = path.join(RECORDINGS_DIR, `${RECORDING_FILE_PREFIX}${recordingId}.mp4`);
 			const cursorCaptureMode =
 				normalizeCursorCaptureMode(request.cursor?.mode) ?? "editable-overlay";
-			try {
-				await desktopCapturer.getSources({
-					types: ["screen"],
-					thumbnailSize: { width: 1, height: 1 },
-				});
-			} catch {
-				// The helper reports the final ScreenCaptureKit permission status.
+			// A source from Apple's picker records through the session that holds the pick,
+			// and needs no Screen Recording grant -- so nothing here may go near one.
+			const pickerSession = isMacPickerSourceId(request.source.sourceId) ? macPickerSession : null;
+			// Normally caught by `get-selected-source` first; this is the last word (#965).
+			pickerSession?.forgetSelectionUnlessExcluding(macPickerExcludedWindowIds());
+			const pick = pickerSession?.getSelection() ?? null;
+			if (isMacPickerSourceId(request.source.sourceId) && !pick) {
+				selectedSource = null;
+				broadcastSelectedSource(null);
+				return {
+					success: false,
+					error: "The screen or window you picked is no longer available. Pick it again.",
+				};
+			}
+			if (!pickerSession) {
+				try {
+					await desktopCapturer.getSources({
+						types: ["screen"],
+						thumbnailSize: { width: 1, height: 1 },
+					});
+				} catch {
+					// The helper reports the final ScreenCaptureKit permission status.
+				}
+			}
+			// A picked take records system audio from a Core Audio tap, under its own "System
+			// Audio Recording Only" grant (see SystemAudioTap.swift). The helper raises that
+			// prompt itself if it was never answered, so note it: the permissions window then
+			// offers System Settings rather than a prompt macOS will not show again.
+			if (pickerSession && request.audio?.system?.enabled) {
+				getMacPermissions().noteRequested("systemAudio");
 			}
 			if (request.audio?.microphone?.enabled) {
 				const micStatus = systemPreferences.getMediaAccessStatus("microphone");
@@ -2891,7 +3065,8 @@ export function registerIpcHandlers(
 					? (screen.getAllDisplays().find((display) => display.id === request.source.displayId) ??
 						null)
 					: getSelectedDisplay();
-			const bounds = request.source.bounds ?? sourceDisplay?.bounds ?? getSelectedSourceBounds();
+			const bounds =
+				pick?.bounds ?? request.source.bounds ?? sourceDisplay?.bounds ?? getSelectedSourceBounds();
 			const captureExcludedWindowSourceIds: string[] = [];
 			if (request.source.type === "display") {
 				for (const window of [getMainWindow(), getNotesWindow()]) {
@@ -2905,6 +3080,8 @@ export function registerIpcHandlers(
 				schemaVersion: 1,
 				recordingId,
 				excludedWindowIds: collectMacCaptureExcludedWindowIds(captureExcludedWindowSourceIds),
+				hideDesktopIcons:
+					request.source.type === "display" && appSettings.getSnapshot().recording.hideDesktopIcons,
 				source: {
 					...request.source,
 					bounds,
@@ -2961,20 +3138,31 @@ export function registerIpcHandlers(
 				pendingCursorRecordingData = null;
 			}
 
-			const proc = spawn(helperPath, [JSON.stringify(config)], {
-				cwd: RECORDINGS_DIR,
-				stdio: ["pipe", "pipe", "pipe"],
-			});
+			const proc = pickerSession
+				? pickerSession.startTake(config)
+				: spawn(helperPath, [JSON.stringify(config)], {
+						cwd: RECORDINGS_DIR,
+						stdio: ["pipe", "pipe", "pipe"],
+					});
 			nativeMacCaptureProcess = proc;
 			// When the take ends without the user — the helper reported an error or
 			// exited — this drives the renderer's own stop, the same one the tray's Stop
 			// Recording sends: it clears the HUD and surfaces the result.
-			attachNativeMacCaptureOutputDrain(proc, () => {
-				const hudWindow = getMainWindow();
-				if (hudWindow && !hudWindow.isDestroyed()) {
-					hudWindow.webContents.send("stop-recording-from-tray");
-				}
-			});
+			attachNativeMacCaptureOutputDrain(
+				proc,
+				() => {
+					const hudWindow = getMainWindow();
+					if (hudWindow && !hudWindow.isDestroyed()) {
+						hudWindow.webContents.send("stop-recording-from-tray");
+					}
+				},
+				() => {
+					const hudWindow = getMainWindow();
+					if (hudWindow && !hudWindow.isDestroyed()) {
+						hudWindow.webContents.send("native-mac-system-audio-unavailable");
+					}
+				},
+			);
 
 			await waitForNativeMacCaptureStart(proc);
 			const captureStartedAtMs = Date.now();
@@ -2985,6 +3173,17 @@ export function registerIpcHandlers(
 					deviceId: request.audio.microphone.deviceId,
 					deviceName: request.audio.microphone.deviceName,
 				});
+			}
+			// Where this happens the app offers no microphone (#700). A take that asks for one
+			// anyway (`openscreen record --mic`) records without it, and this line is what the
+			// CLI prints about it.
+			const microphoneUnavailable =
+				request.audio.microphone.enabled && readMicrophoneUnavailable(nativeMacCaptureOutput);
+			if (microphoneUnavailable) {
+				console.warn(
+					"[native-sck] recording without the microphone; ScreenCaptureKit captures it from macOS 15",
+					{ macOS: process.getSystemVersion() },
+				);
 			}
 			nativeMacCursorOffsetMs =
 				cursorCaptureMode === "editable-overlay"
@@ -3002,6 +3201,7 @@ export function registerIpcHandlers(
 				path: outputPath,
 				helperPath,
 				microphoneDefaulted,
+				microphoneUnavailable,
 			};
 		} catch (error) {
 			console.error("Failed to start native macOS recording:", error);
@@ -3719,7 +3919,7 @@ export function registerIpcHandlers(
 		// do it. Publishing first opens a window where `getCurrentRecordingSession` hands
 		// the editor a take whose `.cursor.json` is not on disk yet, and the editor's
 		// fresh-take auto-zoom reads that file the moment it imports -- an empty read there
-		// is indistinguishable from a take with no dwell, so the zooms are silently
+		// is indistinguishable from a take with no click, so the zooms are silently
 		// skipped.
 		await writePendingCursorTelemetry(screenVideoPath);
 		setCurrentRecordingSessionState(session);
@@ -3841,56 +4041,59 @@ export function registerIpcHandlers(
 		return resolveAssetBasePath();
 	});
 
-	ipcMain.handle("pick-export-save-path", async (_, fileName: string, exportFolder?: string) => {
-		try {
-			const isGif = fileName.toLowerCase().endsWith(".gif");
-			const filters = isGif
-				? [{ name: mainT("dialogs", "fileDialogs.gifImage"), extensions: ["gif"] }]
-				: [{ name: mainT("dialogs", "fileDialogs.mp4Video"), extensions: ["mp4"] }];
+	ipcMain.handle(
+		"pick-export-save-path",
+		async (event, fileName: string, exportFolder?: string) => {
+			try {
+				const isGif = fileName.toLowerCase().endsWith(".gif");
+				const filters = isGif
+					? [{ name: mainT("dialogs", "fileDialogs.gifImage"), extensions: ["gif"] }]
+					: [{ name: mainT("dialogs", "fileDialogs.mp4Video"), extensions: ["mp4"] }];
 
-			// Prefer the user's last export folder if it still exists, else ~/Downloads.
-			// Validate here because the renderer can't stat the filesystem.
-			let defaultDir = app.getPath("downloads");
-			if (exportFolder) {
-				try {
-					const stats = await fs.stat(exportFolder);
-					if (stats.isDirectory()) {
-						defaultDir = exportFolder;
+				// Prefer the user's last export folder if it still exists, else ~/Downloads.
+				// Validate here because the renderer can't stat the filesystem.
+				let defaultDir = app.getPath("downloads");
+				if (exportFolder) {
+					try {
+						const stats = await fs.stat(exportFolder);
+						if (stats.isDirectory()) {
+							defaultDir = exportFolder;
+						}
+					} catch (err) {
+						console.warn(
+							`Could not access remembered export folder "${exportFolder}", falling back to Downloads:`,
+							err,
+						);
 					}
-				} catch (err) {
-					console.warn(
-						`Could not access remembered export folder "${exportFolder}", falling back to Downloads:`,
-						err,
-					);
 				}
-			}
-			const dialogOptions = buildDialogOptions(
-				{
+				const dialogOptions: Electron.SaveDialogOptions = {
 					title: isGif
 						? mainT("dialogs", "fileDialogs.saveGif")
 						: mainT("dialogs", "fileDialogs.saveVideo"),
 					defaultPath: path.join(defaultDir, fileName),
 					filters,
 					properties: ["createDirectory", "showOverwriteConfirmation"],
-				},
-				getMainWindow(),
-			);
-			const result = await dialog.showSaveDialog(dialogOptions);
+				};
+				const result = await showSaveDialogOver(
+					BrowserWindow.fromWebContents(event.sender),
+					dialogOptions,
+				);
 
-			if (result.canceled || !result.filePath) {
-				return { success: false, canceled: true, message: "Export canceled" };
+				if (result.canceled || !result.filePath) {
+					return { success: false, canceled: true, message: "Export canceled" };
+				}
+
+				return { success: true, path: path.normalize(result.filePath) };
+			} catch (error) {
+				console.error("Failed to show save dialog:", error);
+				return {
+					success: false,
+					message: "Failed to show save dialog",
+					error: String(error),
+				};
 			}
-
-			return { success: true, path: path.normalize(result.filePath) };
-		} catch (error) {
-			console.error("Failed to show save dialog:", error);
-			return {
-				success: false,
-				message: "Failed to show save dialog",
-				error: String(error),
-			};
-		}
-	});
+		},
+	);
 
 	ipcMain.handle("write-export-to-path", async (_, videoData: ArrayBuffer, filePath: string) => {
 		try {
@@ -3925,24 +4128,24 @@ export function registerIpcHandlers(
 
 	// The media tab imports VIDEO (it arranges clips). Audio is imported from the
 	// timeline toolbar instead (issue #350) — see `open-audio-file-picker` below.
-	ipcMain.handle("open-video-file-picker", async () => {
+	ipcMain.handle("open-video-file-picker", async (event) => {
 		try {
-			const dialogOptions = buildDialogOptions(
-				{
-					title: mainT("dialogs", "fileDialogs.selectVideo"),
-					defaultPath: RECORDINGS_DIR,
-					filters: [
-						{
-							name: mainT("dialogs", "fileDialogs.videoFiles"),
-							extensions: ["webm", "mp4", "mov", "avi", "mkv", "m4v", "wmv", "flv", "ts"],
-						},
-						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
-					],
-					properties: ["openFile"],
-				},
-				getMainWindow(),
+			const dialogOptions: Electron.OpenDialogOptions = {
+				title: mainT("dialogs", "fileDialogs.selectVideo"),
+				defaultPath: RECORDINGS_DIR,
+				filters: [
+					{
+						name: mainT("dialogs", "fileDialogs.videoFiles"),
+						extensions: ["webm", "mp4", "mov", "avi", "mkv", "m4v", "wmv", "flv", "ts"],
+					},
+					{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
+				],
+				properties: ["openFile"],
+			};
+			const result = await showOpenDialogOver(
+				BrowserWindow.fromWebContents(event.sender),
+				dialogOptions,
 			);
-			const result = await dialog.showOpenDialog(dialogOptions);
 
 			if (result.canceled || result.filePaths.length === 0) {
 				return { success: false, canceled: true };
@@ -3975,24 +4178,24 @@ export function registerIpcHandlers(
 	// the timeline's "Add audio" tool: audio is a timeline overlay (like an
 	// annotation), not a media-tab clip, so it has its own audio-only picker and the
 	// renderer adds it as a kind:"audio" asset + track at the playhead.
-	ipcMain.handle("open-audio-file-picker", async () => {
+	ipcMain.handle("open-audio-file-picker", async (event) => {
 		try {
-			const dialogOptions = buildDialogOptions(
-				{
-					title: mainT("dialogs", "fileDialogs.selectAudio"),
-					defaultPath: RECORDINGS_DIR,
-					filters: [
-						{
-							name: mainT("dialogs", "fileDialogs.audioFiles"),
-							extensions: ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"],
-						},
-						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
-					],
-					properties: ["openFile"],
-				},
-				getMainWindow(),
+			const dialogOptions: Electron.OpenDialogOptions = {
+				title: mainT("dialogs", "fileDialogs.selectAudio"),
+				defaultPath: RECORDINGS_DIR,
+				filters: [
+					{
+						name: mainT("dialogs", "fileDialogs.audioFiles"),
+						extensions: ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"],
+					},
+					{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
+				],
+				properties: ["openFile"],
+			};
+			const result = await showOpenDialogOver(
+				BrowserWindow.fromWebContents(event.sender),
+				dialogOptions,
 			);
-			const result = await dialog.showOpenDialog(dialogOptions);
 
 			if (result.canceled || result.filePaths.length === 0) {
 				return { success: false, canceled: true };
@@ -4154,6 +4357,33 @@ export function registerIpcHandlers(
 		},
 	);
 
+	// The loudness-normalisation gain the export applies to a voice file, measured by the
+	// compositor over the whole file and cached there, so the preview plays the voice at the
+	// level the export writes it. `gainDb: 0` whenever there is nothing to apply — no addon, a
+	// file with no audio, a failed read — which is the preview as it played before.
+	const loudnessService = new CompositorViewService();
+	ipcMain.handle(
+		"get-loudness-gain",
+		async (
+			_,
+			filePath: string,
+		): Promise<{ success: boolean; gainDb: number; message?: string }> => {
+			try {
+				// Same approval gate as every other read of a renderer-supplied path.
+				const normalizedPath = readableApprovedPath(filePath);
+				if (!normalizedPath) {
+					return { success: false, gainDb: 0, message: "File path is not approved" };
+				}
+				return {
+					success: true,
+					gainDb: (await loudnessService.loudnessGainDb(normalizedPath)) ?? 0,
+				};
+			} catch (error) {
+				return { success: false, gainDb: 0, message: String(error) };
+			}
+		},
+	);
+
 	// Cap renderer-requested chunk sizes so a buggy or compromised renderer
 	// cannot make the main process allocate an arbitrarily large buffer.
 	const MAX_IPC_CHUNK_BYTES = 64 * 1024 * 1024;
@@ -4215,8 +4445,13 @@ export function registerIpcHandlers(
 
 	ipcMain.handle(
 		"save-project-file",
-		async (_, projectData: unknown, suggestedName?: string, existingProjectPath?: string) => {
-			return saveProjectFile(projectData, suggestedName, existingProjectPath);
+		async (event, projectData: unknown, suggestedName?: string, existingProjectPath?: string) => {
+			return saveProjectFile(
+				projectData,
+				suggestedName,
+				existingProjectPath,
+				BrowserWindow.fromWebContents(event.sender),
+			);
 		},
 	);
 
@@ -4224,6 +4459,7 @@ export function registerIpcHandlers(
 		projectData: unknown,
 		suggestedName?: string,
 		existingProjectPath?: string,
+		parent?: BrowserWindow | null,
 	): Promise<ProjectFileResult> {
 		try {
 			const trustedExistingProjectPath = isTrustedProjectPath(existingProjectPath)
@@ -4249,22 +4485,19 @@ export function registerIpcHandlers(
 				? safeName
 				: `${safeName}.${PROJECT_FILE_EXTENSION}`;
 
-			const dialogOptions = buildDialogOptions(
-				{
-					title: mainT("dialogs", "fileDialogs.saveProject"),
-					defaultPath: path.join(RECORDINGS_DIR, defaultName),
-					filters: [
-						{
-							name: mainT("dialogs", "fileDialogs.openscreenProject"),
-							extensions: [PROJECT_FILE_EXTENSION],
-						},
-						{ name: "JSON", extensions: ["json"] },
-					],
-					properties: ["createDirectory", "showOverwriteConfirmation"],
-				},
-				getMainWindow(),
-			);
-			const result = await dialog.showSaveDialog(dialogOptions);
+			const dialogOptions: Electron.SaveDialogOptions = {
+				title: mainT("dialogs", "fileDialogs.saveProject"),
+				defaultPath: path.join(RECORDINGS_DIR, defaultName),
+				filters: [
+					{
+						name: mainT("dialogs", "fileDialogs.openscreenProject"),
+						extensions: [PROJECT_FILE_EXTENSION],
+					},
+					{ name: "JSON", extensions: ["json"] },
+				],
+				properties: ["createDirectory", "showOverwriteConfirmation"],
+			};
+			const result = await showSaveDialogOver(parent, dialogOptions);
 
 			if (result.canceled || !result.filePath) {
 				return {
@@ -4292,11 +4525,14 @@ export function registerIpcHandlers(
 		}
 	}
 
-	ipcMain.handle("load-project-file", async (_, projectFolder?: string) => {
-		return loadProjectFile(projectFolder);
+	ipcMain.handle("load-project-file", async (event, projectFolder?: string) => {
+		return loadProjectFile(projectFolder, BrowserWindow.fromWebContents(event.sender));
 	});
 
-	async function loadProjectFile(projectFolder?: string): Promise<ProjectFileResult> {
+	async function loadProjectFile(
+		projectFolder?: string,
+		parent?: BrowserWindow | null,
+	): Promise<ProjectFileResult> {
 		try {
 			// Default to the projects directory, where the editor actually stores
 			// openable project files (one `.openscreen` per project). Prefer the user's
@@ -4326,25 +4562,22 @@ export function registerIpcHandlers(
 					);
 				}
 			}
-			const dialogOptions = buildDialogOptions(
-				{
-					title: mainT("dialogs", "fileDialogs.openProject"),
-					defaultPath: defaultDir,
-					filters: [
-						{
-							name: mainT("dialogs", "fileDialogs.openscreenProject"),
-							// All projects are `.openscreen`; `.axcut` is kept only so files
-							// written by older builds (pre-migration) still show up.
-							extensions: [PROJECT_FILE_EXTENSION, "axcut"],
-						},
-						{ name: "JSON", extensions: ["json"] },
-						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
-					],
-					properties: ["openFile"],
-				},
-				getMainWindow(),
-			);
-			const result = await dialog.showOpenDialog(dialogOptions);
+			const dialogOptions: Electron.OpenDialogOptions = {
+				title: mainT("dialogs", "fileDialogs.openProject"),
+				defaultPath: defaultDir,
+				filters: [
+					{
+						name: mainT("dialogs", "fileDialogs.openscreenProject"),
+						// All projects are `.openscreen`; `.axcut` is kept only so files
+						// written by older builds (pre-migration) still show up.
+						extensions: [PROJECT_FILE_EXTENSION, "axcut"],
+					},
+					{ name: "JSON", extensions: ["json"] },
+					{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
+				],
+				properties: ["openFile"],
+			};
+			const result = await showOpenDialogOver(parent, dialogOptions);
 
 			if (result.canceled || result.filePaths.length === 0) {
 				return { success: false, canceled: true, message: "Open project canceled" };
@@ -4400,6 +4633,19 @@ export function registerIpcHandlers(
 			const content = await fs.readFile(filePath, "utf-8");
 			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
 			currentProjectPath = filePath;
+			// A document the editor saved grants the media it declares, within the same trusted
+			// dirs as a legacy v2 project below: the recordings dir and the project's own dir.
+			// This file came from an arbitrary path, not from the editor's projects dir.
+			if (isAxcutDocumentFile(project)) {
+				try {
+					approveDocumentMedia(parseDocumentFile(project), [
+						RECORDINGS_DIR,
+						path.dirname(path.resolve(filePath)),
+					]);
+				} catch {
+					// Not a valid document: nothing is granted, and the caller reports the parse error.
+				}
+			}
 
 			// Approve session paths but tolerate failures (e.g. video moved outside trusted
 			// dirs) so the project still loads and the renderer can show "video not found".
@@ -4606,6 +4852,7 @@ export function registerIpcHandlers(
 		path.join(app.getPath("userData"), "projects"),
 		RECORDINGS_DIR,
 		approveDocumentMedia,
+		() => stylePresets.newProjectAppearance(),
 	);
 
 	// LlmConfigStore is single-instance for a duller reason — its constructor does
@@ -4624,6 +4871,21 @@ export function registerIpcHandlers(
 		}
 		return aiEditionLlmConfigInstance;
 	};
+
+	// The local MCP server offers the agent's tools to MCP clients the user runs
+	// (Claude Code, Codex…). Built here because this is where the agent's own
+	// dependencies live, but NOT started here: the headless CLI shares this
+	// function and must never bind the port a running app is listening on.
+	// `main.ts` starts it. Its writes have their own switch, off by default and
+	// read on every call — separate from the in-app agent's "Project edits", so
+	// turning the server on grants a client read access and nothing more.
+	const mcpSettings = new McpSettingsStore(app.getPath("userData"), safeStorage);
+	const mcpController = new McpController(mcpSettings, {
+		host: new EditorDocumentHost(ipcMain),
+		editsAllowed: () => mcpSettings.getSettings().allowEdits,
+		cursor: agentCursorTelemetryReader,
+		version: app.getVersion(),
+	});
 
 	registerNativeBridgeHandlers({
 		getPlatform: () => process.platform,
@@ -4680,5 +4942,8 @@ export function registerIpcHandlers(
 		renameAiEditionChatSession: (projectId, sessionId, title) =>
 			renameSession(projectId, sessionId, title),
 		deleteAiEditionChatSession: (projectId, sessionId) => deleteSession(projectId, sessionId),
+		getMcpController: () => mcpController,
 	});
+
+	return { mcpController };
 }

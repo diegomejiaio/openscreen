@@ -1,14 +1,12 @@
 // Export dialog for the new editor. Wires together:
 // 1. pickExportSavePath (native save dialog)
 // 2. the native D3D exporter (exportMultiNative / exportGifNative)
-// 3. writeExportToPath (writes the resulting buffer to disk)
+// 3. per-job GIF cancellation, with native cleanup before returning to options
 //
 // Format/quality/GIF options live in the dialog's local state. The
-// legacy `ExportDialog` (in components/video-editor) is the rich version
-// used by the legacy VideoEditor; this one is a compact surface tuned for
-// the new shell's modal style.
+// dialog uses the new shell's modal style.
 
-import { Download, FileVideo, FolderOpen, Loader2 } from "lucide-react";
+import { Download, FileVideo, FolderOpen, Loader2, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
@@ -28,7 +26,6 @@ import {
 	type ExportFormat,
 	type ExportProgress,
 	type ExportQuality,
-	type ExportVideoCodec,
 	GIF_FRAME_RATES,
 	GIF_SIZE_PRESETS,
 	type GifFrameRate,
@@ -36,13 +33,35 @@ import {
 } from "@/lib/exporter";
 import { calculateMp4ExportSettings, wouldUpscale } from "@/lib/exporter/mp4ExportSettings";
 import { outputFrameCount } from "@/lib/exporter/outputFrameCount";
-import { exportGifNative, exportMultiNative, useIsCpuCompositor } from "@/native";
+import {
+	cancelGifExportNative,
+	exportGifNative,
+	exportMultiNative,
+	useIsCpuCompositor,
+} from "@/native";
+import { NativeBridgeRequestError } from "@/native/client";
 import type { CompositorClipInput } from "@/native/contracts";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
 import { ModalShell } from "./Modals";
 import styles from "./NewEditorShell.module.css";
+import { Toggle } from "./RightPanes";
 
 type Phase = "idle" | "configuring" | "rendering" | "writing" | "done" | "error";
+
+interface ActiveExport {
+	id?: string;
+	cancelRequested: boolean;
+	unsubscribe?: () => void;
+}
+
+function disposeExport(exportJob: ActiveExport | null) {
+	exportJob?.unsubscribe?.();
+	if (exportJob?.id) {
+		void cancelGifExportNative(exportJob.id).catch((error) => {
+			console.warn("[export] failed to cancel detached GIF export", error);
+		});
+	}
+}
 
 /** hh:mm:ss (always shows hours, unlike the shared mm:ss `formatTimePadded`) — exports can run
  *  past an hour on either axis (video duration or render wall-time). */
@@ -64,6 +83,15 @@ function formatHms(totalSeconds: number): string {
  *  and resolves `{ success: false }` when even the fallback failed. The export already
  *  succeeded — failing to open the folder is not worth a second error toast, but it is worth
  *  a line. */
+/** The URL itself lives in electron/star-prompt.ts and is never sent from here: main opens the
+ *  repo root for every surface that offers a star, so the app menu and this prompt cannot drift
+ *  to different links — and a Store copy cannot be walked towards Releases or an .exe. */
+function openRepoPage(): void {
+	void window.electronAPI
+		?.openRepoPage?.()
+		.catch((err) => console.warn("[export] could not open the repo page:", err));
+}
+
 function revealExportedFile(filePath: string): void {
 	void window.electronAPI
 		?.revealInFolder?.(filePath)
@@ -134,7 +162,6 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	const [format, setFormat] = useState<ExportFormat>("mp4");
 	const [quality, setQuality] = useState<ExportQuality>("good");
 	const [fps, setFps] = useState<24 | 30 | 60>(60);
-	const [codec, setCodec] = useState<ExportVideoCodec>("h264");
 	const [gifFrameRate, setGifFrameRate] = useState<GifFrameRate>(15);
 	const [gifSize, setGifSize] = useState<GifSizePreset>("medium");
 	const [gifLoop, setGifLoop] = useState(true);
@@ -142,7 +169,21 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	const [progress, setProgress] = useState<ExportProgress | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [savedPath, setSavedPath] = useState<string | null>(null);
-	const cancelRef = useRef<{ cancel: () => void } | null>(null);
+	// Null until the main process says this export is the one that earns the ask, and null again
+	// the moment the user answers. The renderer never sees the counters behind that decision.
+	const [starPrompt, setStarPrompt] = useState<{ store: boolean } | null>(null);
+	const activeExport = useRef<ActiveExport | null>(null);
+	const [cancelPending, setCancelPending] = useState(false);
+	const pickerGeneration = useRef(0);
+
+	useEffect(
+		() => () => {
+			pickerGeneration.current += 1;
+			disposeExport(activeExport.current);
+			activeExport.current = null;
+		},
+		[],
+	);
 
 	// (Old behavior: the native compositor overlay used to be a top-level OS window outside the
 	//  Chromium surface, so we'd hide it here to put this modal in front. The compositor now
@@ -172,8 +213,8 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	);
 	// (The "largest clip" pick lived here for the old renderer-side GIF path, which
 	// sized to the best available footage independently of the quality tier. GIF now
-	// goes through the same native exporter as MP4 and shares its sizing, so only the
-	// smallest-clip pick below is still needed.)
+	// goes through the same native exporter as MP4 and starts from its "Source" size, so
+	// only the smallest-clip pick below is still needed.)
 
 	// Smallest clip's true (cropped) footprint on the timeline — a multiclip timeline can mix
 	// crops/resolutions, so this is what "Source" quality actually targets: sizing to the
@@ -204,25 +245,6 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	// quality actually uses these as its target size; 720p/1080p target a fixed short side
 	// regardless (`calculateDimensionsForShortSide`), so this only changes what "Source"
 	// resolves to.
-	// GIF is 8-bit indexed and grows fast with area, so the size preset caps the
-	// output height rather than following the quality tier. `original` keeps the
-	// tier's dims; the native side falls back to its own defaults when undefined.
-	const gifOutputDims = (
-		preset: GifSizePreset,
-		tierDims: { width: number; height: number } | null,
-	): { width?: number; height?: number } => {
-		if (!tierDims) return {};
-		const maxHeight = GIF_SIZE_PRESETS[preset].maxHeight;
-		if (!Number.isFinite(maxHeight) || tierDims.height <= maxHeight) {
-			return { width: tierDims.width, height: tierDims.height };
-		}
-		const scale = maxHeight / tierDims.height;
-		// Even dimensions: the compositor rasterises to this size and the readback
-		// assumes a tightly-packed RGBA buffer.
-		const even = (n: number) => Math.max(2, Math.round(n * scale) & ~1);
-		return { width: even(tierDims.width), height: even(tierDims.height) };
-	};
-
 	const tierOutputDims = (value: ExportQuality) =>
 		smallestSource
 			? calculateMp4ExportSettings({
@@ -230,26 +252,78 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 					sourceWidth: smallestSource.width,
 					sourceHeight: smallestSource.height,
 					aspectRatioValue: EXPORT_ASPECT,
+					frameRate: fps,
 				})
 			: null;
 
+	// GIF is 8-bit indexed and grows fast with area, so the size preset caps the output
+	// height. It starts from the "Source" size, never from the quality tier: that control is
+	// MP4-only and hidden while GIF is picked, yet the tier an MP4 choice left behind used to
+	// size the GIF (a 640x360 clip gave 852x480 after the 1080p tier, 640x360 after Source).
+	// So no preset upscales and `original` is the source size. The native side falls back
+	// to its own defaults when undefined.
+	const gifOutputDims = (preset: GifSizePreset): { width?: number; height?: number } => {
+		const source = tierOutputDims("source");
+		if (!source) return {};
+		const maxHeight = GIF_SIZE_PRESETS[preset].maxHeight;
+		if (source.height <= maxHeight) {
+			return { width: source.width, height: source.height };
+		}
+		const scale = maxHeight / source.height;
+		// Even dimensions: the compositor rasterises to this size and the readback
+		// assumes a tightly-packed RGBA buffer.
+		const even = (n: number) => Math.max(2, Math.round(n * scale) & ~1);
+		return { width: even(source.width), height: even(source.height) };
+	};
+
 	useEffect(() => {
 		if (!open) {
+			pickerGeneration.current += 1;
+			disposeExport(activeExport.current);
+			activeExport.current = null;
 			setPhase("idle");
 			setProgress(null);
 			setError(null);
 			setSavedPath(null);
-			cancelRef.current = null;
+			setCancelPending(false);
+			// This component stays mounted across `open`, so an unanswered prompt would otherwise
+			// survive the close and reappear on a later export's done panel — a second ask, which
+			// is the one thing the whole feature is built to avoid.
+			setStarPrompt(null);
 		}
 	}, [open]);
 
 	const handleClose = () => {
-		if (phase === "rendering" || phase === "writing") return;
+		if (phase === "rendering" || phase === "writing" || phase === "configuring") return;
 		onClose();
 	};
 
+	const handleCancel = async () => {
+		const job = activeExport.current;
+		if (phase !== "rendering" || !job?.id) {
+			handleClose();
+			return;
+		}
+		if (job.cancelRequested) return;
+		job.cancelRequested = true;
+		setCancelPending(true);
+		try {
+			await cancelGifExportNative(job.id);
+			// Native settlement decides the winner and confirms file cleanup.
+		} catch (err) {
+			if (activeExport.current !== job) return;
+			job.cancelRequested = false;
+			setCancelPending(false);
+			const message = err instanceof Error ? err.message : String(err);
+			setError(message);
+			setPhase("error");
+			toast.error(message);
+		}
+	};
+
 	const handleStart = async () => {
-		if (!document) return;
+		if (!document || activeExport.current || phase === "configuring") return;
+		const generation = ++pickerGeneration.current;
 		const asset = primaryAsset;
 		if (!asset) {
 			setError(t("exportDialog.addVideoBeforeExporting"));
@@ -267,16 +341,20 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		setError(null);
 		setProgress(null);
 		setSavedPath(null);
+		setCancelPending(false);
+		setStarPrompt(null);
 
 		let pickedPath: string | undefined;
 		try {
 			const picker = await window.electronAPI?.pickExportSavePath?.(suggested);
 			pickedPath = picker && "path" in picker ? picker.path : undefined;
 		} catch (err) {
+			if (generation !== pickerGeneration.current) return;
 			setError(err instanceof Error ? err.message : String(err));
 			setPhase("error");
 			return;
 		}
+		if (generation !== pickerGeneration.current) return;
 		if (!pickedPath) {
 			setPhase("idle");
 			return;
@@ -290,6 +368,11 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		// as the live preview, so an export can no longer disagree with what the
 		// user previewed.
 		{
+			const job: ActiveExport = {
+				id: format === "gif" ? crypto.randomUUID() : undefined,
+				cancelRequested: false,
+			};
+			activeExport.current = job;
 			setPhase("rendering");
 			// Render the real timeline when there are clips; else fall back to the fixture.
 			const clips = buildNativeClipList(document);
@@ -307,17 +390,21 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 			const sceneDesc = buildSceneDescription(document);
 			const totalFrames = outputFrameCount(clips, sceneDesc.speedRegions, outFps);
 			const startedAt = Date.now();
-			const unsubscribeProgress = window.electronAPI?.onNativeExportProgress?.((frames) => {
-				const elapsedS = (Date.now() - startedAt) / 1000;
-				const fractionDone = Math.min(1, frames / totalFrames);
-				const estimatedTimeRemaining = fractionDone > 0 ? elapsedS / fractionDone - elapsedS : 0;
-				setProgress({
-					currentFrame: frames,
-					totalFrames,
-					percentage: fractionDone * 100,
-					estimatedTimeRemaining,
-				});
-			});
+			const unsubscribeProgress = window.electronAPI?.onNativeExportProgress?.(
+				(frames, exportId) => {
+					if (activeExport.current !== job || job.cancelRequested || exportId !== job.id) return;
+					const elapsedS = (Date.now() - startedAt) / 1000;
+					const fractionDone = Math.min(1, frames / totalFrames);
+					const estimatedTimeRemaining = fractionDone > 0 ? elapsedS / fractionDone - elapsedS : 0;
+					setProgress({
+						currentFrame: frames,
+						totalFrames,
+						percentage: fractionDone * 100,
+						estimatedTimeRemaining,
+					});
+				},
+			);
+			job.unsubscribe = unsubscribeProgress;
 			try {
 				// The webcam background effect is applied by the compositor from the scene,
 				// so the clip list needs no pre-rendering pass.
@@ -330,22 +417,44 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				}
 				const stats =
 					format === "gif"
-						? await exportGifNative(exportClips, pickedPath, sceneJson, {
-								// GIF is 256-colour and grows fast; cap the long edge at the
-								// chosen preset rather than exporting at source size.
-								...gifOutputDims(gifSize, outDims),
-								fps: gifFrameRate,
-								// 0 = infinite, the historical GIF default; 1 = play once.
-								loopCount: gifLoop ? 0 : 1,
-							})
+						? await exportGifNative(
+								exportClips,
+								pickedPath,
+								sceneJson,
+								{
+									...gifOutputDims(gifSize),
+									fps: gifFrameRate,
+									// 0 = infinite, the historical GIF default; 1 = play once.
+									loopCount: gifLoop ? 0 : 1,
+								},
+								job.id,
+							)
 						: await exportMultiNative(exportClips, pickedPath, sceneJson, {
 								width: outDims?.width,
 								height: outDims?.height,
 								fps,
-								codec,
+								// H.264 only. The native pipeline still encodes H.265, but nothing
+								// offers it: it is software-only on Linux, slower than software on the
+								// measured Macs, and the files half the players cannot open.
+								codec: "h264",
+								bitrate: outDims?.bitrate,
 							});
+				if (activeExport.current !== job) return;
 				setSavedPath(pickedPath);
 				setPhase("done");
+				// Reported after the export succeeded, so a cancelled or failed run never counts.
+				// Main owns the whole decision; a failure here simply means no ask, which is the
+				// safe direction for something that may only ever happen once.
+				void window.electronAPI
+					?.starPromptExportFinished?.()
+					.then((result) => {
+						// The same generation guard the save picker uses: a close or a newer export
+						// invalidates this answer, and an IPC round trip is long enough for either to
+						// have happened. Without it a late "yes" lands on a dialog that has moved on.
+						if (generation !== pickerGeneration.current) return;
+						if (result?.offer) setStarPrompt({ store: result.store });
+					})
+					.catch((err) => console.warn("[export] star prompt check failed:", err));
 				toast.success(t("exportDialog.exportedVideo"), {
 					description: `${pickedPath} · ${formatHms(stats.videoDurationS)} ${t("exportDialog.exportedVideoOf")} ${formatHms(stats.wallS)}`,
 					action: {
@@ -356,6 +465,13 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 					},
 				});
 			} catch (err) {
+				if (activeExport.current !== job) return;
+				if (err instanceof NativeBridgeRequestError && err.code === "CANCELLED") {
+					setPhase("idle");
+					setProgress(null);
+					setError(null);
+					return;
+				}
 				setError(err instanceof Error ? err.message : String(err));
 				setPhase("error");
 				toast.error(t("exportDialog.exportFailed"), {
@@ -363,6 +479,10 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				});
 			} finally {
 				unsubscribeProgress?.();
+				if (activeExport.current === job) {
+					activeExport.current = null;
+					setCancelPending(false);
+				}
 			}
 			return;
 		}
@@ -405,17 +525,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 
 				{format === "mp4" ? (
 					<section>
-						<div
-							style={{
-								font: "500 11px/1 var(--font-body)",
-								textTransform: "uppercase",
-								letterSpacing: "0.06em",
-								color: "var(--muted)",
-								marginBottom: 8,
-							}}
-						>
-							{t("exportDialog.quality")}
-						</div>
+						<div className={styles.groupLabel}>{t("exportDialog.quality")}</div>
 						<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
 							{QUALITY_OPTIONS.map((q) => (
 								<button
@@ -428,9 +538,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 										flexDirection: "column",
 										gap: 2,
 										padding: "10px 12px",
-										border: `1px solid ${quality === q.value ? "var(--accent)" : "var(--border)"}`,
-										borderRadius: 10,
-										background: quality === q.value ? "var(--accent-wash)" : "var(--surface)",
+										...choiceStyle(quality === q.value),
 										color: "var(--fg-2)",
 										cursor: "pointer",
 										font: "500 13px/1 var(--font-body)",
@@ -453,7 +561,8 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 										return (
 											<span
 												style={{
-													font: "500 11px var(--font-body)",
+													font: "500 12px var(--font-body)",
+													fontVariantNumeric: "tabular-nums",
 													color: isUpscale ? "var(--warn)" : "var(--muted)",
 												}}
 											>
@@ -465,102 +574,27 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 								</button>
 							))}
 						</div>
-						<div
-							style={{
-								display: "grid",
-								gridTemplateColumns: "1fr 1fr",
-								gap: 12,
-								marginTop: 12,
-							}}
-						>
-							<div>
-								<div
-									style={{
-										font: "500 11px/1 var(--font-body)",
-										textTransform: "uppercase",
-										letterSpacing: "0.06em",
-										color: "var(--muted)",
-										marginBottom: 8,
-									}}
-								>
-									{t("exportDialog.frameRate")}
-								</div>
-								<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
-									{([24, 30, 60] as const).map((r) => (
-										<button
-											type="button"
-											key={r}
-											disabled={isBusy}
-											onClick={() => setFps(r)}
-											style={segStyle(fps === r)}
-										>
-											{r}
-										</button>
-									))}
-								</div>
-							</div>
-							<div>
-								<div
-									style={{
-										font: "500 11px/1 var(--font-body)",
-										textTransform: "uppercase",
-										letterSpacing: "0.06em",
-										color: "var(--muted)",
-										marginBottom: 8,
-									}}
-								>
-									{t("exportDialog.codec")}
-								</div>
-								<div
-									style={{
-										display: "grid",
-										gridTemplateColumns: "repeat(2, 1fr)",
-										gap: 6,
-									}}
-								>
-									{(
-										[
-											["h264", "H.264"],
-											["h265", "H.265"],
-											// VP9 has no AMF hardware encoder on this GPU — the native pipeline
-											// (the only MP4 export path now) rejects it outright (tested: a
-											// software libvpx-vp9 fallback worked but was too slow to ship).
-											// Hidden here rather than left selectable-then-erroring.
-										] as Array<[ExportVideoCodec, string]>
-									).map(([value, label]) => (
-										<button
-											type="button"
-											key={value}
-											disabled={isBusy}
-											onClick={() => setCodec(value)}
-											style={segStyle(codec === value)}
-											title={
-												value === "h264"
-													? t("exportDialog.codecBestCompatibility")
-													: t("exportDialog.codecMaySupportVary")
-											}
-										>
-											{label}
-										</button>
-									))}
-								</div>
+						<div style={{ marginTop: 12 }}>
+							<div className={styles.groupLabel}>{t("exportDialog.frameRate")}</div>
+							<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+								{([24, 30, 60] as const).map((r) => (
+									<button
+										type="button"
+										key={r}
+										disabled={isBusy}
+										onClick={() => setFps(r)}
+										style={segStyle(fps === r)}
+									>
+										{r}
+									</button>
+								))}
 							</div>
 						</div>
 					</section>
 				) : (
 					<section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 						<div>
-							<div
-								style={{
-									font: "500 11px/1 var(--font-body)",
-									textTransform: "uppercase",
-									letterSpacing: "0.06em",
-									color: "var(--muted)",
-									marginBottom: 8,
-								}}
-							>
-								{t("exportDialog.frameRate")}
-							</div>
+							<div className={styles.groupLabel}>{t("exportDialog.frameRate")}</div>
 							<div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
 								{GIF_FRAME_RATES.map((r) => (
 									<button
@@ -576,18 +610,8 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 							</div>
 						</div>
 						<div>
-							<div
-								style={{
-									font: "500 11px/1 var(--font-body)",
-									textTransform: "uppercase",
-									letterSpacing: "0.06em",
-									color: "var(--muted)",
-									marginBottom: 8,
-								}}
-							>
-								{t("exportDialog.size")}
-							</div>
-							<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+							<div className={styles.groupLabel}>{t("exportDialog.size")}</div>
+							<div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6 }}>
 								{(Object.keys(GIF_SIZE_PRESETS) as GifSizePreset[]).map((s) => (
 									<button
 										type="button"
@@ -603,19 +627,18 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 						</div>
 						<div className={styles.paneRow} style={{ margin: 0 }}>
 							<span className={styles.label}>{t("exportDialog.loopGif")}</span>
-							<button
-								type="button"
-								className={`${styles.toggle} ${gifLoop ? styles.isOn : ""}`}
-								aria-pressed={gifLoop}
+							<Toggle
+								checked={gifLoop}
+								ariaLabel={t("exportDialog.loopGif")}
 								disabled={isBusy}
-								onClick={() => setGifLoop((v) => !v)}
+								onChange={setGifLoop}
 							/>
 						</div>
 						<div
 							style={{
-								font: "500 11px/1.4 var(--font-mono)",
+								font: "500 12px/1.4 var(--font-body)",
+								fontVariantNumeric: "tabular-nums",
 								color: "var(--muted)",
-								letterSpacing: "0.04em",
 							}}
 						>
 							{gifFrameRate} FPS · {gifSizeLabel} ·{" "}
@@ -630,6 +653,15 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 					error={error}
 					pct={pct}
 					savedPath={savedPath}
+					starPrompt={starPrompt}
+					onAnswerStarPrompt={() => {
+						// Starring and declining are the same answer here: the ask is over. Cleared
+						// locally first so the block goes away on the click, not on the round trip.
+						setStarPrompt(null);
+						void window.electronAPI
+							?.dismissStarPrompt?.()
+							.catch((err) => console.warn("[export] could not record the star answer:", err));
+					}}
 				/>
 
 				{cpuCompositor && phase !== "done" && (
@@ -639,11 +671,15 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 					// wait reads as a hang.
 					<p
 						data-testid="export-cpu-warning"
+						// Amber as a tint, not as the text colour: --warn text is ~2:1 on the light theme.
 						style={{
 							margin: "0 0 4px",
+							padding: "10px 12px",
+							borderRadius: 10,
+							background: "var(--warn-soft)",
 							fontSize: "0.8125rem",
 							lineHeight: 1.4,
-							color: "var(--text-muted, rgb(0 0 0 / 0.65))",
+							color: "var(--fg-2)",
 						}}
 					>
 						{t("cpuCompositor.exportWarning")}
@@ -662,9 +698,11 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 					<button
 						type="button"
 						className={`${styles.btn} ${styles.btnSecondary}`}
-						onClick={handleClose}
-						disabled={isBusy}
+						onClick={handleCancel}
+						disabled={isBusy && !(format === "gif" && phase === "rendering" && !cancelPending)}
+						aria-busy={cancelPending}
 					>
+						{cancelPending && <Loader2 size={14} className="animate-spin" />}
 						{phase === "done" ? t("exportDialog.close") : t("exportDialog.cancel")}
 					</button>
 					<button
@@ -719,13 +757,11 @@ function FormatToggle({
 				justifyContent: "center",
 				gap: 8,
 				padding: "12px 16px",
-				border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
-				borderRadius: 10,
-				background: active ? "var(--accent-wash)" : "var(--surface)",
-				// Selection is conveyed by border + wash background (like the quality
+				...choiceStyle(active),
+				// Selection is conveyed by border + tinted background (like the quality
 				// cards below), not by swapping text color -- `--accent-on` is meant
-				// for text on a SOLID accent fill, and paired with the near-transparent
-				// `--accent-wash` it read as near-invisible dark-on-dark text.
+				// for text on a SOLID accent fill, and paired with a near-transparent
+				// tint it read as near-invisible dark-on-dark text.
 				color: "var(--fg)",
 				cursor: "pointer",
 				font: "600 14px/1 var(--font-body)",
@@ -743,38 +779,34 @@ function ProgressBlock({
 	error,
 	pct,
 	savedPath,
+	starPrompt,
+	onAnswerStarPrompt,
 }: {
 	phase: Phase;
 	progress: ExportProgress | null;
 	error: string | null;
 	pct: number;
 	savedPath: string | null;
+	starPrompt: { store: boolean } | null;
+	onAnswerStarPrompt: () => void;
 }) {
 	const t = useScopedT("editor");
-	if (phase === "idle" || phase === "configuring") {
-		return (
-			<div
-				style={{
-					padding: "16px",
-					border: "1px solid var(--border)",
-					borderRadius: 10,
-					background: "var(--surface-1)",
-					color: "var(--muted)",
-					font: "500 12px var(--font-body)",
-					textAlign: "center",
-				}}
-			>
-				{t("exportDialog.pickFormatAndExport")}
-			</div>
-		);
-	}
+	// Same string as the permanent app-menu entry and the native Help menu. It lives in `common`
+	// rather than in the orphaned `settings.support` block because the main process only bundles
+	// `common` and `dialogs`, and one label split across two namespaces is one label that drifts.
+	const tCommon = useScopedT("common");
+	// Nothing to say before an export: the format is the first control on screen and
+	// already picked. The old "Pick a format and press Export to start" plate was written
+	// for the UI that hid the format toggle under Advanced, and stayed up through the save
+	// picker where it was simply false.
+	if (phase === "idle" || phase === "configuring") return null;
 	if (phase === "done") {
 		return (
 			<div
 				style={{
 					padding: "16px",
 					border: "1px solid var(--brand)",
-					borderRadius: 10,
+					borderRadius: 12,
 					background: "var(--success-soft)",
 					color: "var(--fg-2)",
 					font: "500 12px var(--font-body)",
@@ -799,6 +831,50 @@ function ProgressBlock({
 						{t("exportDialog.showInFolder")}
 					</button>
 				) : null}
+				{starPrompt ? (
+					<div className={styles.starPrompt} data-testid="export-star-prompt">
+						<span className={styles.starPromptText}>{t("exportDialog.starPrompt")}</span>
+						<div className={styles.starPromptActions}>
+							<button
+								type="button"
+								data-testid="export-star-prompt-star"
+								className={`${styles.btn} ${styles.btnSecondary}`}
+								onClick={() => {
+									openRepoPage();
+									onAnswerStarPrompt();
+								}}
+							>
+								<Star size={14} />
+								{tCommon("actions.starOnGithub")}
+							</button>
+							{starPrompt.store ? (
+								// Deliberately NOT an answer: rating on the Store and starring the repo
+								// are different favours, and dismissing on the first would quietly cost
+								// the user the second.
+								<button
+									type="button"
+									data-testid="export-star-prompt-store"
+									className={`${styles.btn} ${styles.btnSecondary}`}
+									onClick={() => {
+										void window.electronAPI
+											?.openStoreReview?.()
+											.catch((err) => console.warn("[export] could not open the Store:", err));
+									}}
+								>
+									{t("exportDialog.rateOnStore")}
+								</button>
+							) : null}
+							<button
+								type="button"
+								data-testid="export-star-prompt-no"
+								className={styles.starPromptDecline}
+								onClick={onAnswerStarPrompt}
+							>
+								{t("exportDialog.starPromptNoThanks")}
+							</button>
+						</div>
+					</div>
+				) : null}
 			</div>
 		);
 	}
@@ -808,7 +884,7 @@ function ProgressBlock({
 				style={{
 					padding: "16px",
 					border: "1px solid var(--danger)",
-					borderRadius: 10,
+					borderRadius: 12,
 					background: "var(--danger-soft)",
 					color: "var(--danger)",
 					font: "500 12px var(--font-body)",
@@ -825,9 +901,8 @@ function ProgressBlock({
 		<div
 			style={{
 				padding: "12px 14px",
-				border: "1px solid var(--border)",
-				borderRadius: 10,
-				background: "var(--surface-1)",
+				borderRadius: 12,
+				background: "color-mix(in oklab, var(--fg) 5%, transparent)",
 				display: "flex",
 				flexDirection: "column",
 				gap: 8,
@@ -840,13 +915,14 @@ function ProgressBlock({
 					justifyContent: "space-between",
 				}}
 			>
-				<span style={{ font: "500 12px var(--font-body)", color: "var(--fg-2)" }}>
+				<span style={{ font: "500 13px var(--font-body)", color: "var(--fg-2)" }}>
 					{phase === "writing" ? t("exportDialog.writingFile") : t("exportDialog.renderingFrames")}
 				</span>
 				<span
 					style={{
-						font: "500 12px/1 var(--font-mono)",
-						color: "var(--brand)",
+						font: "600 13px/1 var(--font-body)",
+						fontVariantNumeric: "tabular-nums",
+						color: "var(--fg)",
 					}}
 				>
 					{Math.round(pct)}%
@@ -873,9 +949,9 @@ function ProgressBlock({
 			</div>
 			<div
 				style={{
-					font: "500 11px/1.4 var(--font-mono)",
+					font: "400 12px/1.4 var(--font-body)",
+					fontVariantNumeric: "tabular-nums",
 					color: "var(--muted)",
-					letterSpacing: "0.04em",
 				}}
 			>
 				{total > 0
@@ -886,14 +962,24 @@ function ProgressBlock({
 	);
 }
 
+/** The one selected look, shared by every choice in this dialog: accent border + accent-soft
+ *  fill when picked, a soft fill otherwise. The segments used to go solid mint while the cards
+ *  above them were tinted — two ways of saying "selected" on one screen. */
+function choiceStyle(active: boolean): React.CSSProperties {
+	return {
+		border: `1px solid ${active ? "var(--accent)" : "transparent"}`,
+		borderRadius: 10,
+		background: active ? "var(--accent-soft)" : "color-mix(in oklab, var(--fg) 5%, transparent)",
+	};
+}
+
 function segStyle(active: boolean): React.CSSProperties {
 	return {
-		padding: "8px 10px",
-		border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
-		borderRadius: 8,
-		background: active ? "var(--brand)" : "var(--bg)",
-		color: active ? "var(--accent-on)" : "var(--fg-2)",
+		padding: "10px 12px",
+		...choiceStyle(active),
+		color: active ? "var(--fg)" : "var(--fg-2)",
 		cursor: "pointer",
-		font: "500 12px/1 var(--font-body)",
+		font: `${active ? 600 : 500} 13px/1 var(--font-body)`,
+		fontVariantNumeric: "tabular-nums",
 	};
 }

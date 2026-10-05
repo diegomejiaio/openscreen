@@ -10,8 +10,10 @@
 import "@testing-library/jest-dom";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { EditorDialogsProvider, useEditorDialogActions } from "@/contexts/EditorDialogsContext";
 import { I18nProvider } from "@/contexts/I18nContext";
+import { ShortcutsProvider } from "@/contexts/ShortcutsContext";
 import { LOCALE_STORAGE_KEY } from "@/i18n/config";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 
@@ -34,6 +36,17 @@ vi.mock("@/native/client", () => ({
 			llmListProviderModels: () => Promise.resolve({ models: [] }),
 			llmSetConfig: copilotMocks.setConfig,
 			llmSetApiKey: copilotMocks.setApiKey,
+			// The list screen also shows the MCP server section, which reads its status on open.
+			mcpGetStatus: () =>
+				Promise.resolve({
+					enabled: false,
+					port: 47821,
+					allowEdits: false,
+					running: false,
+					url: "http://127.0.0.1:47821/mcp",
+					token: null,
+					error: null,
+				}),
 		},
 	},
 }));
@@ -53,6 +66,8 @@ function TopBar({ mode }: { mode: EditorMode }) {
 			projectTitle="Demo Project"
 			dirty={false}
 			canExport={false}
+			canUndo={false}
+			canRedo={false}
 			chatOpen={false}
 			actions={{
 				openProject: noop,
@@ -65,6 +80,8 @@ function TopBar({ mode }: { mode: EditorMode }) {
 				openProviderSettings: () => openDialog("providers"),
 				showAbout: noop,
 				checkForUpdates: noop,
+				undo: noop,
+				redo: noop,
 			}}
 		/>
 	);
@@ -77,10 +94,14 @@ function renderEditorChrome(locale: string, mode: EditorMode = "edit") {
 	localStorage.setItem(LOCALE_STORAGE_KEY, locale);
 	return render(
 		<I18nProvider>
-			<EditorDialogsProvider>
-				<TopBar mode={mode} />
-				<ProviderSettingsDialog />
-			</EditorDialogsProvider>
+			<ShortcutsProvider>
+				<TooltipProvider>
+					<EditorDialogsProvider>
+						<TopBar mode={mode} />
+						<ProviderSettingsDialog />
+					</EditorDialogsProvider>
+				</TooltipProvider>
+			</ShortcutsProvider>
 		</I18nProvider>,
 	);
 }

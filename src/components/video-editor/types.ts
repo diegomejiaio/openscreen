@@ -4,21 +4,23 @@ import {
 	type ZoomScaleInput,
 } from "@/lib/ai-edition/timeline/zoom-scale";
 import type { WebcamLayoutPreset } from "@/lib/compositeLayout";
+import type { CursorKind } from "@/lib/cursor/cursorThemes";
+import { DEFAULT_PROJECT_APPEARANCE, SETTING_BOUNDS } from "@/lib/projectDefaults";
 import { clamp01 } from "@/utils/math";
 
 export type { ZoomDepth, ZoomScaleInput };
 export type ZoomFocusMode = "manual" | "auto";
 export type { WebcamLayoutPreset };
-/** Webcam size as a percentage of the canvas reference dimension (10-50). */
+/** Webcam size as a percentage of the canvas reference dimension (15-60). */
 export type WebcamSizePreset = number;
 
-export const DEFAULT_WEBCAM_SIZE_PRESET: WebcamSizePreset = 25;
+export const DEFAULT_WEBCAM_SIZE_PRESET: WebcamSizePreset = 40;
 
 export const DEFAULT_WEBCAM_LAYOUT_PRESET: WebcamLayoutPreset = "picture-in-picture";
 
 export type WebcamMaskShape = "rectangle" | "circle" | "square" | "rounded";
 
-export const DEFAULT_WEBCAM_MASK_SHAPE: WebcamMaskShape = "rectangle";
+export const DEFAULT_WEBCAM_MASK_SHAPE: WebcamMaskShape = "square";
 
 export const DEFAULT_WEBCAM_MIRRORED = false;
 
@@ -36,8 +38,8 @@ export function isWebcamBackgroundMode(value: unknown): value is WebcamBackgroun
 
 export const DEFAULT_WEBCAM_BACKGROUND_MODE: WebcamBackgroundMode = "none";
 
-/** Slow motion of a gradient wallpaper, rendered by the native compositor from programme
- *  time. Only a `linear-gradient(...)` wallpaper moves; any other keeps its value and ignores it. */
+/** Motion of a gradient or image wallpaper, rendered by the native compositor from programme
+ *  time. A solid colour keeps the value and ignores it: nothing on it could move. */
 export const WALLPAPER_MOTIONS = ["none", "drift", "aurora", "waves"] as const;
 
 export type WallpaperMotion = (typeof WALLPAPER_MOTIONS)[number];
@@ -48,7 +50,7 @@ export function isWallpaperMotion(value: unknown): value is WallpaperMotion {
 
 export const DEFAULT_WEBCAM_BLUR_INTENSITY = 0.5;
 
-/** When true, the picture-in-picture webcam scales inversely with zoom (shrinks as you zoom in). */
+/** When true, the picture-in-picture webcam keeps 70% of its size while a zoom is active. */
 export const DEFAULT_WEBCAM_REACTIVE_ZOOM = true;
 
 export interface WebcamPosition {
@@ -76,36 +78,49 @@ export const DEFAULT_ROTATION_3D: Rotation3D = {
 };
 
 /** A fixed 3D angle: the screen holds one pose for the whole zoom. */
-export const FIXED_ROTATION_3D_PRESETS = ["iso", "left", "right"] as const;
+export const FIXED_ROTATION_3D_PRESETS = ["left", "right"] as const;
 export type FixedRotation3DPreset = (typeof FIXED_ROTATION_3D_PRESETS)[number];
 
 /**
- * A moving 3D camera. `follow-cursor` keeps the screen still and moves a real camera around it:
- * the camera orbits to the side the cursor is on and rises or dips with it, always level. The
- * native compositor renders it (`crates/compositor/src/camera.rs`). It needs the cursor track,
- * which the export only loads while the cursor is shown.
+ * A moving 3D camera. `orbit` keeps the screen still and moves a real camera around it, always
+ * level: to the side of a point of the screen, rising or dipping with it. The zoom's focus mode
+ * picks the point: the cursor under auto focus, which only drives it while the cursor is shown,
+ * the focus point under manual. The native compositor renders it
+ * (`crates/compositor/src/camera.rs`).
  */
-export const MOVING_ROTATION_3D_PRESETS = ["follow-cursor"] as const;
+export const MOVING_ROTATION_3D_PRESETS = ["orbit"] as const;
 export type MovingRotation3DPreset = (typeof MOVING_ROTATION_3D_PRESETS)[number];
 
 /** The zoom's "3D camera": absent means a flat screen. */
 export type Rotation3DPreset = FixedRotation3DPreset | MovingRotation3DPreset;
 
 export const ROTATION_3D_PRESET_ORDER: Rotation3DPreset[] = [
-	...FIXED_ROTATION_3D_PRESETS,
 	...MOVING_ROTATION_3D_PRESETS,
+	...FIXED_ROTATION_3D_PRESETS,
 ];
 
 export function isRotation3DPreset(value: unknown): value is Rotation3DPreset {
 	return typeof value === "string" && (ROTATION_3D_PRESET_ORDER as string[]).includes(value);
 }
 
-// Every preset carries all three components on purpose. With a single-axis rotation the projected
-// quad keeps an edge exactly parallel to the frame — both vertical edges for a pure Y rotation,
-// which is geometry rather than a setting — and a perfectly vertical edge cutting through text is
-// indistinguishable from `overflow: hidden`. That is what got reported three times as "the
-// recording is truncated" while the plane was in fact drawn whole. `regions.rs` holds the same
-// numbers and a test asserting no edge comes within 2° of an axis.
+/**
+ * A stored 3D camera, read: the presets that no longer exist map to the one that kept their look.
+ * `iso` (turned left, seen from above) became Left, with the same angle. Anything else unknown
+ * reads as a flat screen.
+ */
+export function readRotation3DPreset(value: unknown): Rotation3DPreset | undefined {
+	if (value === "iso") return "left";
+	return isRotation3DPreset(value) ? value : undefined;
+}
+
+// Left is the `iso` angle of v1.13.0, to the degree: turned left and seen from above, with its
+// slight roll. Right is its mirror (Y and Z negated). Every preset carries all three components on
+// purpose. With a single-axis rotation the projected quad keeps an edge exactly parallel to the
+// frame — both vertical edges for a pure Y rotation, which is geometry rather than a setting — and
+// a perfectly vertical edge cutting through text is indistinguishable from `overflow: hidden`.
+// That is what got reported three times as "the recording is truncated" while the plane was in
+// fact drawn whole. `regions.rs` holds the same numbers and a test asserting no edge comes within
+// 2° of an axis.
 //
 // A moving camera has no single pose. Its entry is its resting angle (`ELEVATION_DEG` in
 // `camera.rs`: cursor centred, the camera 4° above the screen, facing it), what a renderer without
@@ -113,10 +128,9 @@ export function isRotation3DPreset(value: unknown): value is Rotation3DPreset {
 // rotation of the screen. It is a camera angle, not a screen rotation, so this is the nearest
 // equivalent rather than the same picture.
 export const ROTATION_3D_PRESETS: Record<Rotation3DPreset, Rotation3D> = {
-	iso: { rotationX: -12, rotationY: -18, rotationZ: -2 },
-	left: { rotationX: -8, rotationY: -16, rotationZ: -1 },
-	right: { rotationX: -8, rotationY: 16, rotationZ: 1 },
-	"follow-cursor": { rotationX: -4, rotationY: 0, rotationZ: 0 },
+	left: { rotationX: -12, rotationY: -18, rotationZ: -2 },
+	right: { rotationX: -12, rotationY: 18, rotationZ: 2 },
+	orbit: { rotationX: -4, rotationY: 0, rotationZ: 0 },
 };
 
 /** Perspective distance in CSS px is this factor times min(viewport w, h). Same
@@ -149,8 +163,6 @@ export interface ZoomRegion {
 	source?: ZoomRegionSource;
 	/** When true, cursor is hidden during this zoom region. */
 	hideCursor?: boolean;
-	/** When true, each click presses the tilted plane, or recoils the `follow-cursor` camera (needs a `rotationPreset`). Omitted when off. */
-	clickImpact?: true;
 }
 
 export function getRotation3D(region: Pick<ZoomRegion, "rotationPreset">): Rotation3D {
@@ -251,6 +263,7 @@ export interface CursorTelemetryPoint {
 	timeMs: number;
 	cx: number;
 	cy: number;
+	visible?: boolean;
 	interactionType?: "move" | "click" | "double-click" | "right-click" | "middle-click" | "mouseup";
 	cursorType?:
 		| "arrow"
@@ -275,19 +288,25 @@ export interface CursorVisualSettings {
 	 * each click; pointing shapes also lean towards their motion. Other themes stay flat sprites.
 	 */
 	model3d: boolean;
-	clipToBounds: boolean;
+	/** The kinds drawn with the theme's arrow instead of their own sprite (`CURSOR_KINDS`). */
+	asArrow: CursorKind[];
+	/**
+	 * Each click gives the screen an impact, whatever the zoom's camera: a fixed angle rocks the
+	 * tilted screen toward the clicked side, the moving camera recoils, a flat screen is pushed
+	 * back (`frame_geometry::plan_frame`).
+	 */
+	clickImpact: boolean;
 	autoHide?: boolean;
 }
 
-export const DEFAULT_CURSOR_SIZE = 3.0;
-export const DEFAULT_CURSOR_SMOOTHING = 0.67;
-export const DEFAULT_CURSOR_MOTION_BLUR = 0.35;
-export const DEFAULT_CURSOR_CLICK_BOUNCE = 2.5;
+// The project defaults, under the names the legacy editor reads: one value, not two to keep in sync.
+export const DEFAULT_CURSOR_SIZE = DEFAULT_PROJECT_APPEARANCE.cursor.size;
+export const DEFAULT_CURSOR_SMOOTHING = DEFAULT_PROJECT_APPEARANCE.cursor.smoothing;
+export const DEFAULT_CURSOR_MOTION_BLUR = DEFAULT_PROJECT_APPEARANCE.cursor.motionBlur;
+export const DEFAULT_CURSOR_CLICK_BOUNCE = DEFAULT_PROJECT_APPEARANCE.cursor.clickBounce;
 // Off: the flat sprite every existing project renders.
-export const DEFAULT_CURSOR_MODEL3D = false;
-// false lets the cursor overflow into the background; true clips it to the canvas bounds.
-export const DEFAULT_CURSOR_CLIP_TO_BOUNDS = false;
-export const DEFAULT_CURSOR_AUTO_HIDE = false;
+export const DEFAULT_CURSOR_MODEL3D = DEFAULT_PROJECT_APPEARANCE.cursor.model3d;
+export const DEFAULT_CURSOR_AUTO_HIDE = DEFAULT_PROJECT_APPEARANCE.cursor.autoHide;
 export const DEFAULT_ZOOM_MOTION_BLUR = 0.35;
 
 export interface TrimRegion {
@@ -387,6 +406,8 @@ export interface AnnotationRegion {
 	content: string; // Legacy - still used for current type
 	textContent?: string; // Separate storage for text
 	imageContent?: string; // Separate storage for image data URL
+	/** `"frame"`: placed on the output frame. Absent: on the footage (see annotations/placement.ts). */
+	space?: "frame";
 	position: AnnotationPosition;
 	size: AnnotationSize;
 	style: AnnotationTextStyle;
@@ -462,8 +483,7 @@ export const DEFAULT_CROP_REGION: CropRegion = {
 
 export type PlaybackSpeed = number;
 
-export const MIN_PLAYBACK_SPEED = 0.1;
-export const MAX_PLAYBACK_SPEED = 100;
+export const [MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED] = SETTING_BOUNDS.playbackSpeed;
 // Chromium hard-caps HTMLMediaElement.playbackRate at 16 (setting more throws
 // NotSupportedError). At or below this, preview plays natively; above it, preview
 // frame-steps by seeking and audio export uses an offline pitch-preserved stretch.

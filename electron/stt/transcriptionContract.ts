@@ -71,7 +71,7 @@ export interface SttStatusEvent {
 	/** Total bytes for the in-flight download. */
 	totalBytes?: number;
 	/** Which model is downloading. */
-	model?: "whisper";
+	model?: "whisper" | "silero-vad";
 	/**
 	 * Seconds of audio transcribed so far, and the total for this request. Only
 	 * when `phase === "transcribe"`. Progress is reported per CHUNK (see
@@ -142,6 +142,17 @@ export interface SttTranscribeRequest {
  */
 export const STT_NATIVE_EXTRACTION_UNAVAILABLE = "stt:native-extraction-unavailable";
 
+/**
+ * Marker carried in the error message when audio extraction could not read the
+ * `sourcePath` itself: the OS refused the read, or ffmpeg hung opening the file
+ * (macOS holds the read behind a pending folder-access prompt, issue #968).
+ *
+ * Only `extractAudio.ts` sets it, so the renderer can tell "this file's folder is
+ * not readable" from an engine failure that happens to mention a permission (model
+ * loading, the whisper helper). Same IPC reason as above for being a string.
+ */
+export const STT_MEDIA_UNREADABLE = "stt:media-unreadable";
+
 /** IPC response: main → renderer. */
 export interface SttTranscribeResponse {
 	segments: SttPhraseSegment[];
@@ -158,3 +169,9 @@ export interface SttTranscribeResponse {
 
 /** IPC success envelope; thrown errors cross as a rejection. */
 export type SttTranscribeResult = SttTranscribeResponse;
+
+/** A detected speech segment with timestamps in seconds. */
+export interface SttVadSegment {
+	startSec: number;
+	endSec: number;
+}

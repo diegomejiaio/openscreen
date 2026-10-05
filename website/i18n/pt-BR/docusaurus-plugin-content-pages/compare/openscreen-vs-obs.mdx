@@ -25,10 +25,10 @@ Esta página é publicada pelo projeto OpenScreen. Os dados sobre o OBS Studio v
 | O que grava | Uma tela ou uma janela, com webcam, microfone e áudio do sistema. Corte a imagem depois no editor | Cenas que combinam telas, janelas, webcams, imagens, texto, janelas de navegador e placas de captura. As fontes podem ser cortadas antes de gravar |
 | Transmissão ao vivo | Não | Sim, para serviços integrados ou um servidor personalizado |
 | Editor integrado | Sim. Linha do tempo com vários clipes, cortes, mudanças de velocidade, zooms e anotações | Nenhum. A lista de recursos dele cobre captura, mixagem, cenas e transmissão |
-| Zooms automáticos | Sim, posicionados a partir do cursor gravado | Script da comunidade "Zoom to Mouse", acionado por atalho |
+| Zooms automáticos | Sim, posicionados nos cliques gravados | Script da comunidade "Zoom to Mouse", acionado por atalho |
 | Legendas | Whisper no dispositivo, um modelo de cerca de 264 MB, baixado uma vez. Embutidas no vídeo | Ferramenta de legendas integrada, só no Windows. O plugin gratuito LocalVocal transcreve localmente nos três sistemas e grava arquivos .srt |
 | Formato de gravação | MP4 H.264 com captura nativa | H.264, AV1, HEVC com codificador por hardware, ou ProRes em um Mac. Hybrid MP4 ou MOV por padrão, além de MKV, FLV, MPEG-TS e outros |
-| Saída | MP4 (H.264 ou H.265) ou GIF, até 60 fps, sem marca d'água | O próprio arquivo de gravação |
+| Saída | MP4 (H.264) ou GIF, até 60 fps, sem marca d'água | O próprio arquivo de gravação |
 | Como estender | Uma interface de linha de comando com saída em JSON | Gerenciador de plugins, scripts Lua e Python, controle remoto por WebSocket |
 
 ## O que as duas ferramentas fazem {#what-both-tools-do}
@@ -47,7 +47,7 @@ As duas se sobrepõem mais do que a divisão "quem transmite versus quem edita" 
 ### Edição no mesmo app {#editing-in-the-same-app}
 
 - **Uma linha do tempo depois da gravação.** Importe gravações ou vídeos existentes, reordene-os, e defina pontos de entrada e saída e um corte da imagem para cada clipe. Corte trechos e mude a velocidade de 0,1× até 100×. Veja [Edição e linha do tempo](/docs/editing-timeline/) e [Biblioteca de mídia](/docs/media-library/).
-- **Zooms posicionados depois.** **Melhoria automática → Zooms automáticos** lê o movimento gravado do cursor e coloca regiões de zoom nos momentos em que o cursor se detém, sem chamada de rede e sem modelo. Zooms manuais em seis profundidades ficam ao lado deles. O script "Zoom to Mouse" do OBS dá zoom em uma captura de tela quando você pressiona o atalho dele, então cada zoom é decidido durante a gravação. Mais em [zoom automático](/features/auto-zoom/).
+- **Zooms posicionados depois.** **Melhoria automática → Zooms automáticos** lê os cliques gravados e dá zoom neles, sem chamada de rede e sem modelo. Zooms manuais em seis profundidades ficam ao lado deles. O script "Zoom to Mouse" do OBS dá zoom em uma captura de tela quando você pressiona o atalho dele, então cada zoom é decidido durante a gravação. Mais em [zoom automático](/features/auto-zoom/).
 - **Um cursor que você pode mudar depois.** Por padrão, o OpenScreen grava o ponteiro como dados em vez de pixels. Você pode redimensioná-lo, suavizar o caminho dele, e adicionar desfoque de movimento e rebote de clique depois de gravar. O que cada sistema captura está listado em [Modo do cursor](/docs/recording/#cursor-mode).
 - **Enquadramento.** Adicione um papel de parede, uma cor sólida, um gradiente ou sua própria imagem atrás da gravação, com espaçamento, cantos arredondados e sombra. Saída em 16:9, 9:16, 1:1, 4:3, 4:5, 16:10, 10:16, ou o formato original dos clipes.
 - **Anotações na linha do tempo.** Texto com seis animações, setas em oito direções, imagens e regiões de desfoque, gaussiano ou mosaico. O OBS adiciona texto e imagens como fontes de cena enquanto você grava. O OpenScreen os posiciona depois da gravação, onde você pode movê-los.
@@ -60,7 +60,7 @@ As duas se sobrepõem mais do que a divisão "quem transmite versus quem edita" 
 
 ### Exportação e edição por chat {#export-and-chat-editing}
 
-- **Uma etapa de exportação com opções.** MP4 em 720p, 1080p ou resolução de origem, a 24, 30 ou 60 fps, em H.264 ou H.265, ou um GIF. Sem marca d'água. No OBS, a resolução de saída, a taxa de quadros e o codificador são definidos em Configurações antes de gravar. Veja [Exportação](/docs/export/).
+- **Uma etapa de exportação com opções.** MP4 em 720p, 1080p ou resolução de origem, a 24, 30 ou 60 fps, em H.264, ou um GIF. Sem marca d'água. No OBS, a resolução de saída, a taxa de quadros e o codificador são definidos em Configurações antes de gravar. Veja [Exportação](/docs/export/).
 - **Edição por chat opcional, com sua própria chave.** Descreva cortes, zooms, mudanças de velocidade ou anotações em linguagem natural. Cada mudança vira uma edição comum, que pode ser desfeita. Fica desligado até você conectar um provedor. Veja [Edição com IA](/docs/ai-editing/).
 
 ## Quando o OBS Studio é a melhor escolha {#when-obs-studio-is-the-better-choice}
@@ -84,8 +84,8 @@ Alguns recursos não se aplicam a um arquivo do OBS. Zooms automáticos, foco de
 ## Primeiros passos {#getting-started}
 
 1. Baixe o OpenScreen na [página de download](/download/). No Windows, a Microsoft Store é o caminho recomendado.
-2. Siga a [Instalação](/docs/installation/). No macOS, conceda as permissões de Gravação de Tela e Acessibilidade antes da primeira gravação.
-3. Faça uma primeira gravação com o [início rápido](/docs/quick-start/), depois rode **Melhoria automática → Zooms automáticos** nela. Para editar uma gravação do OBS, comece pela [biblioteca de mídia](/docs/media-library/) e adicione [legendas](/docs/captions/).
+2. Siga a [Instalação](/docs/installation/). No macOS, conceda as permissões na janela que se abre na primeira execução.
+3. Faça uma primeira gravação com o [início rápido](/docs/quick-start/). Ela abre no editor com os zooms automáticos já posicionados. Para editar uma gravação do OBS, comece pela [biblioteca de mídia](/docs/media-library/) e adicione [legendas](/docs/captions/).
 
 Comparando outras ferramentas também? Veja a [alternativa ao Screen Studio](/alternatives/screen-studio/), [OpenScreen vs Cap](/compare/openscreen-vs-cap/), a [alternativa ao Camtasia](/alternatives/camtasia/) e a [alternativa ao Loom](/alternatives/loom/). Para um passo a passo completo, leia o [guia de vídeo de demonstração de produto](/docs/guides/product-demo-video/), ou volte para a [página inicial do OpenScreen](/).
 

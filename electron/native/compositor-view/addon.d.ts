@@ -34,6 +34,33 @@ export interface NativeFramePacket {
 	width: number;
 	height: number;
 	data: Buffer;
+	/** The footage in this frame: its TL, TR, BR, BL corners (x, y as fractions of the frame,
+	 *  eight numbers), where a privacy blur's gimbal goes. Absent before anything is composed. */
+	footage?: number[] | null;
+	/** The footage maps from those corners by their homography (real camera), not bilinearly. */
+	footageProjective?: boolean;
+	/** Where the view was when it composed this frame: the active clip in `scene.clips` and the
+	 *  screen frame's time in its source file. Absent from an older `.node`. */
+	clipIndex?: number;
+	sourceTimeSec?: number;
+}
+
+/** A preview frame left in a shared GPU texture instead of copied into RAM (Windows, hardware
+ *  backend — see `setSharedFrames`). `handle` is the texture's NT handle the way Electron's
+ *  `sharedTexture.importSharedTexture` takes it: 8 bytes, little-endian, valid in this process
+ *  only. Its `slot` stays reserved until `releaseSharedFrame(id, slot, gen)`. */
+export interface NativeSharedFramePacket {
+	gen: number;
+	slot: number;
+	handle: Buffer;
+	width: number;
+	height: number;
+	footage?: number[] | null;
+	footageProjective?: boolean;
+	/** Where the view was when it composed this frame: the active clip in `scene.clips` and the
+	 *  screen frame's time in its source file. Absent from an older `.node`. */
+	clipIndex?: number;
+	sourceTimeSec?: number;
 }
 
 export interface ExportStats {
@@ -66,14 +93,14 @@ export interface RemuxStats {
 }
 
 /** Sortie GIF native : taille, cadence, loop, dither. Tout optionnel —
- *  absent → 854×480, 12 fps, boucle infinie, pas de dithering. */
+ *  absent → 854×480, 12 fps, boucle infinie, dithering Floyd-Steinberg. */
 export interface GifParamsInput {
 	width?: number;
 	height?: number;
 	fps?: number;
 	/** GIF loop count: `0` or omitted = infinite, else `n` finite loops. */
 	loopCount?: number;
-	/** Floyd-Steinberg error diffusion before quantization. Off by default. */
+	/** Floyd-Steinberg error diffusion at quantization. On by default. */
 	dither?: boolean;
 }
 
@@ -86,6 +113,9 @@ export interface ExportParamsInput {
 	/** "h264" | "h265". Anything else (e.g. "vp9", no AMF hardware equivalent) fails the export
 	 *  with a clear error instead of silently falling back to h264. */
 	codec?: string;
+	/** Target video bitrate in bits/s, from the output size and frame rate. Omitted or 0 → the
+	 *  pipeline's own fallback, which ignores the frame rate (8 Mb/s at 1080p). */
+	bitrate?: number;
 }
 
 /** One timeline clip for the native multiclip export (screen + webcam files + source trim). */
@@ -120,6 +150,11 @@ export interface CompositorViewAddon {
 	 *  `--dir` build has none either. */
 	segmentationRuntimeAvailable(): boolean;
 
+	/** Subject mask for ONE frame, outside any view — the crop thumbnail shows the camera
+	 *  background with it. `rgba` is already at the model's size (256x144 RGBA8); resolves one
+	 *  byte per pixel, 0 = background, 255 = subject. Optional: an older `.node` predates it. */
+	segmentFrame?(modelPath: string, rgba: Buffer): Promise<Buffer>;
+
 	/** Allocates an offscreen compositor view sized to `rect.width`x`rect.height` (the
 	 *  target preview resolution; `rect.x` / `rect.y` are vestigial and ignored native-side).
 	 *  No HWND/native-window-handle is passed: there's no OS window to parent to. The
@@ -145,6 +180,17 @@ export interface CompositorViewAddon {
 	 *  still frame): `null` comes back WITHOUT cloning the buffer or crossing IPC.
 	 *  Pass `sinceGen = 0` to force delivery of the current frame. */
 	readFrame(id: number, sinceGen: number): NativeFramePacket | null;
+	/** Deliver this view's frames as shared GPU textures (`readSharedFrame`) rather than RAM
+	 *  pixels (`readFrame`). Returns `false` where that cannot work (not Windows, software
+	 *  backend): the view keeps reading back. Optional: an older `.node` predates it. */
+	setSharedFrames?(id: number, enabled: boolean): boolean;
+	/** The latest frame left in the view's shared texture ring, if newer than `sinceGen`.
+	 *  `null` too while the view reads back to RAM. Throws the render thread's fatal error,
+	 *  like `readFrame`. */
+	readSharedFrame?(id: number, sinceGen: number): NativeSharedFramePacket | null;
+	/** Chromium let go of frame `gen` in `slot`, in every process: the render thread may write
+	 *  that slot again. A no-op for a destroyed view. */
+	releaseSharedFrame?(id: number, slot: number, gen: number): void;
 	setParam(id: number, key: string, value: CompositorParamValue): void;
 	setPlaying(id: number, playing: boolean): void;
 	/** Seeks the view to source-media `seconds` for the active clip. */
@@ -183,7 +229,7 @@ export interface CompositorViewAddon {
 	 *  in the compositor crate and differ only in the encoder. Cursor, background,
 	 *  layout and webcam all come from the scene, so there is no GIF-specific
 	 *  input. No codec pick: GIF is one codec. `params` defaults to 854×480,
-	 *  12 fps, infinite loop, no dithering (`GifExportParams::default`).
+	 *  12 fps, infinite loop, dithered (`GifExportParams::default`).
 	 *  `onProgress(frames)` is throttled to ~10/s like the MP4 path. */
 	exportGif(
 		clips: ClipInput[],
@@ -191,7 +237,11 @@ export interface CompositorViewAddon {
 		sceneJson?: string,
 		params?: GifParamsInput,
 		onProgress?: (frames: number) => void,
+		control?: object,
 	): Promise<GifExportStats>;
+	/** Opaque napi External: kept in main, never sent to a renderer. */
+	createGifExportControl?(): object;
+	cancelGifExport?(control: object): boolean;
 
 	/** Stream-copy `inputPath` to `outputPath` through the matroska muxer, rebuilding the
 	 *  container (real `Duration` computed from the packet timestamps, plus `Cues` and
@@ -201,6 +251,14 @@ export interface CompositorViewAddon {
 	 *  (dev trees keep a stale binary until the next `build-linux-compositor-addon.mjs`),
 	 *  and the caller degrades to "leave the file alone" rather than failing the save. */
 	remuxSeekable?(inputPath: string, outputPath: string): Promise<RemuxStats>;
+
+	/** Loudness-normalisation gain in dB that the export applies to this voice file (the
+	 *  recording's own audio, or a voiceover take), measured over the whole file. The
+	 *  preview applies the same number so it plays the voice at the exported level.
+	 *  0 for a file with no audio, only silence, or that cannot be read.
+	 *
+	 *  Optional for the same reason as `remuxSeekable`: a stale `.node` predates it. */
+	loudnessGainDb?(path: string): Promise<number>;
 }
 
 /**

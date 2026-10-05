@@ -33,7 +33,7 @@ const sampleDoc = vi.hoisted(
 		// imports are initialised, so reading the constant here throws
 		// "Cannot access ... before initialization". The typecheck gate catches it
 		// if it ever falls behind the schema.
-		schemaVersion: 7,
+		schemaVersion: 8,
 		project: {
 			id: "proj_test",
 			title: "Test",
@@ -127,11 +127,27 @@ describe("EditorEmptyState (new editor)", () => {
 	it("shows both import + open-project buttons when no project is loaded", () => {
 		renderWithI18n(<EditorEmptyState hasProject={false} />);
 
-		expect(screen.getByText(/no project open/i)).toBeInTheDocument();
-		expect(
-			screen.getByRole("button", { name: /new project \+ import video/i }),
-		).toBeInTheDocument();
+		expect(screen.getByText(/start with a recording/i)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /import a video/i })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /open project/i })).toBeInTheDocument();
+	});
+
+	it("leads with recording on a first run, and keeps import and open beside it", () => {
+		const onRecord = vi.fn();
+		renderWithI18n(<EditorEmptyState hasProject={false} onRecord={onRecord} />);
+
+		const buttons = screen.getAllByRole("button");
+		// The first action on the screen is the recorder's own.
+		expect(buttons[0]).toHaveAccessibleName(/record your screen/i);
+		fireEvent.click(buttons[0]);
+		expect(onRecord).toHaveBeenCalledTimes(1);
+		expect(screen.getByRole("button", { name: /import a video/i })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /open project/i })).toBeInTheDocument();
+	});
+
+	it("does not offer to record into a project that only lacks media", () => {
+		renderWithI18n(<EditorEmptyState hasProject={true} onRecord={vi.fn()} />);
+		expect(screen.queryByRole("button", { name: /record your screen/i })).not.toBeInTheDocument();
 	});
 
 	it("imports a video: file picker → addAsset on the existing project", async () => {
@@ -197,7 +213,7 @@ describe("EditorEmptyState (new editor)", () => {
 		renderWithI18n(<EditorEmptyState hasProject={false} />);
 
 		await act(async () => {
-			fireEvent.click(screen.getByRole("button", { name: /new project \+ import video/i }));
+			fireEvent.click(screen.getByRole("button", { name: /import a video/i }));
 		});
 
 		await waitFor(() => {
@@ -233,7 +249,7 @@ describe("EditorEmptyState (new editor)", () => {
 		renderWithI18n(<EditorEmptyState hasProject={false} />);
 
 		const file = new File([new Uint8Array([0, 1, 2])], "recording.mp4", { type: "video/mp4" });
-		const dropZone = screen.getByText(/no project open/i).parentElement?.parentElement
+		const dropZone = screen.getByText(/start with a recording/i).parentElement?.parentElement
 			?.parentElement as HTMLElement;
 		expect(dropZone).toBeTruthy();
 
@@ -245,7 +261,7 @@ describe("EditorEmptyState (new editor)", () => {
 		});
 
 		await waitFor(() => {
-			expect(screen.getByText(/unsupported format/i)).toBeInTheDocument();
+			expect(screen.getByText(/unsupported file/i)).toBeInTheDocument();
 		});
 	});
 });

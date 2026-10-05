@@ -9,11 +9,16 @@ keywords:
   - 屏幕录制自动字幕
 ---
 
+import DemoLoop from "@site/src/components/DemoLoop";
+import DemoLoopPair from "@site/src/components/DemoLoop/Pair";
+
 # 一款字幕在本机生成的录屏软件
 
 OpenScreen 是一款面向 Windows、macOS 和 Linux 的免费录屏软件，采用 MIT 许可证，具备字幕功能。它会在你自己的电脑上用 Whisper 转录录制内容，只需一次性下载约 264 MB 的模型，并将带样式的字幕烧录进导出的视频。如果你需要为课程平台或无障碍要求提供独立的 SRT 或 VTT 字幕文件，Cap 或 Camtasia 是更好的选择。
 
 本页由 OpenScreen 项目发布。关于 Cap、Camtasia 和 Screen Studio 的信息来自 cap.so、techsmith.com 和 screen.studio，核实于 2026 年 9 月。信息来源列于文末。
+
+<DemoLoop name="automatic-subtitles" />
 
 ## 一览 {#at-a-glance}
 
@@ -52,11 +57,18 @@ Whisper 会自行检测所说的语言。如果检测错误，可以在媒体工
 
 预览和导出使用同一套排版，因此你看到的字幕就是烧录进视频的字幕。**显示字幕**开关可用于导出不带字幕的版本。完整参考请见[字幕与转录](/docs/captions/)。
 
+<DemoLoop name="caption-styles" />
+
 ### 通过删除词语来剪切 {#cutting-by-deleting-words}
 
 **转录文本**面板显示时间轴上每个片段的词语。选中一个词或一段文字并按删除键：对应的片段会从播放和导出中剪掉，效果与时间轴上的修剪相同。被剪掉的词语会显示删除线，你也可以将其恢复。静音同样会在文本中标出，可以用同样的方式剪切或恢复。
 
 Whisper 报告的词语时间点会略微偏晚。OpenScreen 会把每个词语的边界拉回到音频本身，因此剪切会从词语实际开始的位置起效，而不是晚一个音节。参见[转录文本编辑](/docs/captions/#transcript-editing)。
+
+<DemoLoopPair>
+  <DemoLoop name="edit-by-transcript" />
+  <DemoLoop name="tighten-pauses" />
+</DemoLoopPair>
 
 ### 使用你自己密钥的翻译 {#translation-with-your-own-key}
 

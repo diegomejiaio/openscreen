@@ -1,15 +1,29 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	act,
+	fireEvent,
+	type RenderOptions,
+	render as renderWithoutTooltips,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
+import type { ReactElement } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { assetSchema, clipSchema, createEmptyDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { nativeBridgeClient } from "@/native";
 
 vi.mock("@/contexts/I18nContext", () => ({
 	useScopedT: (scope: string) => (key: string) => `${scope}.${key}`,
 }));
 
-vi.mock("../RightPanes", () => ({
+vi.mock("../RightPanes", async (importOriginal) => ({
 	AudioPane: () => <div data-testid="audio-pane">AudioPane</div>,
+	// The real row: the zoom pane's choices are read and pressed below.
+	ChoiceRow: (await importOriginal<typeof import("../RightPanes")>()).ChoiceRow,
 	AudioTrackPane: ({ onClose }: { onClose?: () => void }) => (
 		<div data-testid="audio-track-pane">
 			AudioTrackPane
@@ -23,12 +37,11 @@ vi.mock("../RightPanes", () => ({
 	CursorPane: () => <div data-testid="cursor-pane">CursorPane</div>,
 	LayoutPane: () => <div data-testid="layout-pane">LayoutPane</div>,
 	SliderCell: () => <div data-testid="slider-cell">SliderCell</div>,
-	Toggle: () => <div data-testid="toggle">Toggle</div>,
 	TranscriptPane: () => <div data-testid="transcript-pane">TranscriptPane</div>,
 	VideoEffectsPane: () => <div data-testid="effects-pane">VideoEffectsPane</div>,
 }));
 
-const editorSettings = vi.hoisted(() => ({ cursorShow: true }));
+const editorSettings = vi.hoisted(() => ({ cursorShow: true, autoFocusAll: false }));
 vi.mock("@/lib/ai-edition/store/useEditorSettings", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/lib/ai-edition/store/useEditorSettings")>();
 	return {
@@ -36,7 +49,7 @@ vi.mock("@/lib/ai-edition/store/useEditorSettings", async (importOriginal) => {
 			const result = actual.useEditorSettings();
 			return {
 				...result,
-				settings: { ...result.settings, cursorShow: editorSettings.cursorShow },
+				settings: { ...result.settings, ...editorSettings },
 			};
 		},
 	};
@@ -46,7 +59,18 @@ vi.mock("../CaptionsPane", () => ({
 	CaptionsPane: () => <div data-testid="captions-pane">CaptionsPane</div>,
 }));
 
-import { FloatingInspector } from "./FloatingInspector";
+import { AnnotationSizeControl, AnnotationSizeField, FloatingInspector } from "./FloatingInspector";
+
+// The rail's buttons have tooltips, and the app's root provides the provider they need.
+function render(ui: ReactElement, options?: Omit<RenderOptions, "wrapper">) {
+	return renderWithoutTooltips(ui, { wrapper: TooltipProvider, ...options });
+}
+
+class StubResizeObserver {
+	observe = vi.fn();
+	unobserve = vi.fn();
+	disconnect = vi.fn();
+}
 
 describe("FloatingInspector", () => {
 	const defaultProps: React.ComponentProps<typeof FloatingInspector> = {
@@ -76,6 +100,67 @@ describe("FloatingInspector", () => {
 		expect(svg?.classList.contains("lucide-camera")).toBe(true);
 	});
 
+	// The rail is icon-only. The name is the pane's title (which is also its heading), and the tip
+	// says what the pane holds: a second key, because the title cannot carry the list.
+	describe("rail tooltips", () => {
+		beforeEach(() => {
+			vi.stubGlobal("ResizeObserver", StubResizeObserver);
+		});
+		afterEach(() => {
+			vi.unstubAllGlobals();
+		});
+
+		async function tooltipOf(name: string) {
+			const button = screen.getByRole("button", { name });
+			act(() => button.focus());
+			await screen.findByRole("tooltip");
+			const visible = document.querySelector<HTMLElement>('[data-slot="tooltip-content"]');
+			const text = screen.getByRole("tooltip").textContent;
+			const side = visible?.getAttribute("data-side");
+			act(() => button.blur());
+			await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+			return { text, side, hasChip: Boolean(visible?.querySelector("kbd")) };
+		}
+
+		const oneClip = [
+			clipSchema.parse({
+				id: "c1",
+				assetId: "a1",
+				sourceStartSec: 0,
+				sourceEndSec: 10,
+				timelineStartSec: 0,
+				timelineEndSec: 10,
+				origin: "user",
+			}),
+		];
+
+		it("says what each facet holds, on the side that does not cover the next button", async () => {
+			render(<FloatingInspector {...defaultProps} clips={oneClip} />);
+
+			const names: Array<[string, string]> = [
+				["settings.effects.title", "settings.facets.tips.effects"],
+				["settings.layout.title", "settings.facets.tips.layout"],
+				["settings.audio.title", "settings.facets.tips.audio"],
+				["settings.facets.transcript", "settings.facets.tips.transcript"],
+				["editor.editClipDialog.title", "editor.inspector.editClipTip"],
+			];
+			for (const [name, tip] of names) {
+				const opened = await tooltipOf(name);
+				expect(opened.text).toBe(tip);
+				expect(opened.side).toBe("left");
+				expect(opened.hasChip).toBe(false);
+			}
+		});
+
+		it("uses no native title on any rail button", () => {
+			render(<FloatingInspector {...defaultProps} clips={oneClip} />);
+			const rail = screen.getByRole("button", { name: "settings.layout.title" }).parentElement;
+			const buttons = Array.from(rail?.querySelectorAll("button") ?? []);
+			expect(buttons.length).toBeGreaterThanOrEqual(5);
+			for (const button of buttons) expect(button).not.toHaveAttribute("title");
+		});
+	});
+
 	it("renders collapse button with editor.inspector.collapseInspector and collapses inspector when clicked", () => {
 		const onToggleOpen = vi.fn();
 		render(<FloatingInspector {...defaultProps} facet="audio" onToggleOpen={onToggleOpen} />);
@@ -102,74 +187,66 @@ describe("FloatingInspector", () => {
 		expect(clearSelection).toHaveBeenCalledTimes(1);
 	});
 
-	describe("click impact checkbox", () => {
-		const zoomTl = (region: Record<string, unknown>) => {
-			const updateZoomClickImpact = vi.fn();
+	describe("annotation pane", () => {
+		const text = {
+			id: "a",
+			startMs: 0,
+			endMs: 1000,
+			type: "text",
+			content: "Hi",
+			space: "frame",
+			position: { x: 45, y: 45 },
+			size: { width: 10, height: 10 },
+			style: {
+				color: "#ffffff",
+				backgroundColor: "transparent",
+				fontSize: 32,
+				fontFamily: "Inter",
+				fontWeight: "bold",
+				fontStyle: "normal",
+				textDecoration: "none",
+				textAlign: "center",
+			},
+			zIndex: 1,
+		};
+		const annotationTl = () => {
+			const updateAnnotationLive = vi.fn();
 			const tl = {
 				...defaultProps.tl,
-				selection: { kind: "zoom", id: "z" },
-				zoomRegions: [
-					{ id: "z", startMs: 0, endMs: 1000, depth: 3, focus: { cx: 0.5, cy: 0.5 }, ...region },
-				],
-				updateZoomClickImpact,
+				selection: { kind: "annotation", id: "a" },
+				annotationRegions: [text],
+				updateAnnotationLive,
+				commitAnnotationChange: vi.fn(),
 			} as unknown as React.ComponentProps<typeof FloatingInspector>["tl"];
-			return { tl, updateZoomClickImpact };
+			return { tl, updateAnnotationLive };
 		};
+		const centreOf = (patch: { position: { x: number }; size: { width: number } }) =>
+			patch.position.x + patch.size.width / 2;
 
-		it("is off by default and disabled with its reason when there is no 3D preset", () => {
-			const { tl } = zoomTl({});
+		it("refits the box to the words as they are typed, around the same centre", () => {
+			const { tl, updateAnnotationLive } = annotationTl();
 			render(<FloatingInspector {...defaultProps} tl={tl} />);
-			const box = screen.getByRole("checkbox", { name: "settings.zoom.clickImpact.title" });
-			expect(box).not.toBeChecked();
-			expect(box).toBeDisabled();
-			expect(screen.getByText("settings.zoom.clickImpact.needsRotation")).toBeInTheDocument();
+			fireEvent.change(screen.getByPlaceholderText("settings.annotation.textPlaceholder"), {
+				target: { value: "A much longer line" },
+			});
+			const patch = updateAnnotationLive.mock.calls[0][1];
+			expect(patch.content).toBe("A much longer line");
+			expect(patch.size.width).toBeGreaterThan(text.size.width);
+			expect(centreOf(patch)).toBeCloseTo(50, 6);
 		});
 
-		it("is disabled with its reason when the region hides the cursor", () => {
-			const { tl } = zoomTl({ rotationPreset: "iso", hideCursor: true });
+		it("resizes the text from the preset row and refits its box", () => {
+			const { tl, updateAnnotationLive } = annotationTl();
 			render(<FloatingInspector {...defaultProps} tl={tl} />);
-			expect(
-				screen.getByRole("checkbox", { name: "settings.zoom.clickImpact.title" }),
-			).toBeDisabled();
-			expect(screen.getByText("settings.zoom.clickImpact.needsCursor")).toBeInTheDocument();
-		});
-
-		it("says the orbiting camera recoils on a click, since its screen stays still", () => {
-			const { tl, updateZoomClickImpact } = zoomTl({ rotationPreset: "follow-cursor" });
-			render(<FloatingInspector {...defaultProps} tl={tl} />);
-			const box = screen.getByRole("checkbox", { name: "settings.zoom.clickImpact.title" });
-			expect(box).toBeEnabled();
-			expect(screen.getByText("settings.zoom.clickImpact.descriptionCamera")).toBeInTheDocument();
-			fireEvent.click(box);
-			expect(updateZoomClickImpact).toHaveBeenCalledWith("z", true);
-		});
-
-		it("is disabled with its reason when the cursor is hidden globally", () => {
-			editorSettings.cursorShow = false;
-			try {
-				const { tl } = zoomTl({ rotationPreset: "iso" });
-				render(<FloatingInspector {...defaultProps} tl={tl} />);
-				expect(
-					screen.getByRole("checkbox", { name: "settings.zoom.clickImpact.title" }),
-				).toBeDisabled();
-				expect(screen.getByText("settings.zoom.clickImpact.needsCursor")).toBeInTheDocument();
-			} finally {
-				editorSettings.cursorShow = true;
-			}
-		});
-
-		it("toggles the region's clickImpact under a 3D preset", () => {
-			const { tl, updateZoomClickImpact } = zoomTl({ rotationPreset: "iso" });
-			render(<FloatingInspector {...defaultProps} tl={tl} />);
-			const box = screen.getByRole("checkbox", { name: "settings.zoom.clickImpact.title" });
-			expect(box).toBeEnabled();
-			expect(screen.getByText("settings.zoom.clickImpact.description")).toBeInTheDocument();
-			fireEvent.click(box);
-			expect(updateZoomClickImpact).toHaveBeenCalledWith("z", true);
+			const row = screen.getByRole("group", { name: "settings.annotation.size" });
+			fireEvent.click(within(row).getByRole("button", { name: "72" }));
+			const patch = updateAnnotationLive.mock.calls[0][1];
+			expect(patch.style.fontSize).toBe(72);
+			expect(centreOf(patch)).toBeCloseTo(50, 6);
 		});
 	});
 
-	describe("3D camera select", () => {
+	describe("zoom pane rows", () => {
 		const zoomTl = (region: Record<string, unknown>) => {
 			const updateZoomRotation = vi.fn();
 			const tl = {
@@ -182,55 +259,318 @@ describe("FloatingInspector", () => {
 			} as unknown as React.ComponentProps<typeof FloatingInspector>["tl"];
 			return { tl, updateZoomRotation };
 		};
+		const cameraButtons = () =>
+			within(screen.getByRole("group", { name: "settings.zoom.camera.title" })).getAllByRole(
+				"button",
+			);
 
 		afterEach(() => {
 			useProjectStore.setState({ document: null });
 		});
 
-		it("is the only 3D select, off by default, and says what off does", () => {
+		it("is one row, off by default, its label naming the pick the tiles only draw", () => {
 			const { tl } = zoomTl({});
 			render(<FloatingInspector {...defaultProps} tl={tl} />);
-			const select = screen.getByRole("combobox", { name: "settings.zoom.camera.title" });
-			expect(select).toHaveValue("off");
-			expect(screen.getByText("settings.zoom.camera.description.off")).toBeInTheDocument();
-			expect(screen.queryByRole("combobox", { name: /cameraMotion|threeD/ })).toBeNull();
+			const off = screen.getByRole("button", { name: "settings.zoom.camera.off" });
+			expect(off).toHaveAttribute("aria-pressed", "true");
+			expect(screen.getByText("settings.zoom.camera.off")).toBeInTheDocument();
+			expect(screen.queryByRole("group", { name: /cameraMotion|threeD/ })).toBeNull();
 		});
 
-		it("groups the fixed angles apart from the moving cameras", () => {
+		it("lists off, then the orbit, then the fixed angles", () => {
 			const { tl } = zoomTl({});
 			render(<FloatingInspector {...defaultProps} tl={tl} />);
-			const select = screen.getByRole("combobox", { name: "settings.zoom.camera.title" });
-			const groups = [...select.querySelectorAll("optgroup")].map((g) => [
-				g.label,
-				[...g.querySelectorAll("option")].map((o) => o.value),
-			]);
-			expect(groups).toEqual([
-				["settings.zoom.camera.fixed", ["iso", "left", "right"]],
-				["settings.zoom.camera.moving", ["follow-cursor"]],
+			expect(cameraButtons().map((b) => b.getAttribute("aria-label"))).toEqual([
+				"settings.zoom.camera.off",
+				"settings.zoom.camera.preset.orbit",
+				"settings.zoom.camera.preset.left",
+				"settings.zoom.camera.preset.right",
 			]);
 		});
 
 		it("writes the camera into rotationPreset, and off by absence", () => {
-			const { tl, updateZoomRotation } = zoomTl({ rotationPreset: "follow-cursor" });
+			const { tl, updateZoomRotation } = zoomTl({ rotationPreset: "orbit" });
 			render(<FloatingInspector {...defaultProps} tl={tl} />);
-			const select = screen.getByRole("combobox", { name: "settings.zoom.camera.title" });
-			expect(select).toHaveValue("follow-cursor");
-			expect(screen.getByText("settings.zoom.camera.description.followCursor")).toBeInTheDocument();
-			fireEvent.change(select, { target: { value: "iso" } });
-			expect(updateZoomRotation).toHaveBeenCalledWith("z", "iso");
-			fireEvent.change(select, { target: { value: "off" } });
+			expect(
+				screen.getByRole("button", { name: "settings.zoom.camera.preset.orbit" }),
+			).toHaveAttribute("aria-pressed", "true");
+			fireEvent.click(screen.getByRole("button", { name: "settings.zoom.camera.preset.left" }));
+			expect(updateZoomRotation).toHaveBeenCalledWith("z", "left");
+			fireEvent.click(screen.getByRole("button", { name: "settings.zoom.camera.off" }));
 			expect(updateZoomRotation).toHaveBeenLastCalledWith("z", undefined);
 		});
 
-		it("says a cursor-driven camera has nothing to follow while the cursor is hidden", () => {
-			editorSettings.cursorShow = false;
+		it("picks the focus mode and the cursor with one click each", () => {
+			const updateZoomFocusMode = vi.fn();
+			const updateZoomHideCursor = vi.fn();
+			const { tl } = zoomTl({});
+			render(
+				<FloatingInspector
+					{...defaultProps}
+					tl={{ ...tl, updateZoomFocusMode, updateZoomHideCursor }}
+				/>,
+			);
+			expect(
+				screen.getByRole("button", { name: "settings.zoom.focusMode.manual" }),
+			).toHaveAttribute("aria-pressed", "true");
+			fireEvent.click(screen.getByRole("button", { name: "settings.zoom.focusMode.auto" }));
+			expect(updateZoomFocusMode).toHaveBeenCalledWith("z", "auto");
+			fireEvent.click(screen.getByRole("button", { name: "settings.zoom.cursor.hide" }));
+			expect(updateZoomHideCursor).toHaveBeenCalledWith("z", true);
+		});
+
+		it("locks the focus mode on Auto while the timeline's Auto-Focus holds it, and says why", () => {
+			editorSettings.autoFocusAll = true;
 			try {
-				const { tl } = zoomTl({ rotationPreset: "follow-cursor" });
+				const { tl } = zoomTl({ focusMode: "manual" });
 				render(<FloatingInspector {...defaultProps} tl={tl} />);
-				expect(screen.getByText("settings.zoom.camera.needsCursor")).toBeInTheDocument();
+				const row = screen.getByRole("group", { name: "settings.zoom.focusMode.title" });
+				expect(
+					within(row).getByRole("button", { name: "settings.zoom.focusMode.auto" }),
+				).toHaveAttribute("aria-pressed", "true");
+				for (const button of within(row).getAllByRole("button")) expect(button).toBeDisabled();
+				expect(row).toHaveAccessibleDescription("settings.zoom.focusMode.lockedDisclaimer");
 			} finally {
-				editorSettings.cursorShow = true;
+				editorSettings.autoFocusAll = false;
 			}
 		});
+
+		it("offers the orbit with the cursor hidden only where the focus point poses it, or once picked", () => {
+			editorSettings.cursorShow = false;
+			const offered = (region: Record<string, unknown>) => {
+				const { unmount } = render(<FloatingInspector {...defaultProps} tl={zoomTl(region).tl} />);
+				const orbit = screen.queryByRole("button", { name: "settings.zoom.camera.preset.orbit" });
+				unmount();
+				return orbit !== null;
+			};
+			try {
+				expect(offered({ focusMode: "auto" })).toBe(false);
+				expect(offered({ focusMode: "manual" })).toBe(true);
+				expect(offered({})).toBe(true);
+				expect(offered({ focusMode: "auto", rotationPreset: "orbit" })).toBe(true);
+				// The timeline's Auto-Focus makes every zoom auto, whatever it stores.
+				editorSettings.autoFocusAll = true;
+				expect(offered({ focusMode: "manual" })).toBe(false);
+			} finally {
+				editorSettings.cursorShow = true;
+				editorSettings.autoFocusAll = false;
+			}
+		});
+	});
+
+	describe("cursor facet", () => {
+		const cursorFacet = () => screen.queryByRole("button", { name: "settings.cursor.title" });
+
+		/** A read that has not answered yet, and the way to let it answer. */
+		function pendingRead() {
+			let open: (() => void) | undefined;
+			const gate = new Promise<void>((resolve) => {
+				open = resolve;
+			});
+			return {
+				gate,
+				release: () =>
+					act(async () => {
+						open?.();
+						await gate;
+					}),
+			};
+		}
+
+		/**
+		 * One clip per recording. A recording is the number of samples its cursor file holds, or a
+		 * gate its read waits on before finding three.
+		 */
+		function openProject(...takes: Array<number | Promise<void>>) {
+			// A path per test: every recording is read once per session.
+			const run = crypto.randomUUID();
+			const takeOf = new Map<string, number | Promise<void>>();
+			const assets = takes.map((take, i) => {
+				const originalPath = `/recordings/${run}-${i}.mp4`;
+				takeOf.set(originalPath, take);
+				return assetSchema.parse({ id: `a${i}`, label: "take", originalPath });
+			});
+			const clips = assets.map((asset, i) =>
+				clipSchema.parse({
+					id: `c${i}`,
+					assetId: asset.id,
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: i * 10,
+					timelineEndSec: i * 10 + 10,
+					origin: "user",
+				}),
+			);
+			const read = vi
+				.spyOn(nativeBridgeClient.cursor, "getRecordingData")
+				.mockImplementation(async (videoPath) => {
+					const take = takeOf.get(videoPath ?? "") ?? 0;
+					if (typeof take !== "number") await take;
+					return {
+						version: 2,
+						provider: "native",
+						assets: [],
+						samples: Array.from({ length: typeof take === "number" ? take : 3 }, (_, i) => ({
+							timeMs: i * 100,
+							cx: 0.5,
+							cy: 0.5,
+						})),
+					};
+				});
+			const document = createEmptyDocument({ projectId: "p", title: "t" });
+			useProjectStore.setState({
+				projectId: "p",
+				document: { ...document, assets, timeline: { ...document.timeline, clips } },
+			});
+			return read;
+		}
+
+		/** Lets the recordings' cursor files be read, so an absence is an answer and not a wait. */
+		async function readAll(read: ReturnType<typeof openProject>) {
+			await waitFor(() => expect(read).toHaveBeenCalled());
+			await act(async () => {
+				await Promise.all(read.mock.results.map((r) => r.value));
+			});
+		}
+
+		afterEach(() => {
+			vi.restoreAllMocks();
+			useProjectStore.setState({ document: null });
+		});
+
+		it("is offered when a recording on the timeline has cursor data", async () => {
+			openProject(3);
+			render(<FloatingInspector {...defaultProps} />);
+			expect(await screen.findByRole("button", { name: "settings.cursor.title" })).toBeVisible();
+		});
+
+		// A system-cursor take has the cursor baked into its pixels and no cursor file.
+		it("is left out for a take with no cursor data", async () => {
+			const read = openProject(0);
+			render(<FloatingInspector {...defaultProps} />);
+			await readAll(read);
+			expect(cursorFacet()).toBeNull();
+			expect(screen.getByRole("button", { name: "settings.layout.title" })).toBeVisible();
+		});
+
+		it("is offered as soon as one of several recordings has cursor data", async () => {
+			openProject(0, 2);
+			render(<FloatingInspector {...defaultProps} />);
+			expect(await screen.findByRole("button", { name: "settings.cursor.title" })).toBeVisible();
+		});
+
+		// The first read to find data settles it: the others cannot take the answer back.
+		it("is offered before the other recordings have been read", async () => {
+			const slow = pendingRead();
+			openProject(3, slow.gate);
+			render(<FloatingInspector {...defaultProps} />);
+			expect(await screen.findByRole("button", { name: "settings.cursor.title" })).toBeVisible();
+			await slow.release();
+		});
+
+		// The previous recording's answer says nothing about a recording swapped in for it.
+		it("is not carried over to a recording that has not been read yet", async () => {
+			openProject(3);
+			render(<FloatingInspector {...defaultProps} />);
+			expect(await screen.findByRole("button", { name: "settings.cursor.title" })).toBeVisible();
+			const slow = pendingRead();
+			act(() => void openProject(slow.gate));
+			await waitFor(() => expect(cursorFacet()).toBeNull());
+			await slow.release();
+			expect(await screen.findByRole("button", { name: "settings.cursor.title" })).toBeVisible();
+		});
+
+		it("is left out with nothing on the timeline", async () => {
+			render(<FloatingInspector {...defaultProps} />);
+			await act(() => Promise.resolve());
+			expect(cursorFacet()).toBeNull();
+		});
+
+		it("falls back to the first facet when the chosen one is left out", async () => {
+			const read = openProject(0);
+			render(<FloatingInspector {...defaultProps} facet="cursor" />);
+			await readAll(read);
+			expect(screen.getByTestId("effects-pane")).toBeInTheDocument();
+			expect(screen.queryByTestId("cursor-pane")).toBeNull();
+			expect(screen.getByRole("button", { name: "settings.effects.title" })).toHaveAttribute(
+				"aria-pressed",
+				"true",
+			);
+		});
+
+		it("shows the cursor pane once the chosen facet has data", async () => {
+			openProject(3);
+			render(<FloatingInspector {...defaultProps} facet="cursor" />);
+			expect(await screen.findByTestId("cursor-pane")).toBeInTheDocument();
+			expect(cursorFacet()).toHaveAttribute("aria-pressed", "true");
+		});
+
+		it("says what the cursor facet holds, once it is offered", async () => {
+			vi.stubGlobal("ResizeObserver", StubResizeObserver);
+			openProject(3);
+			render(<FloatingInspector {...defaultProps} />);
+			const facet = await screen.findByRole("button", { name: "settings.cursor.title" });
+			act(() => facet.focus());
+			expect((await screen.findByRole("tooltip")).textContent).toBe("settings.facets.tips.cursor");
+			expect(facet).not.toHaveAttribute("title");
+			vi.unstubAllGlobals();
+		});
+	});
+});
+
+describe("AnnotationSizeField", () => {
+	const commitTyped = (typed: string) => {
+		const onCommit = vi.fn();
+		const view = render(<AnnotationSizeField label="Size" size={32} onCommit={onCommit} />);
+		const field = view.getByRole("textbox", { name: "Size" });
+		fireEvent.change(field, { target: { value: typed } });
+		fireEvent.blur(field);
+		view.unmount();
+		return onCommit;
+	};
+
+	it("keeps the size when the field is emptied or unreadable, instead of writing 0", () => {
+		expect(commitTyped("")).not.toHaveBeenCalled();
+		expect(commitTyped("big")).not.toHaveBeenCalled();
+	});
+
+	it("commits a typed size when the field unmounts before its blur", () => {
+		const onCommit = vi.fn();
+		const view = render(<AnnotationSizeField label="Size" size={32} onCommit={onCommit} />);
+		fireEvent.change(view.getByRole("textbox", { name: "Size" }), { target: { value: "64" } });
+		view.unmount();
+		expect(onCommit).toHaveBeenCalledWith(64);
+	});
+
+	it("commits a typed size read into its bound", () => {
+		expect(commitTyped("0")).toHaveBeenCalledWith(8);
+		expect(commitTyped("48")).toHaveBeenCalledWith(48);
+		expect(commitTyped("900")).toHaveBeenCalledWith(200);
+	});
+});
+
+describe("AnnotationSizeControl", () => {
+	const row = () => screen.getByRole("group", { name: "settings.annotation.size" });
+
+	it("presses the preset the size is, and picks another in one click", () => {
+		const onChange = vi.fn();
+		render(<AnnotationSizeControl size={32} onChange={onChange} />);
+		expect(within(row()).getByRole("button", { name: "32" })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
+		fireEvent.click(within(row()).getByRole("button", { name: "48" }));
+		expect(onChange).toHaveBeenCalledWith(48);
+	});
+
+	it("shows a size off the row in its free field, pressing no preset", () => {
+		render(<AnnotationSizeControl size={40} onChange={vi.fn()} />);
+		for (const button of within(row()).getAllByRole("button")) {
+			expect(button).toHaveAttribute("aria-pressed", "false");
+		}
+		expect(screen.getByRole("textbox", { name: "settings.annotation.customSize" })).toHaveAttribute(
+			"placeholder",
+			"40",
+		);
 	});
 });

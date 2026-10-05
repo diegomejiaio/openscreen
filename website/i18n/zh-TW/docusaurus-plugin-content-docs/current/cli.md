@@ -135,13 +135,13 @@ openscreen export demo.openscreen -o out.mp4 --auto-zoom --json
 | `--quality <medium\|good\|source>` | 輸出尺寸：`medium` 為 720p，`good` 為 1080p，`source` 依裁切後最小的片段而定，所以絕不會放大。GIF 也以這個尺寸為起點 |
 | `--gif-fps <15\|20\|25\|30>` | GIF 影格率 |
 | `--gif-size <medium\|large\|original>` | 套用在上述尺寸上的 GIF 高度上限：720、1080，或不設上限 |
-| `--auto-zoom` | 算繪之前，在錄下的指標停頓處加入縮放，使用的引擎與編輯器的[自動縮放](/features/auto-zoom/)相同。既有的縮放會保留，新的縮放絕不會與它們重疊 |
+| `--auto-zoom` | 算繪之前，在錄下的點擊處加入縮放，使用的引擎與編輯器的[自動縮放](/features/auto-zoom/)相同。既有的縮放會保留，新的縮放會與它們保持距離 |
 | `--audio <file>` | 將旁白檔（mp3、wav 或 m4a）混入 MP4。僅限 MP4 |
 | `--audio-mode <mix\|replace>` | `mix`（預設）會保留錄影的音訊，以 40% 增益墊在旁白底下；`replace` 則捨棄錄影的音訊 |
 | `--audio-offset <seconds>` | 旁白開始前的延遲（預設為 0） |
 | `--json` | 在 stdout 上輸出 NDJSON 格式的進度與結果 |
 
-CLI 匯出的 MP4 一律是 **H.264、60 fps**。沒有編碼格式或影格率選項。桌面應用程式的[匯出](./export.md)對話框另外提供 H.265 與 24 或 30 fps。
+CLI 匯出的 MP4 一律是 **H.264、60 fps**。沒有編碼格式或影格率選項。桌面應用程式的[匯出](./export.md)對話框另外提供 24 或 30 fps。
 
 `--audio` 會在算繪之後才作用：視訊串流會原封不動地複製，再混入一條新的 AAC 音軌，並寫回同一個輸出檔案。
 
@@ -158,7 +158,7 @@ openscreen captions demo.openscreen --min-words 2 --max-words 7
 openscreen export demo.openscreen -o demo.mp4   # captions are burned into the video
 ```
 
-- `--min-words` 與 `--max-words` 設定每則字幕的字數。預設值：2 與 7。
+- `--min-words` 與 `--max-words` 設定每則字幕的字數。兩者皆可設為 1 到 12，與編輯器相同。預設值：2 與 7。
 - 再次執行會取代它先前加入的字幕。你自己加入的標註會保留。
 - 專案的螢幕影片必須有音軌，例如用 `record --mic` 錄製的影片。
 - 字幕會燒錄進匯出的影片，不會輸出字幕檔。請參閱[字幕](./captions.md)。
@@ -247,7 +247,7 @@ node -e '
   fs.writeFileSync("demo.openscreen", JSON.stringify(p, null, 2));
 '
 
-# 4. Render, with automatic zooms added where the pointer paused
+# 4. Render, with automatic zooms added on the recorded clicks
 openscreen export demo.openscreen -o demo.mp4 --auto-zoom --json
 ```
 

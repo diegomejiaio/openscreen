@@ -26,7 +26,7 @@ keywords:
 | | 最低配置 | 推荐配置 |
 |---|---|---|
 | **Windows** | Windows 10 版本 1903（内部版本 18362）或更高，x64，Intel 第 8 代 / AMD Ryzen 2000 系列或更新。原生采集需要 Windows 10 版本 2004（内部版本 19041）或更高；更早的内部版本通过[浏览器采集回退方案](#platform-differences)录制 | Windows 11，Intel 第 12 代 / AMD Ryzen 4000 系列或更新 |
-| **macOS** | macOS 13（Ventura）：ScreenCaptureKit 采集所需 | macOS 14 或更高 |
+| **macOS** | macOS 13（Ventura）：ScreenCaptureKit 采集所需。录制麦克风需要 macOS 15 或更高 | macOS 15.2 或更高 |
 | **Linux** | x64。需要 `xdg-desktop-portal` 和 PipeWire，录制离不开它们：原生采集辅助程序经由它们工作，这一环节出现故障时会作为错误报告出来。只有当某个构建缺少辅助程序本身时，[浏览器采集回退方案](#platform-differences)才会接手。录制系统音频还需要以 PipeWire 作为声音服务器（[Ubuntu 22.10+](https://discourse.ubuntu.com/t/kinetic-kudu-release-notes/27976) 和 [Fedora 34+](https://fedoraproject.org/wiki/Changes/DefaultPipeWire) 的默认设置）。在 Wayland 上记录鼠标点击，需要你的用户属于 `input` 组，详见 [Wayland 上的鼠标点击](#mouse-clicks-on-wayland) | 同左，并保持更新 |
 | **内存** | 8 GB | 16 GB |
 
@@ -38,11 +38,12 @@ keywords:
 
 从 [Releases](https://github.com/getopenscreen/openscreen/releases) 下载 `.dmg` 安装程序，把 OpenScreen 拖到“应用程序”文件夹中。从 1.9.0 起的版本都使用 Developer ID 证书签名，并经过 Apple 公证，因此 Gatekeeper 不会拦截，也不需要在终端中执行任何步骤。
 
-然后前往**系统设置 → 隐私与安全性**，为 OpenScreen 授予**屏幕录制**和**辅助功能**权限。有了“屏幕录制”权限，它才能进行采集。默认的可编辑光标需要“辅助功能”权限，才能记录光标形状和点击：在该模式下，如果没有这项权限就按下录制，会弹出一个带有该设置链接的提示；授予权限后再次按下录制，录制就会开始。
+首次打开时，OpenScreen 会显示一个权限窗口，列出它用到的所有权限，每项都有一个用于授予的按钮。之后随时可以从菜单栏中的 OpenScreen 图标选择**权限…**，重新打开这个窗口。macOS 会要求哪些权限，取决于它的版本：
 
-:::note macOS 15 及更高版本会定期重新询问
-macOS 会不时为所有第三方录屏软件重新请求屏幕录制权限。这个提示来自操作系统，并不表示你的安装有问题或更新出了错。收到询问时再次授予即可。
-:::
+- **macOS 15.2 及更高版本：** 你在 Apple 的系统选择器中选择要录制的屏幕或窗口，这一选择本身就是你的同意，因此不需要**屏幕录制**权限。系统音频需要它自己的、范围更小的权限：**仅系统录音**。
+- **macOS 13 到 15.1：** OpenScreen 使用自己的来源选择器，需要**屏幕录制**权限，这项权限也涵盖系统音频。在 macOS 15.0 和 15.1 上，macOS 还会不时询问是否允许 OpenScreen 不通过系统选择器直接访问屏幕：请允许。
+
+默认的可编辑光标需要**辅助功能**权限，才能记录光标形状和点击：在该模式下，如果没有这项权限就按下录制，会打开权限窗口；授予权限后再次按下录制，录制就会开始。
 
 :::tip 从 1.9.0 之前的版本升级？
 那些版本没有使用 Developer ID 证书签名，而 macOS 会把“屏幕录制”和“辅助功能”授权与应用的签名绑定在一起，因此它无法识别新版本和旧版本是同一个应用，你授予旧版本的权限也不会延续过来。如果授予权限后新版本仍然无法录制，请在“系统设置”中把 OpenScreen 从这两项权限的列表里移除，然后重新启动它，并重新授予权限。
@@ -151,15 +152,15 @@ sudo usermod -aG input $USER
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | 采集管线 | 原生（ScreenCaptureKit） | 内部版本 19041 及更高为原生（Windows Graphics Capture）；更早的内部版本或缺少辅助程序时回退到浏览器采集 | 原生（经由 ScreenCast 门户的 PipeWire）；缺少辅助程序时回退到浏览器采集，并失去硬件编码和光标遥测 |
-| 自定义光标主题 / 点击效果 | ✅：点击和光标形状需要“辅助功能”权限 | ✅ | ✅ Wayland 上可用：点击采集需要 `input` 组（[详情](#mouse-clicks-on-wayland)） |
+| 自定义光标 / 点击效果 | ✅：点击和光标形状需要“辅助功能”权限 | ✅ | ✅ Wayland 上可用：点击采集需要 `input` 组（[详情](#mouse-clicks-on-wayland)） |
 | 摄像头 | 浏览器采集，保存为单独的文件（仍可用作画中画） | 原生采集，保存为单独的文件 | 浏览器采集，保存为单独的文件（仍可用作画中画） |
-| 系统音频 | 开箱即用；macOS 14.2+ 会弹出权限提示 | 开箱即用 | 需要以 PipeWire 作为声音服务器（Ubuntu 22.10+、Fedora 34+ 的默认设置） |
-| MP4 导出 | ✅ | ✅ | ✅：GPU 栈条件允许时，通过 VAAPI 在 GPU 上进行 H.264 编码（见下方说明），否则使用软件编码；H.265 仅支持软件编码 |
+| 系统音频 | 开箱即用；macOS 15.2+ 会弹出它自己的权限提示，更早的版本由“屏幕录制”权限涵盖 | 开箱即用 | 需要以 PipeWire 作为声音服务器（Ubuntu 22.10+、Fedora 34+ 的默认设置） |
+| MP4 导出 | ✅ | ✅ | ✅：GPU 栈条件允许时，通过 VAAPI 在 GPU 上进行 H.264 编码（见下方说明），否则使用软件编码 |
 | GIF 导出 | ✅ | ✅ | ✅ |
 | 本机转录 | Metal（Apple Silicon）/ CPU | Vulkan / CPU | Vulkan / CPU |
 
 :::note Linux 上的 MP4 导出
-实时预览和 MP4 导出背后的 GPU 合成器有三个后端：Windows 上是 Direct3D 11，macOS 上是 Metal，Linux 上是 wgpu/WGSL，三个平台的构建都包含它。在 Linux 上，如果 GPU 驱动提供 VAAPI，*并且* Vulkan 设备能以 dmabuf 形式交出帧（`VK_KHR_external_memory_fd` 和 `VK_EXT_external_memory_dma_buf`），H.264 导出会把每个合成好的帧直接交给 `h264_vaapi`，无需经过 CPU 拷贝。只要缺少其中任何一项（没有渲染节点、驱动不支持 VAAPI、Vulkan 设备不支持这些扩展），导出就会回退到软件编码器，只是耗时更长，其他一切不变。在 Linux 上，H.265 导出始终使用软件编码器。
+实时预览和 MP4 导出背后的 GPU 合成器有三个后端：Windows 上是 Direct3D 11，macOS 上是 Metal，Linux 上是 wgpu/WGSL，三个平台的构建都包含它。在 Linux 上，如果 GPU 驱动提供 VAAPI，*并且* Vulkan 设备能以 dmabuf 形式交出帧（`VK_KHR_external_memory_fd` 和 `VK_EXT_external_memory_dma_buf`），H.264 导出会把每个合成好的帧直接交给 `h264_vaapi`，无需经过 CPU 拷贝。只要缺少其中任何一项（没有渲染节点、驱动不支持 VAAPI、Vulkan 设备不支持这些扩展），导出就会回退到软件编码器，只是耗时更长，其他一切不变。
 :::
 
 OpenScreen 在各个系统上能做什么，以及什么情况下其他工具更合适，汇总在 [Windows](/screen-recorder-windows/)、[Mac](/screen-recorder-mac/) 和 [Linux](/screen-recorder-linux/) 页面中。

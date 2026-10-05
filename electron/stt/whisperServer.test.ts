@@ -349,6 +349,148 @@ describe("WhisperServerManager", () => {
 		}
 	});
 
+	it("anchors a phrase's first word on the onset of the speech its anchor falls in", async () => {
+		// "Salut" starts where the previous token ended, in the first stretch's
+		// tail, but its anchor puts it in the second stretch.
+		const fakeJson = {
+			segments: [
+				{
+					text: " Salut",
+					start: 1.57,
+					end: 2.56,
+					words: [{ word: " Salut", start: 1.05, end: 2.56, anchor: 1.8 }],
+				},
+			],
+			speech: [
+				{ start: 0.2, end: 1 },
+				{ start: 1.57, end: 2.56 },
+			],
+			backend: "whispercpp-cpu",
+		};
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(JSON.stringify(fakeJson), { status: 200 })),
+		);
+		try {
+			const mgr = new WhisperServerManager();
+			(mgr as unknown as { process: unknown; port: number }).process = {};
+			(mgr as unknown as { process: unknown; port: number }).port = 9999;
+			const result = await mgr.transcribe({ samples: new Float32Array(16_000 * 3) });
+			expect(result.wordSegments).toEqual([{ word: "Salut", startSec: 1.57, endSec: 2.56 }]);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	describe("CTC word aligner", () => {
+		const inference = {
+			segments: [
+				{
+					text: " ab ba",
+					start: 0.2,
+					end: 1,
+					words: [
+						{ word: " ab", start: 0.3, end: 0.5, anchor: 0.4 },
+						{ word: " ba", start: 0.5, end: 0.8, anchor: 0.6 },
+					],
+				},
+			],
+			speech: [{ start: 0.2, end: 1 }],
+			detected_language: "fr",
+			backend: "whispercpp-vulkan",
+			timing: { elapsed_s: 0.5, audio_s: 2, rtf: 0.25 },
+		};
+		// "ab" spoken on frames 20-21, the word delimiter on 22, "ba" on 24-25.
+		const vocab = ["<pad>", "|", "a", "b"];
+		const frames = Array<number>(60).fill(0);
+		frames[20] = 2;
+		frames[21] = 3;
+		frames[22] = 1;
+		frames[24] = 3;
+		frames[25] = 2;
+		const logprobs = new Float32Array(60 * vocab.length).fill(-12);
+		frames.forEach((tok, f) => {
+			logprobs[f * vocab.length + tok] = -0.01;
+		});
+		const emissions = {
+			vocab,
+			blank: 0,
+			stride_s: 0.02,
+			elapsed_s: 0.1,
+			regions: [
+				{ start: 0, frames: 60, logprobs: Buffer.from(logprobs.buffer).toString("base64") },
+			],
+		};
+
+		async function run(emissionsReply: Response, reply: object = inference) {
+			const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
+				url.endsWith("/emissions")
+					? emissionsReply
+					: new Response(JSON.stringify(reply), { status: 200 }),
+			);
+			vi.stubGlobal("fetch", fetchMock);
+			try {
+				const mgr = new WhisperServerManager();
+				(mgr as unknown as { process: unknown; port: number }).process = {};
+				(mgr as unknown as { process: unknown; port: number }).port = 9999;
+				const alignerFor = vi.fn(async (language: string) => `/models/${language}.gguf`);
+				const result = await mgr.transcribe({
+					samples: new Float32Array(16_000 * 2),
+					alignerFor,
+				});
+				return { result, alignerFor, fetchMock };
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		}
+
+		it("re-times the words on the aligner of the detected language, and counts its cost", async () => {
+			const { result, alignerFor, fetchMock } = await run(
+				new Response(JSON.stringify(emissions), { status: 200 }),
+			);
+			expect(alignerFor).toHaveBeenCalledWith("fr");
+			const body = fetchMock.mock.calls[1][1]?.body as FormData;
+			expect(body.get("model")).toBe("/models/fr.gguf");
+			expect(JSON.parse(String(body.get("regions")))).toEqual([[0, 1.3]]);
+			// The phrase edges stay on the speech; the inner boundary moves to the letters.
+			const ms = (x: number) => Math.round(x * 1000);
+			expect(result.wordSegments.map((w) => [w.word, ms(w.startSec), ms(w.endSec)])).toEqual([
+				["ab", 200, 450],
+				["ba", 450, 1000],
+			]);
+			expect(result.timing?.elapsedSec).toBeCloseTo(0.6);
+			expect(result.timing?.rtf).toBeCloseTo(0.3);
+		});
+
+		it("leaves the aligner out on the CPU, without even asking for it", async () => {
+			const { result, alignerFor, fetchMock } = await run(
+				new Response(JSON.stringify(emissions), { status: 200 }),
+				{ ...inference, backend: "whispercpp-cpu" },
+			);
+			expect(alignerFor).not.toHaveBeenCalled();
+			expect(fetchMock).toHaveBeenCalledOnce();
+			expect(result.wordSegments.map((w) => [w.word, w.startSec, w.endSec])).toEqual([
+				["ab", 0.2, 0.5],
+				["ba", 0.5, 1],
+			]);
+		});
+
+		it("keeps whisper's times when the aligner fails", async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			try {
+				const { result } = await run(new Response("not found", { status: 404 }));
+				expect(result.wordSegments.map((w) => [w.word, w.startSec, w.endSec])).toEqual([
+					["ab", 0.2, 0.5],
+					["ba", 0.5, 1],
+				]);
+				expect(result.timing?.elapsedSec).toBe(0.5);
+				expect(warn).toHaveBeenCalledWith(expect.stringMatching(/word aligner failed/));
+			} finally {
+				warn.mockRestore();
+			}
+		});
+	});
+
 	it("spawns whisper-stt-server with --model", async () => {
 		const fs = await import("node:fs/promises");
 		const { spawn } = await import("node:child_process");
@@ -672,6 +814,59 @@ describe("WhisperServerManager", () => {
 				}),
 			).rejects.toThrow(/Whisper GGML model not found/);
 		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("passes --vad-model flag to spawned process when vadModelPath exists", async () => {
+		const fs = await import("node:fs/promises");
+		const { spawn } = await import("node:child_process");
+		const dir = await mkdtemp(path.join(tmpdir(), "whisper-vad-args-"));
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+		try {
+			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+			const modelPath = path.join(dir, "ggml-small-q8_0.bin");
+			const vadModelPath = path.join(dir, "ggml-silero-v6.2.0.bin");
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
+			await fs.writeFile(modelPath, "dummy-ggml");
+			await fs.writeFile(vadModelPath, "dummy-vad");
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
+
+			const child = Object.assign(new EventEmitter(), {
+				stdout: new EventEmitter(),
+				stderr: new EventEmitter(),
+				pid: 1234,
+				kill: vi.fn(() => {
+					queueMicrotask(() => child.emit("exit", 0));
+					return true;
+				}),
+			});
+			vi.mocked(spawn).mockImplementationOnce(() => child as never);
+			vi.stubGlobal(
+				"fetch",
+				vi.fn().mockResolvedValue({
+					ok: true,
+					json: async () => ({ status: "ok", vad: true }),
+				} as unknown as Response),
+			);
+
+			const mgr = new WhisperServerManager();
+			await mgr.start({
+				modelPath,
+				vadModelPath,
+				binaryPath: fakeBinaryPath,
+				backend: "whispercpp-cpu",
+			});
+
+			expect(spawn).toHaveBeenCalledTimes(1);
+			const args = vi.mocked(spawn).mock.calls[0][1];
+			expect(args).toContain("--vad-model");
+			const vadIdx = args.indexOf("--vad-model");
+			expect(args[vadIdx + 1]).toBe(vadModelPath);
+			await mgr.stop();
+		} finally {
+			if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+			vi.unstubAllGlobals();
 			await rm(dir, { recursive: true, force: true });
 		}
 	});

@@ -27,7 +27,7 @@ This page is published by the OpenScreen project. The Screen Studio and OBS Stud
 | System audio | The PipeWire sink monitor, mixed with the microphone |
 | Cursor | Position and shape from the portal. Left clicks with the `input` group |
 | Captions | Local Whisper on Vulkan, with a CPU fallback. Burned into the video |
-| Export | MP4 (H.264 or H.265) or GIF, no watermark. H.264 on the GPU through VAAPI when the driver allows it |
+| Export | MP4 (H.264) or GIF, no watermark. H.264 on the GPU through VAAPI when the driver allows it |
 | Built-in updates | AppImage, `.deb`, `.rpm` and `.pacman`. Not Nix |
 
 ## Wayland and PipeWire
@@ -46,13 +46,13 @@ OpenScreen records the screen on Linux with its own native helper, not with the 
 
 Screen Studio supports only macOS (as of September 2026). OpenScreen offers the same kind of finishing on Linux, and its editing tools are the same on Windows, macOS and Linux.
 
-- **Automatic zooms.** **Auto-enhance → Automatic zooms** places zooms from the recorded cursor movement, with no network call and no model. Manual zooms have six depths. More on [auto-zoom](/features/auto-zoom/).
+- **Automatic zooms.** **Auto-enhance → Automatic zooms** places zooms on the recorded clicks, with no network call and no model. Manual zooms have six depths. More on [auto-zoom](/features/auto-zoom/).
 - **Cursor styling.** Show or hide the cursor, resize and smooth it, and add motion blur and a click bounce. Click effects need recorded clicks, so the `input` group again.
 - **Backgrounds and framing.** 18 bundled wallpapers, a solid color, a gradient or your own image, with padding, rounded corners and a shadow. Output in 16:9, 9:16, 1:1 and other aspect ratios.
 - **Local captions.** whisper.cpp runs on your machine, on Vulkan with a CPU fallback. It uses one Whisper Small model of about 264 MB, downloaded once. Captions are burned into the video, and deleting words in the transcript cuts them from the video. More on [captions](/features/captions/).
 - **Webcam layouts.** Picture-in-picture and other layouts, with the camera background removed, blurred or replaced without a green screen.
 - **A multi-clip timeline.** Several clips per project, cuts, speed regions, text, arrow, image and blur annotations, a voice-over track and music. See [Editing & timeline](/docs/editing-timeline/).
-- **Export without a watermark.** MP4 in H.264 or H.265 at up to 60 fps, or GIF. On Linux the compositor renders through Vulkan, and H.264 goes to the GPU through `h264_vaapi` when the driver exposes VAAPI and the Vulkan device can hand frames over. See [Export](/docs/export/).
+- **Export without a watermark.** MP4 in H.264 at up to 60 fps, or GIF. On Linux the compositor renders through Vulkan, and H.264 goes to the GPU through `h264_vaapi` when the driver exposes VAAPI and the Vulkan device can hand frames over. See [Export](/docs/export/).
 - **Optional chat editing with your own key.** Describe cuts, zooms or annotations in plain language. It is off until you connect a provider, and each change lands as an ordinary undoable edit. See [AI editing](/docs/ai-editing/).
 
 ## Packages
@@ -72,7 +72,7 @@ Screen Studio supports only macOS (as of September 2026). OpenScreen offers the 
 
 1. Download the package for your distribution from the [download page](/download/), or use the Nix flake.
 2. Follow the [Linux installation steps](/docs/installation/#linux). Add your user to the `input` group if you want clicks recorded and accept what that group allows.
-3. Make a first recording with the [quick start](/docs/quick-start/), answer the portal dialog when it opens, then run **Auto-enhance → Automatic zooms** on the take.
+3. Make a first recording with the [quick start](/docs/quick-start/) and answer the portal dialog when it opens. The take opens in the editor with automatic zooms already placed.
 
 On another system? See the [Windows](/screen-recorder-windows/) and [macOS](/screen-recorder-mac/) pages. Coming from a Mac app? See the [Screen Studio alternative](/alternatives/screen-studio/). Or go back to the [OpenScreen home page](/).
 

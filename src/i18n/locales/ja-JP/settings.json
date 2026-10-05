@@ -5,13 +5,14 @@
 		"motionDrift": "ドリフト",
 		"motionAurora": "オーロラ",
 		"motionWaves": "ウェーブ",
-		"motionGradientOnly": "アニメーションはグラデーション背景にのみ適用されます。アニメーションするにはグラデーションを選択してください。",
 		"gradientLabel": "グラデーション {{index}}",
 		"uploadCustom": "カスタム画像を読み込む",
 		"unsupportedImage": "対応していない画像です。JPG または PNG ファイルを使用してください。",
 		"title": "背景",
 		"imageLabel": "背景 {{index}}",
 		"custom": "カスタム",
+		"customColor": "カスタムカラー",
+		"customGradient": "1色から作るグラデーション",
 		"help": "録画の背景に表示するものを選びます。同梱の壁紙画像、単色、グラデーション、またはディスク上の任意の画像から選べます。",
 		"gradient": "グラデーション",
 		"colorLabel": "色 {{color}}",
@@ -50,9 +51,9 @@
 		"errorReading": "ファイルの読み取り中にエラーが発生しました。"
 	},
 	"annotation": {
-		"supportedFormats": "サポートされている形式: JPG, PNG, GIF, WebP",
 		"blurShapeRectangle": "長方形",
 		"size": "サイズ",
+		"customSize": "カスタムサイズ",
 		"tipShiftTabCycle": "Shift+Tabキーを使用して逆順に切り替えます。",
 		"clearBackground": "背景をクリア",
 		"colorPalette": "カラーパレット",
@@ -106,17 +107,20 @@
 		"blurBg": "背景をぼかす",
 		"help": "録画フレームのスタイル設定: 背景ぼかし、ドロップシャドウ、モーションブラー、角丸、動画まわりの余白。",
 		"fitClipOne": "{{count}} クリップ",
+		"formatAuto": "自動",
+		"formatAutoMixed": "クリップが不揃い",
+		"formatFill": "録画",
+		"formatFillFit": "全体",
+		"formatFillFollow": "カーソルを追う",
 		"formatOriginal": "元のサイズ",
 		"fitClipMany": "{{count}} クリップ",
 		"frame": "フレーム",
 		"motion": "モーション",
 		"padding": "余白",
 		"format": "フォーマット",
-		"fitClip": "合わせる",
 		"motionBlur": "モーションブラー",
 		"depthOfField": "被写界深度",
-		"depthOfFieldHint": "3D ズーム",
-		"depthOfFieldNoTilt": "このプロジェクトに 3D ズームはありません",
+		"depthOfFieldTip": "傾いた画面の奥側をぼかします",
 		"roundness": "丸み",
 		"frameStyle": "スタイル",
 		"windowNone": "なし",
@@ -127,9 +131,11 @@
 		"frameTheme": "テーマ",
 		"frameThemeLight": "ライト",
 		"frameThemeDark": "ダーク",
-		"frameThemeHelp": "シルバーの本体に明るい枠、またはグラファイトに暗い枠。すべてのフレームに適用されます。",
-		"windowHelp": "録画の周囲にウィンドウ、または 3D でモデリングされたデバイスを描画します。",
-		"roundnessFrameHelp": "範囲はフレームに合わせて変わります。100% はそのフレームに似合う最大の丸みです。"
+		"roundnessFrameHelp": "範囲はフレームによって変わります。100% は見た目が崩れない最大の丸みです。",
+		"shadowNone": "なし",
+		"shadowLight": "弱",
+		"shadowMedium": "中",
+		"shadowStrong": "強"
 	},
 	"stylePresets": {
 		"button": "プリセット",
@@ -146,6 +152,9 @@
 		"revealLinux": "フォルダに表示",
 		"rename": "名前を変更",
 		"update": "現在のプロジェクトから更新",
+		"useForNewProjects": "新規プロジェクトに使用",
+		"stopForNewProjects": "新規プロジェクトへの使用をやめる",
+		"newProjectsBadge": "新規プロジェクト",
 		"delete": "削除",
 		"confirmDelete": "「{{name}}」を削除しますか？",
 		"applied": "「{{name}}」を適用しました",
@@ -167,7 +176,7 @@
 		"help": "タイムライン上のすべてのクリップをまとめた文字起こしです。単語や選択範囲を Backspace / Delete で映像から切り取れます（赤色）。単語をダブルクリックすると文字を修正できます。字幕にだけ入り、映像は変わりません。印の付いた単語にカーソルを合わせると取り消せます。",
 		"editWord": "「{{word}}」を編集",
 		"laneFeedsCaptions": "字幕はこのトラックから焼き込まれます。",
-		"insertedWord": "あなたが追加した単語 — 音声はありません",
+		"insertedWord": "追加した単語です。対応する音声はありません。",
 		"whisperHint": "文字起こしはローカルの Whisper を使用します。お使いのパソコン上で実行され、データが端末外に出ることはありません。",
 		"insertAria": "新しい単語",
 		"editorAria": "{{filename}} の文字起こし",
@@ -180,7 +189,7 @@
 		"laneVoiceover": "ナレーション",
 		"silence": "[無音 {{duration}} 秒]",
 		"clipLabel": "クリップ {{index}}",
-		"correctedWord": "修正済み — 文字起こしでは「{{original}}」でした",
+		"correctedWord": "修正済み。文字起こしでは「{{original}}」でした。",
 		"noClipTranscript": "このクリップには文字起こしがありません。アセットカードを開いて再生成してください。",
 		"editingHintDev": "ダブルクリックで単語を修正、Backspace で映像からカット、2つの単語の間に入力して新しい単語を追加。",
 		"noAudio": "このメディアには音声トラックがありません",
@@ -200,15 +209,12 @@
 		"legacyAnnotations": "このプロジェクトには旧字幕機能の注釈が残っています（{{count}}）。字幕レイヤーの上に描画されます。",
 		"backgroundOpacity": "不透明度",
 		"backgroundColor": "背景色",
-		"alignCenter": "中央",
 		"translationIsNonDestructive": "翻訳は文字起こしの中ではなく横に保存されます。元のテキストとタイミングはそのまま残ります。",
 		"distanceFromRight": "右端からの距離",
 		"language": "言語",
 		"text": "テキスト",
-		"anchorHintBottom": "長い字幕は上に伸びます（下端は動きません）。",
 		"distanceFromTop": "上端からの距離",
 		"translateFailed": "翻訳に失敗しました。",
-		"alignLeft": "左",
 		"distanceFromBottom": "下端からの距離",
 		"derivedFromTranscript": "文字起こしからリアルタイムに生成された字幕 {{count}} 行。",
 		"translate": "翻訳",
@@ -217,14 +223,10 @@
 		"hiddenHint": "字幕はこのメディアの文字起こしから生成されます。オンにするとプレビューと書き出しに表示されます。",
 		"noTranscript": "字幕はメディアの文字起こしから読み込まれます。有効にするにはこの動画を文字起こししてください。",
 		"distanceFromLeft": "左端からの距離",
-		"anchorBottom": "下",
 		"transcribe": "動画を文字起こし",
 		"bold": "太字",
-		"alignRight": "右",
-		"anchorTop": "上",
 		"minWords": "1 行の最小単語数",
 		"translateHint": "設定した AI プロバイダーで文字起こしを翻訳します",
-		"anchorHintTop": "長い字幕は下に伸びます（上端は動きません）。",
 		"displayLanguage": "表示",
 		"removeLegacyAnnotations": "古い字幕の注釈を削除",
 		"background": "背景",
@@ -234,7 +236,15 @@
 		"font": "フォント",
 		"translating": "翻訳中…",
 		"show": "字幕を表示",
-		"textColor": "文字色"
+		"textColor": "文字色",
+		"style": "スタイル",
+		"styles": {
+			"classic": "クラシック",
+			"bold": "太字",
+			"minimal": "ミニマル",
+			"light": "ライト"
+		},
+		"customize": "カスタマイズ"
 	},
 	"panes": {
 		"help": "ヘルプ"
@@ -265,20 +275,30 @@
 		"fadeIn": "フェードイン",
 		"remove": "トラックを削除",
 		"loop": "ループ",
-		"slipHint": "Alt を押しながらドラッグで中の音声をずらす",
-		"help": "このオーディオトラックの音量・フェード・ループ。プレビューでも書き出しでも録画に重ねてミックスされます。タイムライン上でドラッグすると移動やサイズ変更、Alt を押しながらドラッグすると中の音声がずれます。",
+		"slipHint": "{{modifier}} を押しながらドラッグすると、トラック内で音声をずらせます",
+		"help": "このオーディオトラックの音量・フェード・ループ。プレビューでも書き出しでも録画に重ねてミックスされます。音楽トラックは話している間、自動で音量が下がります。タイムライン上でドラッグすると移動やサイズ変更、Alt を押しながらドラッグすると中の音声がずれます。",
 		"add": "オーディオトラックを追加",
 		"mute": "ミュート"
 	},
 	"layout": {
-		"help": "ウェブカメラと画面の合成方法: ピクチャインピクチャ、縦積み、デュアルフレーム、マスク形状、サイズ、左右反転。",
+		"help": "ウェブカメラと画面の合成方法: ピクチャインピクチャ、縦積み、デュアルフレーム、形状、丸み、サイズ、位置、左右反転。",
 		"mirrorWebcam": "Webカメラを反転",
 		"webcamFraming": "ウェブカメラの構図",
+		"webcamFramingDrag": "枠をドラッグして移動、角をドラッグしてズームします。",
 		"shapes": {
-			"rectangle": "長方形",
-			"rounded": "角丸",
-			"circle": "円",
-			"square": "正方形"
+			"square": "正方形",
+			"original": "オリジナル"
+		},
+		"webcamPosition": "位置",
+		"anchors": {
+			"topLeft": "左上",
+			"top": "上",
+			"topRight": "右上",
+			"left": "左",
+			"right": "右",
+			"bottomLeft": "左下",
+			"bottom": "下",
+			"bottomRight": "右下"
 		},
 		"selectPreset": "プリセットを選択",
 		"bgModes": {
@@ -287,18 +307,15 @@
 			"blur": "ぼかし",
 			"transparent": "切り抜き"
 		},
-		"reactiveWebcamDescription": "ズーム中はカメラがスムーズに縮小し、邪魔になりません。",
 		"webcamBlurIntensity": "ぼかしの強さ",
 		"preset": "プリセット",
-		"webcamCropZoom": "クロップのズーム",
 		"webcamSize": "カメラのサイズ",
 		"dualFrame": "デュアルフレーム",
-		"webcamCropY": "垂直方向に移動",
 		"verticalStack": "縦並び",
 		"pictureInPicture": "ピクチャーインピクチャ",
 		"webcamShape": "カメラの形状",
-		"webcamCropX": "水平方向に移動",
 		"reactiveWebcam": "ズーム時に縮小",
+		"reactiveWebcamTip": "動画がズームされている間、カメラが小さくなります",
 		"webcamBackground": "カメラ背景",
 		"helpNoWebcam": "このプロジェクトにはカメラがないため、レイアウトの設定は無効で、プリセットは「Webカメラなし」と表示されます。保存されたレイアウトは、カメラを追加したときのために保持されます。",
 		"title": "カメラレイアウト",
@@ -317,7 +334,14 @@
 	},
 	"facets": {
 		"transcript": "文字起こし",
-		"captions": "字幕"
+		"captions": "字幕",
+		"tips": {
+			"effects": "コンポジション：背景、フレーム、影、余白",
+			"layout": "カメラレイアウト：カメラの位置、形状、サイズ",
+			"audio": "オーディオ：動画全体の出力レベル",
+			"cursor": "カーソル：スタイル、サイズ、エフェクト",
+			"transcript": "文字起こし：単語を編集して動画をカットします"
+		}
 	},
 	"crop": {
 		"title": "クロップ",
@@ -341,39 +365,20 @@
 			"lockedDisclaimer": "タイムラインの全体オートフォーカス切り替えによって制御されます。オフにすると、ズームごとにフォーカスモードを設定できます。",
 			"auto": "自動",
 			"manual": "手動",
-			"autoDescription": "表示範囲が録画中のカーソル位置に追従します",
 			"title": "フォーカスモード"
 		},
 		"camera": {
 			"title": "3Dカメラ",
 			"off": "オフ",
-			"fixed": "固定アングル",
-			"moving": "動くカメラ",
 			"preset": {
-				"iso": "斜め上から",
 				"left": "画面を左向きに",
 				"right": "画面を右向きに",
-				"followCursor": "カーソルに合わせて回り込む"
-			},
-			"description": {
-				"off": "画面は平らなままです。",
-				"iso": "1つの姿勢を保ちます：左向きで、上から見下ろします。",
-				"left": "1つの姿勢を保ちます：画面が左を向き、右端が手前に出ます。",
-				"right": "1つの姿勢を保ちます：画面が右を向き、左端が手前に出ます。",
-				"followCursor": "画面は動かず、カメラが画面の周りを回ってカーソルのある側へ移り、カーソルに合わせて上下します。"
-			},
-			"needsCursor": "カーソルが非表示です：このカメラは追う対象がなく、最初のアングルのままです。"
-		},
-		"clickImpact": {
-			"title": "クリックの押し込み",
-			"description": "クリックするたびに傾いた画面が押され、クリックした側が沈んでから戻ります。",
-			"needsRotation": "先に3Dカメラを選んでください。押し込めるのは傾いた画面だけです。",
-			"needsCursor": "カーソルが非表示です。画面は見えているクリックにだけ反応します。",
-			"descriptionCamera": "クリックのたびにカメラが少し後ろへ下がり、また戻ります。"
+				"orbit": "3D オービット"
+			}
 		},
 		"level": "ズーム倍率",
-		"previewHold": "押している間ズーム効果をプレビュー",
 		"customScale": "カスタムズーム",
+		"customScaleRange": "ズーム倍率は{{min}}×から{{max}}×までです",
 		"selectRegion": "ズーム範囲を選択して調整",
 		"cursor": {
 			"title": "カーソル",
@@ -383,7 +388,7 @@
 	},
 	"audio": {
 		"outputGain": "出力レベル",
-		"help": "音声の出力レベルを調整します。プレビューと書き出しで同じように適用されます。",
+		"help": "音声は標準のラウドネスに自動で揃えられます。そこから出力レベルを調整してください。プレビューと書き出しで同じように適用されます。",
 		"reset": "オーディオをリセット",
 		"title": "オーディオ"
 	},
@@ -404,18 +409,33 @@
 		"smoothing": "スムージング",
 		"clickBounce": "クリックバウンス",
 		"model3d": "3D カーソル",
-		"model3dHint": "デフォルトのスタイル：すべてのカーソル形状が 3D になります。その他のスタイルは平面のままです。",
-		"model3dNeedsCursor": "3D カーソルを使うには「カーソルを表示」をオンにしてください。",
+		"model3dTip": "標準カーソルを影付きの 3D オブジェクトとして描画します",
+		"clickImpact": "クリックの押し込み",
+		"clickImpactTip": "クリックのたびに画面が少し動きます",
 		"help": "記録されたテレメトリからのカーソル描画: テーマ、サイズ、スムージング、モーションブラー、クリック時のバウンス。",
-		"clipToBoundsDescription": "カーソルを映像フレーム内に保ちます。オフにするとカーソルが端からはみ出せるようになります。ズームやパン時に便利です。",
 		"size": "サイズ",
 		"title": "カーソル",
 		"show": "カーソルを表示",
 		"themeDefault": "デフォルト",
-		"clipToBounds": "キャンバスにクリップ",
+		"types": "カーソルの種類",
+		"typeArrow": "矢印",
+		"typePointer": "手",
+		"typeText": "テキスト",
+		"typeGrab": "つかむ",
+		"typeResize": "サイズ変更",
+		"typeBusy": "待機中",
+		"typeCrosshair": "十字",
+		"typeNotAllowed": "利用不可",
+		"typeHelp": "ヘルプ",
+		"typeUpArrow": "代替選択",
+		"typeAsArrow": "{{type}}：矢印で表示",
 		"motionBlur": "モーションブラー",
 		"theme": "カーソルのスタイル",
-		"autoHide": "非アクティブ時に非表示"
+		"autoHide": "非アクティブ時に非表示",
+		"autoHideTip": "カーソルは動きが止まると消えます",
+		"bounceNone": "なし",
+		"bounceLight": "弱",
+		"bounceStrong": "強"
 	},
 	"export": {
 		"gifButton": "GIF をエクスポート",
@@ -424,5 +444,11 @@
 	},
 	"trim": {
 		"deleteRegion": "トリム範囲を削除"
+	},
+	"textPlate": {
+		"none": "なし",
+		"dark": "ダーク",
+		"light": "ライト",
+		"custom": "カスタム"
 	}
 }

@@ -19,12 +19,23 @@ import type {
 	WebcamSizePreset,
 } from "../../components/video-editor/types";
 import { type AspectRatio, isAspectRatio } from "../../utils/aspectRatioUtils";
-import { CURSOR_THEME_IDS, DEFAULT_CURSOR_THEME_ID } from "../cursor/cursorThemes";
 import {
+	CURSOR_THEME_IDS,
+	type CursorKind,
+	DEFAULT_CURSOR_THEME_ID,
+	readCursorAsArrow,
+} from "../cursor/cursorThemes";
+import {
+	clampToBound,
+	DEFAULT_PROJECT_APPEARANCE,
 	type FrameTheme,
 	isFrameTheme,
+	LEGACY_BACKGROUND_BLUR_ON,
 	type RecordingFrame,
 	readRecordingFrame,
+	readWebcamMask,
+	type SettingBound,
+	type WebcamMask,
 } from "../projectDefaults";
 
 export const STYLE_PRESET_FILE_EXTENSION = ".openscreenpreset";
@@ -46,13 +57,14 @@ export interface StylePresetAppearance {
 	frameTheme: FrameTheme;
 	aspectRatio: AspectRatio;
 	shadowIntensity: number;
-	showBlur: boolean;
+	backgroundBlur: number;
 	motionBlurAmount: number;
 	depthOfField: boolean;
 	borderRadius: number;
 	padding: number;
 	webcamLayoutPreset: WebcamLayoutPreset;
-	webcamMaskShape: WebcamMaskShape;
+	webcamMaskShape: WebcamMask;
+	webcamRoundness: number;
 	webcamMirrored: boolean;
 	webcamReactiveZoom: boolean;
 	webcamSizePreset: WebcamSizePreset;
@@ -73,6 +85,8 @@ export interface StylePreset {
 	/** ISO timestamp of the file's last modification. */
 	updatedAt: string;
 	appearance: StylePresetAppearance;
+	/** Set by `list` on the preset a new project starts from. */
+	forNewProjects?: boolean;
 }
 
 export interface StylePresetFile {
@@ -110,23 +124,13 @@ const WALLPAPER_MOTIONS = [
 	"waves",
 ] as const satisfies readonly WallpaperMotion[];
 
-// Bounds are the editor sliders' (RightPanes.tsx), in stored units. `getEditorSettings`
-// only clamps two of these, so a preset is the stricter gate: a value no slider can
-// produce is a hand-edited file, and it is refused rather than applied.
-const NUMBER_RANGES = {
-	shadowIntensity: [0, 1],
-	motionBlurAmount: [0, 1],
-	borderRadius: [0, 64],
-	padding: [0, 100],
-	webcamSizePreset: [10, 50],
-	webcamBlurIntensity: [0, 1],
-} as const;
-const CURSOR_NUMBER_RANGES = {
-	size: [0.5, 10],
-	smoothing: [0, 1],
-	motionBlur: [0, 1],
-	clickBounce: [0, 5],
-} as const;
+// The preset's cursor numbers, by the name `SETTING_BOUNDS` gives them.
+const CURSOR_BOUNDS = {
+	size: "cursorSize",
+	smoothing: "cursorSmoothing",
+	motionBlur: "cursorMotionBlur",
+	clickBounce: "cursorClickBounce",
+} as const satisfies Record<string, SettingBound>;
 
 type Fields = Record<string, unknown>;
 
@@ -134,17 +138,18 @@ function isRecord(value: unknown): value is Fields {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readNumber(
-	source: Fields,
-	key: string,
-	[min, max]: readonly [number, number],
-	at = "",
-): number {
+/**
+ * A number, read into the bound the editor reads it into (`SETTING_BOUNDS`). Clamped rather than
+ * refused: the bounds have narrowed since presets were first saved (the cursor stopped at 10, the
+ * click bounce at 5 and was 2.5 by default), and a preset that applied yesterday must still apply,
+ * with the value the editor would show for it. Anything that is not a finite number is refused.
+ */
+function readNumber(source: Fields, key: string, bound: SettingBound, at = ""): number {
 	const value = source[key];
-	if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) {
-		throw new TypeError(`Style preset ${at}${key} must be a number between ${min} and ${max}.`);
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throw new TypeError(`Style preset ${at}${key} must be a number.`);
 	}
-	return value;
+	return clampToBound(value, bound);
 }
 
 function readBoolean(source: Fields, key: string, at = ""): boolean {
@@ -161,6 +166,21 @@ function readEnum<T extends string>(source: Fields, key: string, allowed: readon
 		throw new TypeError(`Style preset ${key} must be one of: ${allowed.join(", ")}.`);
 	}
 	return value as T;
+}
+
+/**
+ * The camera's proportions and roundness. A preset saved before the roundness existed carries
+ * `circle` or `rounded`, a proportion and a rounding in one value: `readWebcamMask` splits it
+ * the way the editor reads an old project.
+ */
+function readWebcamShape(source: Fields): { webcamMaskShape: WebcamMask; webcamRoundness: number } {
+	const shape = readEnum(source, "webcamMaskShape", WEBCAM_MASK_SHAPES);
+	const roundness =
+		source.webcamRoundness === undefined
+			? undefined
+			: readNumber(source, "webcamRoundness", "webcamRoundness");
+	const mask = readWebcamMask(shape, roundness);
+	return { webcamMaskShape: mask.shape, webcamRoundness: mask.roundness };
 }
 
 /**
@@ -182,6 +202,25 @@ function readFrame(source: Fields): { frame: RecordingFrame; frameTheme: FrameTh
 		throw new TypeError('Style preset frameTheme must be "light" or "dark".');
 	}
 	return { frame: stored.frame, frameTheme: theme ?? stored.theme ?? "light" };
+}
+
+/**
+ * The cursor kinds drawn as the arrow. A kind this build does not know (a newer build's) is
+ * dropped, the way an unknown theme falls back to the default. A preset written before the kinds
+ * could be picked carries the one switch there was, or nothing: the project default then.
+ */
+function readAsArrow(cursor: Fields): CursorKind[] {
+	const value = cursor.asArrow;
+	const fallback = DEFAULT_PROJECT_APPEARANCE.cursor.asArrow;
+	if (value === undefined) {
+		const always =
+			cursor.alwaysArrow === undefined ? false : readBoolean(cursor, "alwaysArrow", "cursor.");
+		return readCursorAsArrow(undefined, always, fallback);
+	}
+	if (!Array.isArray(value) || value.some((kind) => typeof kind !== "string")) {
+		throw new TypeError("Style preset cursor.asArrow must be a list of cursor kinds.");
+	}
+	return readCursorAsArrow(value, undefined, fallback);
 }
 
 const HEX_COLOR_RE = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
@@ -244,7 +283,8 @@ export function parseStylePresetWallpaper(value: unknown, key = "wallpaper"): st
  * otherwise sound (the editor does the same when it renders one). The others postdate the
  * first version-1 files, so a preset saved before one of them existed carries no choice about
  * it and gets the value that means "unchanged": `cursor.model3d` may be absent (the flat
- * cursor), `wallpaperMotion` too (a still wallpaper, which is exactly what "none" means),
+ * cursor), `cursor.asArrow` too (the project default, see `readAsArrow`),
+ * `wallpaperMotion` too (a still wallpaper, which is exactly what "none" means),
  * `frame` as well (no frame, see `readFrame`), and `depthOfField` keeps the factory
  * value (on). A present but ill-typed value is still refused. Unknown extra keys are dropped.
  */
@@ -253,7 +293,7 @@ export function parseStylePresetAppearance(value: unknown): StylePresetAppearanc
 		throw new TypeError("Style preset appearance must be an object.");
 	}
 	if (!isAspectRatio(value.aspectRatio)) {
-		throw new TypeError('Style preset aspectRatio must be "W:H" or "native".');
+		throw new TypeError('Style preset aspectRatio must be "W:H", "auto" or "native".');
 	}
 	const cursor = value.cursor;
 	if (!isRecord(cursor)) {
@@ -270,32 +310,37 @@ export function parseStylePresetAppearance(value: unknown): StylePresetAppearanc
 				: readEnum(value, "wallpaperMotion", WALLPAPER_MOTIONS),
 		...readFrame(value),
 		aspectRatio: value.aspectRatio,
-		shadowIntensity: readNumber(value, "shadowIntensity", NUMBER_RANGES.shadowIntensity),
-		showBlur: readBoolean(value, "showBlur"),
-		motionBlurAmount: readNumber(value, "motionBlurAmount", NUMBER_RANGES.motionBlurAmount),
+		shadowIntensity: readNumber(value, "shadowIntensity", "shadowIntensity"),
+		// Presets saved before the amount carry the old `showBlur` switch instead.
+		backgroundBlur:
+			value.backgroundBlur === undefined && value.showBlur !== undefined
+				? readBoolean(value, "showBlur")
+					? LEGACY_BACKGROUND_BLUR_ON
+					: 0
+				: readNumber(value, "backgroundBlur", "backgroundBlur"),
+		motionBlurAmount: readNumber(value, "motionBlurAmount", "motionBlurAmount"),
 		depthOfField: value.depthOfField === undefined ? true : readBoolean(value, "depthOfField"),
-		borderRadius: readNumber(value, "borderRadius", NUMBER_RANGES.borderRadius),
-		padding: readNumber(value, "padding", NUMBER_RANGES.padding),
+		borderRadius: readNumber(value, "borderRadius", "borderRadius"),
+		padding: readNumber(value, "padding", "padding"),
 		webcamLayoutPreset: readEnum(value, "webcamLayoutPreset", WEBCAM_LAYOUT_PRESETS),
-		webcamMaskShape: readEnum(value, "webcamMaskShape", WEBCAM_MASK_SHAPES),
+		...readWebcamShape(value),
 		webcamMirrored: readBoolean(value, "webcamMirrored"),
 		webcamReactiveZoom: readBoolean(value, "webcamReactiveZoom"),
-		webcamSizePreset: readNumber(value, "webcamSizePreset", NUMBER_RANGES.webcamSizePreset),
+		webcamSizePreset: readNumber(value, "webcamSizePreset", "webcamSizePreset"),
 		webcamBackgroundMode: readEnum(value, "webcamBackgroundMode", WEBCAM_BACKGROUND_MODES),
 		webcamWallpaper: parseStylePresetWallpaper(value.webcamWallpaper, "webcamWallpaper"),
-		webcamBlurIntensity: readNumber(
-			value,
-			"webcamBlurIntensity",
-			NUMBER_RANGES.webcamBlurIntensity,
-		),
+		webcamBlurIntensity: readNumber(value, "webcamBlurIntensity", "webcamBlurIntensity"),
 		cursor: {
-			size: readNumber(cursor, "size", CURSOR_NUMBER_RANGES.size, "cursor."),
-			smoothing: readNumber(cursor, "smoothing", CURSOR_NUMBER_RANGES.smoothing, "cursor."),
-			motionBlur: readNumber(cursor, "motionBlur", CURSOR_NUMBER_RANGES.motionBlur, "cursor."),
-			clickBounce: readNumber(cursor, "clickBounce", CURSOR_NUMBER_RANGES.clickBounce, "cursor."),
+			size: readNumber(cursor, "size", CURSOR_BOUNDS.size, "cursor."),
+			smoothing: readNumber(cursor, "smoothing", CURSOR_BOUNDS.smoothing, "cursor."),
+			motionBlur: readNumber(cursor, "motionBlur", CURSOR_BOUNDS.motionBlur, "cursor."),
+			clickBounce: readNumber(cursor, "clickBounce", CURSOR_BOUNDS.clickBounce, "cursor."),
 			// Presets written before the 3D cursor existed meant the flat one.
 			model3d: cursor.model3d === undefined ? false : readBoolean(cursor, "model3d", "cursor."),
-			clipToBounds: readBoolean(cursor, "clipToBounds", "cursor."),
+			asArrow: readAsArrow(cursor),
+			// Presets written before the option existed gave clicks no impact.
+			clickImpact:
+				cursor.clickImpact === undefined ? false : readBoolean(cursor, "clickImpact", "cursor."),
 		},
 		cursorShow: readBoolean(value, "cursorShow"),
 		cursorAutoHide: readBoolean(value, "cursorAutoHide"),
@@ -354,6 +399,78 @@ export function serializeStylePresetFile(input: {
 		appearance: parseStylePresetAppearance(input.appearance),
 	};
 	return `${JSON.stringify(file, null, 2)}\n`;
+}
+
+// ---- The look a new project starts from ---------------------------------------------
+// Written by the main process straight into `document.legacyEditor`, so these use the
+// legacy key names `nextLegacy` (store/editorSettings.ts) writes. `aspectRatio` is never
+// one of them: the format belongs to the project, and a new project keeps Auto.
+
+/** The `legacyEditor` keys that make up a project's look: the preset fields, renamed. */
+export const LOOK_LEGACY_EDITOR_KEYS = [
+	"wallpaper",
+	"wallpaperMotion",
+	"frame",
+	"frameTheme",
+	"shadowIntensity",
+	"backgroundBlur",
+	"motionBlurAmount",
+	"depthOfField",
+	"borderRadius",
+	"padding",
+	"webcamLayoutPreset",
+	"webcamMaskShape",
+	"webcamRoundness",
+	"webcamMirrored",
+	"webcamReactiveZoom",
+	"webcamSizePreset",
+	"webcamBackgroundMode",
+	"webcamWallpaper",
+	"webcamBlurIntensity",
+	"cursorSize",
+	"cursorSmoothing",
+	"cursorMotionBlur",
+	"cursorClickBounce",
+	"cursorModel3d",
+	"cursorAsArrow",
+	// A project saved before the kinds could be picked holds its look here instead.
+	"cursorAlwaysArrow",
+	"cursorClickImpact",
+	"cursorShow",
+	"cursorAutoHide",
+	"cursorTheme",
+] as const;
+
+/** A preset's appearance as `legacyEditor` fields, format left out. */
+export function stylePresetLegacyEditor(appearance: StylePresetAppearance): Fields {
+	const { aspectRatio: _format, cursor, ...rest } = appearance;
+	return {
+		...rest,
+		cursorSize: cursor.size,
+		cursorSmoothing: cursor.smoothing,
+		cursorMotionBlur: cursor.motionBlur,
+		cursorClickBounce: cursor.clickBounce,
+		cursorModel3d: cursor.model3d,
+		cursorAsArrow: cursor.asArrow,
+		cursorClickImpact: cursor.clickImpact,
+	};
+}
+
+/** The look out of another project's `legacyEditor`: crop, camera framing and position,
+ *  audio, format and everything else that belongs to that footage stay behind. */
+export function lookFromLegacyEditor(legacyEditor: unknown): Fields {
+	if (!isRecord(legacyEditor)) return {};
+	const look: Fields = Object.fromEntries(
+		LOOK_LEGACY_EDITOR_KEYS.filter((key) => legacyEditor[key] !== undefined).map((key) => [
+			key,
+			legacyEditor[key],
+		]),
+	);
+	// A project from before the amount holds only the old switch, under a key the list drops.
+	if (look.backgroundBlur === undefined && typeof legacyEditor.showBlur === "boolean") {
+		look.backgroundBlur = legacyEditor.showBlur ? LEGACY_BACKGROUND_BLUR_ON : 0;
+	}
+	return look;
 }
 
 /** Validates a parsed preset file (the JSON value, not the text). */

@@ -25,10 +25,10 @@ Diese Seite wird vom OpenScreen-Projekt veröffentlicht. Die Angaben zu OBS Stud
 | Was aufgenommen wird | Ein Bildschirm oder ein Fenster, mit Webcam, Mikrofon und Systemton. Danach im Editor zuschneiden | Szenen, die Bildschirme, Fenster, Webcams, Bilder, Text, Browserfenster und Capture-Karten kombinieren. Quellen können vor der Aufnahme zugeschnitten werden |
 | Live-Streaming | Nein | Ja, zu integrierten Diensten oder einem eigenen Server |
 | Eingebauter Editor | Ja. Zeitleiste mit mehreren Clips, Schnitte, Geschwindigkeitsänderungen, Zooms und Annotationen | Keiner. Die Funktionsliste deckt Aufnahme, Mischen, Szenen und Streaming ab |
-| Automatische Zooms | Ja, platziert anhand des aufgezeichneten Cursors | Community-Skript „Zoom to Mouse“, per Hotkey ausgelöst |
+| Automatische Zooms | Ja, platziert auf aufgezeichneten Klicks | Community-Skript „Zoom to Mouse“, per Hotkey ausgelöst |
 | Untertitel | Lokales Whisper, ein Modell von etwa 264 MB, einmalig heruntergeladen. In das Video eingebrannt | Eingebautes Untertitel-Tool nur unter Windows. Das kostenlose LocalVocal-Plugin transkribiert lokal auf allen drei Systemen und schreibt .srt-Dateien |
 | Aufnahmeformat | H.264-MP4 mit nativer Aufnahme | H.264, AV1, HEVC mit Hardware-Encoder, oder ProRes auf einem Mac. Standardmäßig Hybrid-MP4 oder -MOV, außerdem MKV, FLV, MPEG-TS und andere |
-| Ausgabe | MP4 (H.264 oder H.265) oder GIF, bis zu 60 fps, kein Wasserzeichen | Die Aufnahmedatei selbst |
+| Ausgabe | MP4 (H.264) oder GIF, bis zu 60 fps, kein Wasserzeichen | Die Aufnahmedatei selbst |
 | Erweiterbarkeit | Eine Kommandozeile mit JSON-Ausgabe | Plugin-Manager, Lua- und Python-Skripte, WebSocket-Fernsteuerung |
 
 ## Was beide Tools können {#what-both-tools-do}
@@ -47,7 +47,7 @@ Die beiden überschneiden sich stärker, als die Aufteilung „Streamer gegen Ed
 ### Bearbeitung in derselben App {#editing-in-the-same-app}
 
 - **Eine Zeitleiste nach der Aufnahme.** Aufnahmen oder vorhandene Videos importieren, umsortieren und für jeden Clip Start- und Endpunkt sowie einen Zuschnitt festlegen. Abschnitte schneiden und die Geschwindigkeit von 0,1× bis 100× ändern. Siehe [Bearbeitung & Zeitleiste](/docs/editing-timeline/) und [Mediathek](/docs/media-library/).
-- **Nachträglich platzierte Zooms.** **Auto-enhance → Automatic zooms** liest die aufgezeichnete Cursorbewegung und setzt Zoombereiche an die Stellen, an denen der Cursor verweilt, ohne Netzwerkaufruf und ohne Modell. Manuelle Zooms in sechs Tiefen stehen daneben zur Verfügung. Das OBS-Skript „Zoom to Mouse“ zoomt eine Bildschirmaufnahme, wenn du seinen Hotkey drückst, sodass jeder Zoom während der Aufnahme entschieden wird. Mehr zu [Auto-Zoom](/features/auto-zoom/).
+- **Nachträglich platzierte Zooms.** **Auto-enhance → Automatic zooms** liest die aufgezeichneten Klicks und zoomt auf sie, ohne Netzwerkaufruf und ohne Modell. Manuelle Zooms in sechs Tiefen stehen daneben zur Verfügung. Das OBS-Skript „Zoom to Mouse“ zoomt eine Bildschirmaufnahme, wenn du seinen Hotkey drückst, sodass jeder Zoom während der Aufnahme entschieden wird. Mehr zu [Auto-Zoom](/features/auto-zoom/).
 - **Ein Cursor, den du nachträglich ändern kannst.** Standardmäßig zeichnet OpenScreen den Zeiger als Daten statt als Pixel auf. Du kannst ihn nach der Aufnahme in der Größe ändern, seinen Pfad glätten und Bewegungsunschärfe sowie einen Klick-Bounce hinzufügen. Was jedes System aufzeichnet, steht unter [Cursor-Modus](/docs/recording/#cursor-mode).
 - **Rahmung.** Ein Wallpaper, eine Volltonfarbe, ein Verlauf oder ein eigenes Bild hinter der Aufnahme, mit Innenabstand, abgerundeten Ecken und Schatten. Ausgabe als 16:9, 9:16, 1:1, 4:3, 4:5, 16:10, 10:16, oder in der eigenen Form der Clips.
 - **Annotationen auf der Zeitleiste.** Text mit sechs Animationen, Pfeile in acht Richtungen, Bilder und Unschärfebereiche als Gauß-Unschärfe oder Mosaik. OBS fügt Text und Bilder während der Aufnahme als Szenenquellen hinzu. OpenScreen platziert sie nach der Aufnahme, wo du sie verschieben kannst.
@@ -60,7 +60,7 @@ Die beiden überschneiden sich stärker, als die Aufteilung „Streamer gegen Ed
 
 ### Export und Chat-Bearbeitung {#export-and-chat-editing}
 
-- **Ein Exportschritt mit Auswahl.** MP4 in 720p, 1080p oder Originalgröße, mit 24, 30 oder 60 fps, in H.264 oder H.265, oder ein GIF. Kein Wasserzeichen. In OBS werden Ausgabeauflösung, Bildrate und Encoder vor der Aufnahme in den Einstellungen festgelegt. Siehe [Export](/docs/export/).
+- **Ein Exportschritt mit Auswahl.** MP4 in 720p, 1080p oder Originalgröße, mit 24, 30 oder 60 fps, in H.264, oder ein GIF. Kein Wasserzeichen. In OBS werden Ausgabeauflösung, Bildrate und Encoder vor der Aufnahme in den Einstellungen festgelegt. Siehe [Export](/docs/export/).
 - **Optionale Chat-Bearbeitung mit eigenem Schlüssel.** Schnitte, Zooms, Geschwindigkeitsänderungen oder Annotationen in Alltagssprache beschreiben. Jede Änderung landet als gewöhnliche, rückgängig machbare Bearbeitung. Sie ist aus, bis du einen Anbieter verbindest. Siehe [KI-Bearbeitung](/docs/ai-editing/).
 
 ## Wann OBS Studio die bessere Wahl ist {#when-obs-studio-is-the-better-choice}
@@ -84,8 +84,8 @@ Manche Funktionen greifen bei einer OBS-Datei nicht. Automatische Zooms, dem Cur
 ## Erste Schritte {#getting-started}
 
 1. Lade OpenScreen von der [Download-Seite](/download/) herunter. Unter Windows ist der Microsoft Store der empfohlene Weg.
-2. Folge der [Installation](/docs/installation/). Unter macOS erteile die Berechtigungen **Bildschirmaufnahme** und **Bedienungshilfen**, bevor du die erste Aufnahme startest.
-3. Mach eine erste Aufnahme mit dem [Schnellstart](/docs/quick-start/) und führe dann **Auto-enhance → Automatic zooms** darauf aus. Um stattdessen eine OBS-Aufnahme zu bearbeiten, starte bei der [Mediathek](/docs/media-library/) und füge [Untertitel](/docs/captions/) hinzu.
+2. Folge der [Installation](/docs/installation/). Unter macOS erteile die Berechtigungen im Fenster, das sich beim ersten Start öffnet.
+3. Mach eine erste Aufnahme mit dem [Schnellstart](/docs/quick-start/). Sie öffnet sich im Editor mit bereits gesetzten automatischen Zooms. Um stattdessen eine OBS-Aufnahme zu bearbeiten, starte bei der [Mediathek](/docs/media-library/) und füge [Untertitel](/docs/captions/) hinzu.
 
 Vergleichst du auch andere Tools? Siehe die [Screen-Studio-Alternative](/alternatives/screen-studio/), [OpenScreen vs Cap](/compare/openscreen-vs-cap/), die [Camtasia-Alternative](/alternatives/camtasia/) und die [Loom-Alternative](/alternatives/loom/). Für eine Schritt-für-Schritt-Anleitung lies den [Guide zum Produktdemo-Video](/docs/guides/product-demo-video/), oder geh zurück zur [OpenScreen-Startseite](/).
 

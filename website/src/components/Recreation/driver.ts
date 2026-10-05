@@ -1,5 +1,5 @@
 /**
- * Scroll in, custom properties out — plus one video seek and a handful of class
+ * Preview clock or scroll in, custom properties out — plus one video seek and a handful of class
  * changes. This is the only thing that runs per frame.
  *
  * Three rules keep it cheap.
@@ -22,10 +22,13 @@
  * which is the fastest cadence the decoder can hold without building a queue.
  */
 
+import { attachBackgrounds } from "./backgrounds";
 import { CURSORS } from "./generated";
+import { followHeight, footageSize } from "./layout";
+import { createPlayback, DOCK_VIEWPORTS, followDock } from "./playback";
 import {
 	BEATS,
-	CURSOR_CHOICE,
+	type BeatId,
 	CUT_INDEX,
 	type Frame,
 	frameAt,
@@ -41,8 +44,8 @@ export interface DriverRefs {
 	root: HTMLElement;
 	cam: HTMLVideoElement;
 	padValue: HTMLElement;
-	sizeValue: HTMLElement;
 	flow: HTMLElement;
+	pause: HTMLButtonElement;
 }
 
 export interface DriverClasses {
@@ -85,9 +88,6 @@ const WRITTEN = [
 	"--shot-x",
 	"--shot-y",
 	"--shot-bounce",
-	"--shot-cursor",
-	"--shot-hx",
-	"--shot-hy",
 	"--page-y",
 	"--ui-x",
 	"--ui-y",
@@ -104,6 +104,14 @@ const WRITTEN = [
 	"--wand",
 	"--comment",
 	"--k",
+	"--dock",
+	"--stage-y",
+	"--card-scale",
+	"--card-height",
+	"--footage-fit",
+	"--column-h",
+	"--timeline-content-h",
+	"--timeline-bottom",
 ];
 
 /** Piecewise-linear read of `[[t, ...values]]`, clamped at both ends. */
@@ -143,8 +151,8 @@ const inAny = (t: number, w: number[][]) => w.some(([a, b]) => t >= a && t < b);
 /**
  * Hands the scene back to the stylesheet.
  *
- * Not only the custom properties: `apply` also selects the wallpaper, the
- * cursor pack and the pointer art with attributes, writes each trim's opacity
+ * Not only the custom properties: `apply` also selects the wallpaper and the
+ * pointer art with attributes, writes each trim's opacity
  * inline, and strikes words with a class. A driver that stops — the reader
  * crossed a breakpoint, or turned reduced motion on mid-ride — has to give all
  * of it back, or the still it hands over is a frozen frame of the ride rather
@@ -159,7 +167,10 @@ function release(refs: DriverRefs, cls: DriverClasses): void {
 	for (const name of WRITTEN) root.style.removeProperty(name);
 	delete root.dataset.beat;
 	delete root.dataset.cur;
-	delete root.dataset.curSel;
+	delete root.dataset.phase;
+	delete root.dataset.floating;
+	delete refs.band.dataset.driven;
+	refs.band.style.removeProperty("--hero-offset");
 	root.dataset.bg = String(frameAt(1).bg);
 	for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-trim]"))) {
 		el.style.removeProperty("opacity");
@@ -177,8 +188,38 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		};
 	}
 
-	const { band, root, cam, padValue, sizeValue, flow } = refs;
+	const { band, root, cam, padValue, flow, pause } = refs;
+	const backgrounds = attachBackgrounds(root, frameAt(1).bg);
+	const hero = document.querySelector<HTMLElement>("[data-home-hero]");
+	const card = root.querySelector<HTMLElement>("[data-composite]")!;
+	const captions = root.querySelector<HTMLElement>("[data-cap]")!.parentElement!;
+	const panel = root.querySelector<HTMLElement>("[data-editor-panel]")!;
+	const palette = root.querySelector<HTMLElement>("[data-tool-palette]")!;
+	const timeline = root.querySelector<HTMLElement>("[data-editor-timeline]")!;
 	let raf = 0;
+	const sample = createPlayback(T_TOTAL);
+	let paused = false;
+	let visible = false;
+	let offset = 0;
+	let span = 1;
+	let dockDistance = window.innerHeight * DOCK_VIEWPORTS;
+	let heroTop = 0;
+	let previewScale = 1;
+	let heroWidth = 1;
+	let dockWidth = 1;
+	let columnHeight = 1;
+	const paneHeights = new Map<BeatId, number>();
+	let fullBoxHeight = 1;
+	let timelineHeight = 0;
+	let timelineInset = 0;
+	let smoothOffset = 0;
+	let lastTick: number | undefined;
+
+	const heightFor = (beat: BeatId | null, paletteOn: number, timelineOn: number) => {
+		if (paletteOn) return paneHeights.get("timeline") ?? columnHeight;
+		const settled = paneHeights.get(beat ?? "transcript") ?? columnHeight;
+		return Math.min(settled, fullBoxHeight - timelineOn * (timelineHeight + timelineInset));
+	};
 
 	/* ── the target cache ─────────────────────────────────────────────────── */
 
@@ -191,6 +232,8 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	 * a `transform`, a `height` or an `inset`, it belongs here.
 	 */
 	const GEOMETRY = [
+		{ css: "--dock", of: () => 1 },
+		{ css: "--card-scale", of: () => 1 },
 		{ css: "--tl", of: (f: Frame) => f.tl },
 		{ css: "--panel", of: (f: Frame) => f.panel },
 		{ css: "--palette", of: (f: Frame) => f.palette },
@@ -247,9 +290,8 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	 * pointer spends the whole ride a hundred pixels from everything it is
 	 * meant to be clicking. That was the first defect this build shipped.
 	 *
-	 * Opening each pane in turn is also the only correct way to do it: the panes
-	 * share one flow container, so showing them together would measure each one
-	 * stacked below the others.
+	 * Open each pane in turn to read its settled height and target positions
+	 * without including an outgoing pane's transition.
 	 */
 	/**
 	 * Where the things the recorded pointer aims at actually are, in the frame's
@@ -368,26 +410,64 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		// Transitions off for the pass: see .stage[data-measuring].
 		root.dataset.measuring = "";
 		const kept = GEOMETRY.map((g) => [g.css, root.style.getPropertyValue(g.css)] as const);
-		for (const b of BEATS) {
-			root.dataset.beat = b.id;
-			// Opening the pane is not enough. Three of the frame's numbers place
-			// boxes rather than paint them, and a beat measured with the wrong ones
-			// is measured in the wrong place: --tl moves the panel and the
-			// composite by the 151px between the two acts, and --panel and
-			// --palette each hold their box at its entrance offset until they
-			// finish arriving. The pointer wore all three.
-			//
-			// frameAt takes PROGRESS, not seconds: the rAF calls it as
-			// frameAt(off / span). Handing it a midpoint in seconds asks for a
-			// frame past the end of the scene, which answers with the closing act
-			// for every beat, including the three that play in the opening one.
-			const f = frameAt((b.from + b.to) / 2 / T_TOTAL);
-			for (const g of GEOMETRY) root.style.setProperty(g.css, g.of(f).toFixed(3));
-			measureVisible(claimed);
+		const layoutKept = ["--column-h", "--card-height", "--footage-fit"].map(
+			(css) => [css, root.style.getPropertyValue(css)] as const,
+		);
+		root.style.removeProperty("--card-height");
+		root.style.setProperty("--footage-fit", "1");
+		const measurePanes = (withTargets: boolean) => {
+			for (const b of BEATS) {
+				root.dataset.beat = b.id;
+				// Opening the pane is not enough. Three of the frame's numbers place
+				// boxes rather than paint them, and a beat measured with the wrong ones
+				// is measured in the wrong place: --tl moves the panel and the
+				// composite by the 151px between the two acts, and --panel and
+				// --palette each hold their box at its entrance offset until they
+				// finish arriving. The pointer wore all three.
+				//
+				// frameAt takes PROGRESS, not seconds: the rAF calls it as
+				// frameAt(off / span). Handing it a midpoint in seconds asks for a
+				// frame past the end of the scene, which answers with the closing act
+				// for every beat, including the three that play in the opening one.
+				const f = frameAt((b.from + b.to) / 2 / T_TOTAL);
+				for (const g of GEOMETRY) root.style.setProperty(g.css, g.of(f).toFixed(3));
+				const paneHeight = f.palette
+					? palette.getBoundingClientRect().height +
+						Number.parseFloat(getComputedStyle(palette).marginTop)
+					: panel.getBoundingClientRect().height;
+				const height = captions.offsetHeight + paneHeight;
+				paneHeights.set(b.id, height);
+				root.style.setProperty("--column-h", `${height}px`);
+				if (b.id === "style") {
+					fullBoxHeight =
+						captions.offsetHeight + Number.parseFloat(getComputedStyle(panel).maxHeight);
+					heroWidth =
+						window.innerWidth * (window.innerWidth > 900 ? 0.91 : 1) -
+						(window.innerWidth > 900 ? 0 : 36);
+					dockWidth = card.getBoundingClientRect().width;
+					previewScale = heroWidth / dockWidth;
+				}
+				if (withTargets) measureVisible(claimed);
+			}
+		};
+		// Measure final panes, never their temporary combined cross-fade height.
+		// The largest closing group sets one bottom inset for the entire tour.
+		root.style.setProperty("--timeline-bottom", "0px");
+		measurePanes(false);
+		timelineHeight = timeline.offsetHeight;
+		if (window.innerWidth > 900) {
+			const closingHeight = Math.max(paneHeights.get("timeline")!, paneHeights.get("transcript")!);
+			const closingPicture = footageSize(dockWidth, closingHeight, fullBoxHeight - timelineHeight);
+			root.style.setProperty("--timeline-content-h", `${closingPicture.height}px`);
+		} else {
+			root.style.removeProperty("--timeline-content-h");
 		}
+		root.style.removeProperty("--timeline-bottom");
+		timelineInset = Number.parseFloat(getComputedStyle(timeline).bottom);
+		measurePanes(true);
 		if (had === undefined) delete root.dataset.beat;
 		else root.dataset.beat = had;
-		for (const [css, was] of kept) {
+		for (const [css, was] of [...kept, ...layoutKept]) {
 			if (was) root.style.setProperty(css, was);
 			else root.style.removeProperty(css);
 		}
@@ -406,6 +486,20 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		// After the restore, so the boxes are the ones the reader is looking at.
 		measureShots();
 		delete root.dataset.measuring;
+		if (window.innerWidth > 900) {
+			columnHeight = heightFor(
+				(had as BeatId | undefined) ?? "style",
+				Number(root.style.getPropertyValue("--palette")),
+				Number(root.style.getPropertyValue("--tl")),
+			);
+			root.style.setProperty("--column-h", `${columnHeight}px`);
+		} else {
+			root.style.removeProperty("--column-h");
+		}
+		fitCard(
+			Number(root.style.getPropertyValue("--dock")),
+			Number(root.style.getPropertyValue("--tl")),
+		);
 	};
 
 	const at = (name: string, fx = 20, fy = 45): [number, number] => {
@@ -443,10 +537,6 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		   while the cut landed somewhere else. CUT_INDEX is derived from the
 		   tokens' own `cut` field, so this cannot drift again. */
 		const [c0, c1, c2, c3, c4] = CUT_INDEX;
-		/* Same trap, same fix: the swatch the pointer presses and the pack the
-		   frame selects were two literals that had to agree, and reordering the
-		   picks silently left the hand on the wrong one. */
-		const [, cur1, cur2] = CURSOR_CHOICE;
 		return [
 			[0.4, 58, 66],
 			[1.45, ...at("th-1")],
@@ -459,10 +549,7 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 			[7.95, ...pad()],
 			[9.0, ...pad()],
 			[10.3, ...pad()],
-			[11.0, ...at(`cur-${cur1}`)],
-			[11.9, ...at(`cur-${cur1}`)],
-			[12.15, ...at(`cur-${cur2}`)],
-			[12.63, ...at(`cur-${cur2}`)],
+			[11.0, ...sz()],
 			[12.7, ...sz()],
 			[13.2, ...sz()],
 			[14.3, ...sz()],
@@ -493,12 +580,6 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	let camPending: number | undefined;
 	const camSrc = "/video/webcam.mp4";
 
-	// Set at attach, not in the markup and not in primeCam: in the markup every
-	// reader who never reaches the band pays for it, and in primeCam it would
-	// race the clip it exists to stand in for. Here it has the whole approach to
-	// the band to arrive — and on a phone, where the scene does run (the gate is
-	// 360px), it is still only fetched by a reader who scrolls into it.
-	cam.poster = "/img/walkthrough/webcam-poster.jpg";
 	const primeCam = () => {
 		if (cam.getAttribute("src")) return;
 		cam.setAttribute("src", camSrc);
@@ -563,15 +644,42 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 
 	let lastBeat: string | null | undefined;
 	let lastPad = "";
-	let lastSize = "";
 	let lastArt = "";
-	let lastTheme = -1;
 	const struck = new Set<number>();
 	let trimEls: HTMLElement[] = [];
 
 	const num = (n: string, v: number, dp = 4) => root.style.setProperty(n, v.toFixed(dp));
 
-	const apply = (f: Frame) => {
+	const fitCard = (dock: number, timelineOn: number) => {
+		const scale = previewScale + (1 - previewScale) * dock;
+		num("--card-scale", scale);
+		if (window.innerWidth > 900) {
+			const picture = footageSize(
+				dockWidth,
+				columnHeight,
+				fullBoxHeight - timelineOn * (timelineHeight + timelineInset),
+			);
+			const height = (heroWidth * 0.5625 * (1 - dock) + picture.height * dock) / scale;
+			root.style.setProperty("--card-height", `${height.toFixed(3)}px`);
+			num("--footage-fit", Math.min(1, height / (picture.width * 0.5625)));
+		} else {
+			root.style.removeProperty("--card-height");
+			num("--footage-fit", 1);
+		}
+	};
+
+	const apply = (f: Frame, dock: number, phase: string) => {
+		num("--dock", dock);
+		fitCard(dock, f.tl);
+		// Keep the first-screen picture in viewport space while it docks. The
+		// browser's unsmoothed document scroll cannot shift it between our frames.
+		root.dataset.floating = String(offset < heroTop || dock < 1);
+		num("--stage-y", heroTop * (1 - dock));
+		if (hero) {
+			hero.style.opacity = String((1 - dock) ** 2);
+			hero.inert = dock === 1;
+		}
+		root.dataset.phase = phase;
 		num("--t", f.t, 3);
 		num("--tf", f.tf, 3);
 		// Three decimals, not zero. This was written at `toFixed(0)` from when --tl
@@ -580,6 +688,7 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		// composite from one act to the other in a single frame.
 		num("--tl", f.tl, 3);
 		if (String(f.bg) !== root.dataset.bg) root.dataset.bg = String(f.bg);
+		backgrounds.show(f.bg);
 		num("--fit", f.fit);
 		num("--pad-pct", f.paddingPct, 2);
 		num("--frame-scale", f.frameScale, 4);
@@ -612,16 +721,6 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 			if (el) el.style.opacity = c.placed ? "1" : "0";
 		});
 
-		// The pointer inside the recording wears the pack the picker selected.
-		if (f.cursorTheme !== lastTheme) {
-			lastTheme = f.cursorTheme;
-			root.dataset.curSel = String(f.cursorTheme);
-			const theme = CURSORS.themes[f.cursorTheme];
-			root.style.setProperty("--shot-cursor", `url(${theme.src})`);
-			num("--shot-hx", theme.hotspotX * 100, 2);
-			num("--shot-hy", theme.hotspotY * 100, 2);
-		}
-
 		// The reader's pointer: arrow, pointer over a control, caret over text.
 		// The hotspot is the app's own, which is why the tip lands on the target
 		// rather than near it.
@@ -639,7 +738,7 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		const [ux, uy] = kf(Math.min(f.t, 22.36), path(f));
 		num("--ui-x", ux, 2);
 		num("--ui-y", uy, 2);
-		num("--ui-on", f.t > 1.1 && f.t < 22.36 ? 1 : 0, 0);
+		num("--ui-on", phase === "editor" && f.t > 1.1 && f.t < 22.36 ? 1 : 0, 0);
 
 		if (f.beat !== lastBeat) {
 			lastBeat = f.beat;
@@ -652,10 +751,6 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 
 		const pad = `${Math.round(f.padding)}%`;
 		if (pad !== lastPad) padValue.textContent = lastPad = pad;
-		// One decimal and no suffix: RightPanes gives this one slider `decimals={1}`
-		// and no unit, unlike every other slider on the panel.
-		const size = f.cursorSize.toFixed(1);
-		if (size !== lastSize) sizeValue.textContent = lastSize = size;
 		// Only the five removable entries can ever change, so the other forty
 		// nodes in the transcript are never touched.
 		for (const i of CUT_INDEX) {
@@ -670,25 +765,84 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 
 	/* ── the scroll ───────────────────────────────────────────────────────── */
 
-	const onScroll = () => {
-		if (raf) return;
-		raf = requestAnimationFrame(() => {
-			raf = 0;
-			const rect = band.getBoundingClientRect();
-			const total = rect.height - window.innerHeight;
-			// The ride overflows the sticky on purpose: the last stretch plays while
-			// the section is already scrolling away, so the editor is not still
-			// sitting pinned and finished for a whole viewport.
-			const span = total + window.innerHeight * 1.04;
-			const off = Math.min(span, Math.max(0, -rect.top));
-			if (off > 0 && off < span) {
-				primeCam();
-				primeStrip();
-			}
-			apply(frameAt(span > 0 ? off / span : 0));
-		});
+	// Scroll geometry is cached by events. The autonomous preview reads only a
+	// clock, so its animation never measures the page per frame.
+	const readScroll = () => {
+		let rect = band.getBoundingClientRect();
+		const top = rect.top + window.scrollY;
+		if (top !== heroTop) {
+			heroTop = top;
+			band.style.setProperty("--hero-offset", `${heroTop}px`);
+			rect = band.getBoundingClientRect();
+		}
+		span = heroTop + rect.height + window.innerHeight * 0.04;
+		dockDistance = window.innerHeight * DOCK_VIEWPORTS;
+		offset = Math.min(span, Math.max(0, window.scrollY));
 	};
-
+	const tick = (now: number) => {
+		raf = 0;
+		const elapsed = lastTick === undefined ? 0 : now - lastTick;
+		smoothOffset =
+			lastTick === undefined ? offset : followDock(smoothOffset, offset, elapsed, dockDistance);
+		lastTick = now;
+		const following = smoothOffset !== offset;
+		const playing = visible && !paused && !document.hidden;
+		const { time, dock, phase } = sample(now, smoothOffset, span, dockDistance, playing);
+		const scored = frameAt(time / T_TOTAL);
+		// The opening loop shows the picture alone. The first inspector is
+		// revealed while the picture rewinds, before the scroll score begins.
+		const frame =
+			phase === "editor"
+				? scored
+				: { ...scored, tl: 0, beat: "style" as const, panel: 1, intro: 1, palette: 0 };
+		let resizing = false;
+		if (window.innerWidth > 900) {
+			const target = heightFor(frame.beat, frame.palette, frame.tl);
+			columnHeight = followHeight(columnHeight, target, elapsed);
+			root.style.setProperty("--column-h", `${columnHeight.toFixed(3)}px`);
+			resizing = columnHeight !== target;
+		}
+		apply(frame, dock, phase);
+		if (visible) {
+			primeCam();
+			primeStrip();
+		}
+		if (!document.hidden && (following || resizing || (phase === "preview" && playing))) {
+			raf = requestAnimationFrame(tick);
+		}
+	};
+	const schedule = () => {
+		if (!raf) {
+			if (lastTick !== undefined) lastTick = performance.now() - 16;
+			raf = requestAnimationFrame(tick);
+		}
+	};
+	const onScroll = () => {
+		readScroll();
+		schedule();
+	};
+	const onPause = () => {
+		paused = !paused;
+		pause.dataset.paused = String(paused);
+		pause.setAttribute("aria-pressed", String(paused));
+		pause.setAttribute("aria-label", (paused ? pause.dataset.play : pause.dataset.pause)!);
+		schedule();
+	};
+	const onVisibility = () => {
+		if (raf) cancelAnimationFrame(raf);
+		raf = 0;
+		// Browsers suspend rAF in background tabs. Record the pause now so
+		// returning to this tab resumes instead of jumping ahead by minutes.
+		tick(performance.now());
+	};
+	const observer = new IntersectionObserver(
+		(entries) => {
+			visible = entries[0].isIntersecting;
+			schedule();
+		},
+		{ threshold: 0 },
+	);
+	observer.observe(root);
 	// Coalesced into a frame, like the scroll. `measure()` opens all five beats,
 	// reads a rect for every `data-t` node and forces layout to do it; a window
 	// drag fires resize many times a second, and running that work per event was
@@ -706,6 +860,7 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 
 	let detached = false;
 
+	band.dataset.driven = "";
 	measure();
 	// Targets inside a closed pane cannot be measured until it opens, and the
 	// panes open on scroll — so re-measure once the fonts have settled, which is
@@ -717,19 +872,27 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	// for a driver that has since been thrown away.
 	document.fonts?.ready
 		.then(() => {
-			if (!detached) measure();
+			if (!detached) {
+				measure();
+				onScroll();
+			}
 		})
 		.catch(() => {
 			// A font that never resolves leaves the first measurement standing.
 		});
 	window.addEventListener("scroll", onScroll, { passive: true });
 	window.addEventListener("resize", onResize);
+	document.addEventListener("visibilitychange", onVisibility);
+	pause.addEventListener("click", onPause);
 	onScroll();
 
 	return () => {
 		detached = true;
 		window.removeEventListener("scroll", onScroll);
 		window.removeEventListener("resize", onResize);
+		document.removeEventListener("visibilitychange", onVisibility);
+		pause.removeEventListener("click", onPause);
+		observer.disconnect();
 		// The video outlives the driver — it is the same element on re-attach —
 		// so listeners left on it accumulate one pair per breakpoint crossing,
 		// each holding a dead driver's closure alive.
@@ -737,6 +900,15 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		cam.removeEventListener("seeked", onCamSeeked);
 		if (raf) cancelAnimationFrame(raf);
 		if (resizeRaf) cancelAnimationFrame(resizeRaf);
+		pause.dataset.paused = "false";
+		pause.setAttribute("aria-pressed", "false");
+		pause.setAttribute("aria-label", pause.dataset.pause!);
+		if (hero) {
+			hero.style.removeProperty("opacity");
+			hero.inert = false;
+		}
+		backgrounds.dispose();
+		release(refs, cls);
 	};
 }
 

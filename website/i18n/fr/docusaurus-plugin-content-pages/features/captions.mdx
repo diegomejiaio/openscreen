@@ -9,11 +9,16 @@ keywords:
   - sous-titres automatiques enregistrement d'écran
 ---
 
+import DemoLoop from "@site/src/components/DemoLoop";
+import DemoLoopPair from "@site/src/components/DemoLoop/Pair";
+
 # Un enregistreur d'écran avec sous-titres faits sur votre machine
 
 OpenScreen est un enregistreur d'écran gratuit, sous licence MIT, avec sous-titres pour Windows, macOS et Linux. Il transcrit votre enregistrement sur votre propre ordinateur avec Whisper, après un téléchargement unique du modèle d'environ 264 Mo, et incruste des sous-titres stylisés dans la vidéo exportée. Si vous avez besoin de fichiers de sous-titres SRT ou VTT séparés pour une plateforme de cours ou une exigence d'accessibilité, Cap ou Camtasia est le meilleur choix.
 
 Cette page est publiée par le projet OpenScreen. Les informations sur Cap, Camtasia et Screen Studio proviennent de cap.so, techsmith.com et screen.studio et ont été vérifiées en septembre 2026. Les sources sont listées à la fin.
+
+<DemoLoop name="automatic-subtitles" />
 
 ## En un coup d'œil {#at-a-glance}
 
@@ -52,11 +57,18 @@ Les sous-titres sont une vue en direct de la transcription, pas une copie de cel
 
 L'aperçu et l'export utilisent la même mise en page, donc les sous-titres que vous voyez sont ceux incrustés dans la vidéo. **Afficher les sous-titres** les désactive pour un export sans eux. Référence complète dans [Sous-titres et transcription](/docs/captions/).
 
+<DemoLoop name="caption-styles" />
+
 ### Couper en supprimant des mots {#cutting-by-deleting-words}
 
 Le panneau **Transcription** affiche les mots de chaque clip de la timeline. Sélectionnez un mot ou un passage et appuyez sur Suppr : ce passage est coupé de la lecture et de l'export, comme une coupe sur la timeline. Les mots coupés s'affichent barrés, et vous pouvez les rétablir. Les silences sont signalés dans le texte et peuvent être coupés ou rétablis de la même façon.
 
 Whisper place le début des mots un peu trop tard. OpenScreen ramène chaque limite de mot sur l'audio, donc une coupe commence là où le mot parlé commence réellement, plutôt qu'une syllabe plus tard. Voir [Montage par la transcription](/docs/captions/#transcript-editing).
+
+<DemoLoopPair>
+  <DemoLoop name="edit-by-transcript" />
+  <DemoLoop name="tighten-pauses" />
+</DemoLoopPair>
 
 ### Traduction avec votre propre clé {#translation-with-your-own-key}
 

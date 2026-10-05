@@ -27,7 +27,7 @@ OpenScreen 是一款面向 Linux 的免费录屏软件，采用 MIT 许可证，
 | 系统音频 | PipeWire sink 的监听输出，与麦克风混合 |
 | 光标 | 位置和形状来自门户；加入 `input` 组后可采集左键点击 |
 | 字幕 | 本地 Whisper，使用 Vulkan，并有 CPU 回退方案，烧录进视频 |
-| 导出 | MP4（H.264 或 H.265）或 GIF，无水印。在驱动允许时，H.264 通过 VAAPI 使用 GPU 编码 |
+| 导出 | MP4（H.264）或 GIF，无水印。在驱动允许时，H.264 通过 VAAPI 使用 GPU 编码 |
 | 内置更新 | AppImage、`.deb`、`.rpm` 和 `.pacman` 支持，Nix 版本不支持 |
 
 ## Wayland 与 PipeWire {#wayland-and-pipewire}
@@ -46,13 +46,13 @@ OpenScreen 在 Linux 上使用自己的原生辅助程序录制屏幕，而不�
 
 Screen Studio 仅支持 macOS（截至 2026 年 9 月）。OpenScreen 在 Linux 上提供同类型的后期打磨功能，其编辑工具在 Windows、macOS 和 Linux 上是同一套。
 
-- **自动缩放。** **自动增强 → 自动缩放**会根据录制的光标移动放置缩放，无需联网、无需模型。手动缩放提供六种深度。详见[自动缩放](/features/auto-zoom/)。
+- **自动缩放。** **自动增强 → 自动缩放**会在录制的点击处放置缩放，无需联网、无需模型。手动缩放提供六种深度。详见[自动缩放](/features/auto-zoom/)。
 - **光标样式设置。** 显示或隐藏光标，调整大小并使其平滑，添加运动模糊和点击回弹效果。点击效果需要录制到的点击数据，因此同样需要 `input` 组。
 - **背景与画面构图。** 18 张内置壁纸、纯色、渐变或你自己的图片，带内边距、圆角和阴影。可输出为 16:9、9:16、1:1 等多种画面比例。
 - **本地字幕。** whisper.cpp 在你的机器上运行，使用 Vulkan，并有 CPU 回退方案。它使用一个约 264 MB 的 Whisper Small 模型，仅下载一次。字幕会烧录进视频，删除转录文本中的词语即可从视频中剪掉对应内容。详见[字幕](/features/captions/)。
 - **摄像头布局。** 画中画及其他布局，摄像头背景可去除、模糊或替换，无需绿幕。
 - **多片段时间轴。** 每个项目可容纳多个片段、剪切、变速区间、文字、箭头、图片和模糊标注、配音轨道和音乐。参见[编辑与时间轴](/docs/editing-timeline/)。
-- **无水印导出。** MP4，H.264 或 H.265，最高 60 fps，或 GIF。在 Linux 上，合成器通过 Vulkan 渲染，当驱动支持 VAAPI 且 Vulkan 设备可以传递帧数据时，H.264 会通过 `h264_vaapi` 使用 GPU 编码。参见[导出](/docs/export/)。
+- **无水印导出。** MP4，H.264，最高 60 fps，或 GIF。在 Linux 上，合成器通过 Vulkan 渲染，当驱动支持 VAAPI 且 Vulkan 设备可以传递帧数据时，H.264 会通过 `h264_vaapi` 使用 GPU 编码。参见[导出](/docs/export/)。
 - **可选的聊天式编辑，使用你自己的密钥。** 用日常语言描述剪切、缩放或标注。在你连接提供方之前处于关闭状态，每次修改都是一次可撤销的普通编辑。参见 [AI 编辑](/docs/ai-editing/)。
 
 ## 软件包 {#packages}
@@ -72,7 +72,7 @@ Screen Studio 仅支持 macOS（截至 2026 年 9 月）。OpenScreen 在 Linux 
 
 1. 从[下载页面](/download/)下载适合你发行版的软件包，或使用 Nix flake。
 2. 按照 [Linux 安装步骤](/docs/installation/#linux)操作。如果你想让点击被录制下来，请将你的用户加入 `input` 组，并接受该用户组带来的权限。
-3. 参照[快速上手](/docs/quick-start/)完成第一次录制，在门户对话框弹出时作出选择，然后对录制内容运行**自动增强 → 自动缩放**。
+3. 参照[快速上手](/docs/quick-start/)完成第一次录制，并在门户对话框弹出时作出选择。录制内容会在编辑器中打开，自动缩放已经放置好。
 
 在使用其他系统？参见 [Windows](/screen-recorder-windows/) 和 [macOS](/screen-recorder-mac/) 页面。从 Mac 应用转来？参见 [Screen Studio 替代方案](/alternatives/screen-studio/)。或返回 [OpenScreen 首页](/)。
 

@@ -32,14 +32,14 @@ import {
 } from "@/lib/ai-edition/captions";
 import { collapseTracksToPills, trackGroupId } from "@/lib/ai-edition/document/audioTracks";
 import { createId } from "@/lib/ai-edition/document/ids";
-import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
+import { isFormatFillActive, pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
 import {
 	type PlaybackSegment,
-	type PlaybackSpeedRegion,
 	projectRawTimelineSecToPlayback,
+	readSpeedRegions,
 	resolvePlaybackSegments,
 } from "@/lib/ai-edition/document/timeline";
-import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
+import type { AxcutAudioTrack, AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { clipAudioExportFields } from "@/lib/ai-edition/timeline/clipAudio";
@@ -48,28 +48,42 @@ import { removedRawSpans } from "@/lib/ai-edition/timeline/programme-time";
 import { takeProgramme } from "@/lib/ai-edition/timeline/take-programme";
 import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
 import {
+	MAGNIFICATION_REFERENCE_PX,
+	MAX_ZOOM_SCALE,
+	maxZoomScaleFor,
+} from "@/lib/ai-edition/timeline/zoom-scale";
+import {
 	computeCompositeLayout,
+	paddedContentSize,
 	type RenderRect,
 	resolveWebcamLayoutPreset,
 	resolveWebcamReactiveZoom,
 	webcamSizeToFraction,
 } from "@/lib/compositeLayout";
+import type { CursorKind } from "@/lib/cursor/cursorThemes";
 import { parseCssGradient, resolveLinearGradientAngle } from "@/lib/exporter/gradientParser";
-import type { FrameTheme, RecordingFrame } from "@/lib/projectDefaults";
+import type { FrameTheme, RecordingFrame, WebcamAnchor } from "@/lib/projectDefaults";
+import { resolveTextFontFamily } from "@/lib/textFonts";
+import { classifyWallpaper } from "@/lib/wallpaper";
 import type { CompositorClipInput } from "./contracts";
+import { ROUNDNESS_REFERENCE_PX } from "./paramUnits";
 
 /** Background behind the screen. Parsed from `settings.wallpaper`. */
 export type SceneBackground =
 	| { kind: "color"; color: string } // "#rrggbb"
 	// linear-gradient(deg, c1, c2, …). `motion` is omitted when still, so a project without
-	// animation sends the same payload as before the setting existed.
+	// animation sends the same payload as before the setting existed. `offsets` (0..1, one per
+	// stop) place the stops where CSS puts them: the thumbnail draws a middle stop at its
+	// offset, and so must the compositor.
 	| {
 			kind: "gradient";
 			angleDeg: number;
 			stops: string[];
+			offsets: number[];
 			motion?: Exclude<WallpaperMotion, "none">;
 	  }
-	| { kind: "image"; path: string }; // "/wallpapers/…" or a data: URL
+	// "/wallpapers/…" or a data: URL. `motion` as for the gradient: omitted when still.
+	| { kind: "image"; path: string; motion?: Exclude<WallpaperMotion, "none"> };
 
 /** A timeline zoom region (from `document.zoomRanges`). Times in seconds. */
 export interface SceneZoomRegion {
@@ -104,9 +118,6 @@ export interface SceneZoomRegion {
 	underTrim?: boolean;
 	/** When true, cursor is hidden during this zoom region. */
 	hideCursor?: boolean;
-	/** Each click presses the tilted plane toward the clicked side (`regions::click_impact`).
-	 *  Native ignores it without a `rotation`. Omitted (not `false`) when off. */
-	clickImpact?: true;
 }
 
 /** A "Full Camera" timeline region (from `legacyEditor.cameraFullscreenRegions`). Times in seconds. */
@@ -154,10 +165,11 @@ export interface SceneSpeedRegion {
  *  selection outline in the editor overlay still sits on the unzoomed rect.
  *
  *  `space: "frame"` opts an entry out of that and measures it against the output frame instead.
- *  Only captions set it: an annotation is authored on top of the visible video, so it must track
- *  the screen rect, whereas a subtitle belongs to the frame the viewer sees and has to hold still
- *  when padding resizes the footage under it (issue #396). The key is omitted entirely for
- *  annotations, so their payload — and the older binaries that read it — are unchanged. */
+ *  Captions set it, since a subtitle belongs to the frame the viewer sees and has to hold still
+ *  when padding resizes the footage under it (issue #396), and so do text, image and arrow
+ *  annotations, which are placed anywhere on the frame for the same reason. A blur never does,
+ *  and neither does an annotation saved before frame placement: the key is omitted entirely
+ *  there, so their payload is unchanged (see `annotations/placement.ts`). */
 export interface SceneAnnotation {
 	id: string;
 	startSec: number;
@@ -169,7 +181,7 @@ export interface SceneAnnotation {
 	underTrim?: boolean;
 	kind: "text" | "image" | "figure" | "blur";
 	/** Which box `x`/`y`/`w`/`h` — and `text.fontSizeRel` — are fractions of. Absent means
-	 *  `"screen"`, the historical behaviour and the only one annotations ever use. */
+	 *  `"screen"`: a blur, or an annotation saved before frame placement. */
 	space?: "frame";
 	/** Rect as fractions of the box named by `space` (x, y top-left). */
 	x: number;
@@ -268,6 +280,12 @@ export interface SceneLayout {
 	webcamPosition: { cx: number; cy: number } | null;
 	/** Webcam shrinks while a zoom region is active. */
 	webcamReactiveZoom: boolean;
+	/**
+	 * Picture-in-picture: the corner or edge middle the camera is anchored to, at a constant
+	 * margin from the border (`computeCompositeLayout`). The zoom-time shrink keeps that anchor
+	 * fixed, so a corner camera keeps its margin to both edges.
+	 */
+	webcamAnchor: WebcamAnchor;
 	/** User-authored webcam framing, as fractions of the camera source. */
 	webcamCrop: { x: number; y: number; width: number; height: number };
 	/**
@@ -295,8 +313,17 @@ export interface SceneLayout {
 	 * honours on the web path; shipping it here is what lets the native compositor agree.
 	 * Without it native stretched the source to fill the slot — most visible on a cropped
 	 * clip, the crop pushing the source aspect further from the slot's.
+	 *
+	 * The slot also MASKS the screen: a zoom or a 3D tilt stays inside it, cropped, instead of
+	 * spilling over the camera (`ScreenMask` in `frame_geometry.rs`).
 	 */
 	screenCover?: boolean;
+	/**
+	 * The format is filled (`isFormatFillActive`): the screen box is the whole padded area,
+	 * `screenCover` is on, and the window the cover cuts out follows the smoothed cursor
+	 * instead of staying centred. Omitted when off, so other payloads are unchanged.
+	 */
+	screenFollow?: true;
 	/**
 	 * One resolved layout per visible clip, index-aligned with `SceneDescription.clips`
 	 * and `cropByClip`. The scalar fields above are the FIRST clip's entry (fallback for
@@ -353,12 +380,18 @@ export interface ResolvedClipLayout {
 export interface SceneEffects {
 	/** 0..1 extra inset of the screen (padding). */
 	padding: number;
-	/** Blur the background (screen used as bg). */
-	blur: boolean;
+	/** 0..1 blur of the wallpaper, 0 = sharp (`background_blur_steps` in frame_geometry.rs). */
+	blur: number;
 	/** 0..1 drop-shadow strength. */
 	shadow: number;
 	/**
-	 * Roundness slider, as a fraction of the output frame's SHORT SIDE.
+	 * Roundness slider, as a fraction of a fixed 1080 px reference (`ROUNDNESS_REFERENCE_PX`).
+	 *
+	 * The native side multiplies it by the SCREEN's unit: the short side of the frame the
+	 * screen would have in an output of its own ratio (`screen_unit_px`). So 24 means 24 px
+	 * on a 1080p export whose format matches the recording, and the same share of the screen
+	 * everywhere else. It used to be divided by the output's short side, which follows the
+	 * source: a 4K take got corners half as round as a 1080p one.
 	 *
 	 * Every length crossing this contract is a fraction, never a pixel count, and that is
 	 * load-bearing rather than stylistic: the native compositor rasterises the preview
@@ -372,7 +405,7 @@ export interface SceneEffects {
 	 * The slider itself stays in pixels for the user — the division happens here, once.
 	 *
 	 * Under a frame, the native side reads the slider's POSITION back from it (× the
-	 * output's short side ÷ `ROUNDNESS_SLIDER_MAX_PX`) and maps it onto the range that
+	 * reference ÷ `ROUNDNESS_SLIDER_MAX_PX`) and maps it onto the range that
 	 * frame wears well, in the frame's own unit — the same corner on every clip ratio.
 	 */
 	roundnessFrac: number;
@@ -411,6 +444,12 @@ export interface SceneCursor {
 	 * the default theme's arrow; any other cursor keeps its flat sprite.
 	 */
 	model3d: boolean;
+	/** The kinds drawn with the arrow sprite (`CURSOR_KINDS`, resolved app-side, see
+	 *  compositorViewService). */
+	asArrow: CursorKind[];
+	/** Each click gives the screen an impact, under every camera (`scene.rs`
+	 *  `SceneCursor::click_impact`). Omitted (not `false`) when off. */
+	clickImpact?: true;
 	clipToBounds: boolean;
 	/** Cursor theme id (sprite set). */
 	theme: string;
@@ -452,17 +491,19 @@ export interface SceneDescription {
 	speedRegions: SceneSpeedRegion[];
 	cursor: SceneCursor;
 	/**
-	 * Audio finishing, applied identically by the preview and by `finish_audio` (Rust).
+	 * Audio finishing: the output trim, applied identically by the preview and by
+	 * `finish_audio` (Rust).
 	 *
 	 * One field, and it takes some resisting to keep it that way. The preview plays the
 	 * untouched SOURCE file, seeked; the export runs on the assembled timeline — trimmed,
 	 * speed-adjusted, concatenated. A linear gain is the only operation that means the same
-	 * thing on both. Anything with memory (a filter, a compressor) diverges across cuts;
-	 * anything measured over the whole programme (a loudness normaliser) cannot be computed
-	 * preview-side at all; and even a plain delay diverges, because the preview would apply
-	 * it in source seconds while this applies it in timeline seconds — a 2x speed region
-	 * halves it, and near a cut the export pulls audio across the junction while the preview
-	 * only has the active asset. A sync offset shipped here and was removed for exactly that.
+	 * thing on both. That is why the loudness normalisation is not a field here: it is a gain
+	 * per voice FILE, measured over the whole file by the compositor, which the export and
+	 * the preview both ask for (`loudness_gain_db`). Anything with memory diverges across
+	 * cuts — the export's peak limiter is the one such stage, and it runs at export only —
+	 * and even a plain delay diverges, because the preview would apply it in source seconds
+	 * while this applies it in timeline seconds. A sync offset shipped here and was removed
+	 * for exactly that.
 	 */
 	audio: {
 		gainDb: number;
@@ -491,6 +532,8 @@ export interface SceneDescription {
 		 *  start and end, so it fades once rather than at every cut or repeat. */
 		fadeInSec: number;
 		fadeOutSec: number;
+		/** A voiceover is voice: the export levels it like the recording's own audio. */
+		kind: AxcutAudioTrack["kind"];
 	}>;
 	/**
 	 * Per-clip screen crop (fractions of the frame), or null for the identity
@@ -539,26 +582,32 @@ function parseWallpaper(wallpaper: string) {
 			kind: "gradient",
 			angleDeg: resolveLinearGradientAngle(parsed?.descriptor ?? null),
 			stops: parsed?.stops.map((stop) => stop.color) ?? [],
+			offsets: parsed?.stops.map((stop) => stop.offset) ?? [],
 		} as const;
 	}
 	return { kind: "image", path: wallpaper } as const;
 }
 
 /**
- * True when `settings.wallpaperMotion` has something to move: the compositor animates only
- * the gradient it draws itself. The motion control asks this, not its own guess at what a
- * gradient is, so it is enabled exactly when the export would show the motion.
+ * True when `settings.wallpaperMotion` has something to move: a linear gradient the compositor
+ * draws itself, or an image it loads. A colour has nothing to move, and any other string (a
+ * radial gradient, a colour function) reaches the compositor as an image path that does not
+ * load. The motion control asks this, not its own guess, so it is shown exactly when the export
+ * would move.
  */
 export function wallpaperAcceptsMotion(wallpaper: string): boolean {
-	return parseWallpaper(wallpaper).kind === "gradient";
+	return (
+		parseWallpaper(wallpaper).kind === "gradient" || classifyWallpaper(wallpaper).kind === "image"
+	);
 }
 
 /** The screen background with the chosen motion attached, when there is one to attach. */
 function sceneBackground(wallpaper: string, motion: WallpaperMotion): SceneBackground {
 	const background = parseWallpaper(wallpaper);
-	return background.kind === "gradient" && motion !== "none"
-		? { ...background, motion }
-		: background;
+	if (motion === "none" || background.kind === "color" || !wallpaperAcceptsMotion(wallpaper)) {
+		return background;
+	}
+	return { ...background, motion };
 }
 
 /**
@@ -590,6 +639,132 @@ export function resolveVisibleClips(document: AxcutDocument): PlaybackSegment[] 
 	return resolvePlaybackSegments(document.timeline.clips, document.timeline.trimRanges)
 		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
 		.filter((clip) => clipAssetIsResolvable(clip, assetById));
+}
+
+/** A clip's screen source size in pixels: its recording × its crop (see `screenSourceSizeOf`). */
+function screenSourceSize(
+	video: { width?: number; height?: number } | null | undefined,
+	crop: { width: number; height: number } | null | undefined,
+) {
+	return {
+		width: Math.max(1, Math.round((video?.width || 1920) * (crop?.width ?? 1))),
+		height: Math.max(1, Math.round((video?.height || 1080) * (crop?.height ?? 1))),
+	};
+}
+
+/**
+ * The deepest zoom a clip takes before its recording blurs: `maxZoomScaleFor` its
+ * magnification at rest, frame pixels per source pixel, read on its screen box. The larger
+ * axis, so a slot that covers its box (block layouts) counts the pixels it really blows up.
+ *
+ * Measured on the default export, a frame with a 1080 px short side
+ * (`MAGNIFICATION_REFERENCE_PX`), not on `output`: `output` follows the largest clip, crop
+ * included, so a cropped take would look small there and be upscaled at export. A 1080p take
+ * at 50 % padding sits at 0.8 (limit 2.5×), a 2160p take at 0.4 (5×), half of a 1080p take
+ * at 1.6 (1.25×).
+ */
+function zoomScaleLimitOf(
+	rect: SceneRect | null,
+	output: { width: number; height: number },
+	source: { width: number; height: number },
+): number {
+	if (!rect) return MAX_ZOOM_SCALE;
+	const toReference =
+		MAGNIFICATION_REFERENCE_PX / Math.max(1, Math.min(output.width, output.height));
+	const rest =
+		toReference *
+		Math.max(
+			(rect.width * output.width) / source.width,
+			(rect.height * output.height) / source.height,
+		);
+	return maxZoomScaleFor(rest);
+}
+
+/**
+ * The deepest zoom the region `regionId` can take, for the inspector: the same bound the
+ * scene applies, read on the clip the region belongs to. `MAX_ZOOM_SCALE` when the region
+ * is not on screen.
+ */
+export function zoomScaleLimit(document: AxcutDocument, regionId: string): number {
+	const region = (document.zoomRanges ?? []).find((z) => z.id === regionId);
+	if (!region) return MAX_ZOOM_SCALE;
+	const scene = buildSceneDescription(document);
+	const visibleClips = resolveVisibleClips(document);
+	// A region straddling a cut becomes one piece per clip, each with its own id: the same
+	// projection as the scene, and the tightest of their limits.
+	const pieces = projectRegionsToSource([region], visibleClips, document.timeline.clips, () => "");
+	let limit = MAX_ZOOM_SCALE;
+	for (const { clipIndex = 0 } of pieces) {
+		const clip = visibleClips[clipIndex];
+		if (!clip) continue;
+		const video = document.assets.find((a) => a.id === clip.assetId)?.video;
+		limit = Math.min(
+			limit,
+			zoomScaleLimitOf(
+				scene.layout.layoutByClip?.[clipIndex]?.screenRect ?? scene.layout.screenRect ?? null,
+				scene.output,
+				screenSourceSize(video, scene.cropByClip[clipIndex]),
+			),
+		);
+	}
+	return limit;
+}
+
+/**
+ * Where the footage under the annotation `annotationId` sits in the output frame, as fractions
+ * of it: the layout of the clip the annotation is on, exactly as the scene lays it out. What the
+ * inspector converts through when an annotation changes box (`annotations/placement.ts`). `null`
+ * when the annotation is on no clip (its own clip trimmed away, say): another clip's layout may
+ * differ, and converting through it would move the annotation.
+ */
+export function annotationFootageRect(
+	document: AxcutDocument,
+	annotationId: string,
+): SceneRect | null {
+	const region = (document.annotations ?? []).find((a) => a.id === annotationId);
+	if (!region) return null;
+	const [piece] = projectRegionsToSource(
+		[region],
+		resolveVisibleClips(document),
+		document.timeline.clips,
+		() => "",
+	);
+	if (piece?.clipIndex === undefined) return null;
+	const scene = buildSceneDescription(document);
+	return (
+		scene.layout.layoutByClip?.[piece.clipIndex]?.screenRect ?? scene.layout.screenRect ?? null
+	);
+}
+
+type Size = { width: number; height: number };
+
+/**
+ * The size the camera box is laid out from: the camera's own proportions, cropped.
+ *
+ * The order matters. `camera.width/height` comes FIRST because it is the only source
+ * every caller has: it is in the document, so the export dialog and the CLI runner read
+ * it exactly as the preview does. `probed` is second, as a fresher-than-disk override for
+ * the window before the backfill has written the dimensions: it is what a mounted <video>
+ * just reported, and only the preview can ever supply it. The hardcoded 4:3 is last and
+ * is only reached for a document that predates the field, opened with no camera mounted.
+ *
+ * That ordering is the fix: the box used to depend on WHO was asking rather than on what
+ * was recorded, so a 16:9 camera was framed 16:9 in the preview and 4:3 in the export.
+ * The scene and the editor's drag box both read the same answer now.
+ */
+export function webcamBoxSourceSize(
+	camera: { width?: number; height?: number } | null | undefined,
+	probed: Size | null,
+	crop: Size,
+): Size {
+	const source =
+		camera?.width && camera?.height
+			? { width: camera.width, height: camera.height }
+			: (probed ?? { width: 960, height: 720 });
+	return {
+		width: Math.max(1, Math.round(source.width * crop.width)),
+		height: Math.max(1, Math.round(source.height * crop.height)),
+	};
 }
 
 /** Serialize a document into a {@link SceneDescription}. Pure — no per-frame math. */
@@ -624,11 +799,7 @@ export function buildSceneDescription(
 	// after a speed region at the wrong second. The tracks themselves are never
 	// stretched — a voiceover should not chipmunk because the video under it was
 	// sped up.
-	const rawSpeedRegions = (
-		((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as
-			| PlaybackSpeedRegion[]
-			| undefined) ?? []
-	).filter((r) => Number.isFinite(r.speed) && r.speed > 0);
+	const rawSpeedRegions = readSpeedRegions(document);
 	// The one removed set, hoisted out of the map: every voiceover asks it the same
 	// question, and it does not depend on the track.
 	// Placed once: the projection below counts them, so a track after a pause lands where
@@ -681,6 +852,7 @@ export function buildSceneDescription(
 			gainDb: track.gainDb,
 			fadeInSec: track.fadeInMs / 1000,
 			fadeOutSec: track.fadeOutMs / 1000,
+			kind: track.kind,
 		};
 		// The window the file has left after the offset. Without a probed duration
 		// there is nothing to loop over and nothing to cap the tail with, so the
@@ -836,10 +1008,11 @@ export function buildSceneDescription(
 	// overlay and absent from the composited pixels — the exact preview/render gap the annotation
 	// work above closed. They are derived on the fly and never stored (see lib/ai-edition/captions).
 	//
-	// What they do NOT share is the reference box: each caption region carries `space: "frame"`,
-	// so the compositor measures it against the output frame while annotations stay on the screen
-	// rect. Subtitles have to sit where the viewer's frame ends, not where the footage does, or
-	// they slide inward the moment padding shrinks the screen rect (issue #396).
+	// The reference box travels with each region: every caption carries `space: "frame"`, so the
+	// compositor measures it against the output frame. Subtitles have to sit where the viewer's
+	// frame ends, not where the footage does, or they slide inward the moment padding shrinks the
+	// screen rect (issue #396). Text, image and arrow annotations carry the same key for the same
+	// reason; a privacy blur never does (see `annotations/placement.ts`).
 	//
 	// The output aspect is what decides the caption column and the default inset (a
 	// caption 5% off the bottom of a 16:9 export sits under the platform's own chrome
@@ -878,9 +1051,7 @@ export function buildSceneDescription(
 	// every other field verbatim via `{...region}` — so the `speed` field passes through,
 	// and the splitting-across-clips semantics match zoomRegions / cameraFullscreenRegions.
 	const projectedSpeedRegions = projectRegionsToSource(
-		((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as
-			| SpeedRegion[]
-			| undefined) ?? [],
+		readSpeedRegions<SpeedRegion>(document),
 		visibleClips,
 		document.timeline.clips,
 		() => createId("speed"),
@@ -907,7 +1078,12 @@ export function buildSceneDescription(
 	// padded content area the preview uses — `compositor.rs` consumes an app-provided
 	// `webcamRect` verbatim (it only scale_frame's the SCREEN by padding), so an
 	// unpadded rect here would leave the camera behind while the screen moved.
-	const paddingFit = 1 - (Math.min(100, Math.max(0, settings.padding)) / 100) * 0.4;
+	const formatFill = isFormatFillActive(document);
+	const maxContentSize = paddedContentSize(
+		outputDims,
+		settings.padding,
+		settings.aspectRatio === "auto",
+	);
 	/**
 	 * The screen source SHAPE of a clip = its recording's own dimensions × its crop.
 	 *
@@ -922,14 +1098,9 @@ export function buildSceneDescription(
 	 * was already wrong for a document mixing recording resolutions — the crop only
 	 * made the existing defect visible, by letting one document hold two shapes.
 	 */
-	const screenSourceSizeOf = (clip: AxcutClip, index: number) => {
-		const video = assetById.get(clip.assetId)?.video;
-		const crop = cropByClip[index]; // index-aligned; null = identity crop
-		return {
-			width: Math.max(1, Math.round((video?.width || 1920) * (crop?.width ?? 1))),
-			height: Math.max(1, Math.round((video?.height || 1080) * (crop?.height ?? 1))),
-		};
-	};
+	const screenSourceSizeOf = (clip: AxcutClip, index: number) =>
+		// index-aligned; null = identity crop
+		screenSourceSize(assetById.get(clip.assetId)?.video, cropByClip[index]);
 	/** Does THIS clip have a camera to lay out? Same expression as the `webcamPath` sent
 	 *  with the clip above, so the layout and the decoder can never disagree about it.
 	 *  Note this is NOT `hasAnyClipWithCamera` (which gates the Layout panel): that one
@@ -950,30 +1121,13 @@ export function buildSceneDescription(
 	 * The camera source SHAPE of a clip, resolved the same way and for the same reasons
 	 * as `screenSourceSizeOf` above: per clip, because two clips need not have been
 	 * recorded with the same camera.
-	 *
-	 * The order matters. `cameraTrack.width/height` comes FIRST because it is the only
-	 * source every caller has: it is in the document, so the export dialog and the CLI
-	 * runner read it exactly as the preview does. `webcamSourceSize` is second, as a
-	 * fresher-than-disk override for the window before the backfill has written the
-	 * dimensions — it is what a mounted <video> just reported, and only the preview can
-	 * ever supply it. The hardcoded 4:3 is last and is now only reached for a document
-	 * that predates the field, opened somewhere with no camera element mounted.
-	 *
-	 * That ordering is the fix: the box used to depend on WHO was asking rather than on
-	 * what was recorded, so a 16:9 camera was framed 16:9 in the preview and 4:3 in the
-	 * export. Everything below reads the same answer now.
 	 */
-	const webcamSourceSizeOf = (clip: AxcutClip) => {
-		const camera = assetById.get(clip.assetId)?.cameraTrack;
-		const source =
-			camera?.width && camera?.height
-				? { width: camera.width, height: camera.height }
-				: (webcamSourceSize ?? { width: 960, height: 720 });
-		return {
-			width: Math.max(1, Math.round(source.width * settings.webcamCropRegion.width)),
-			height: Math.max(1, Math.round(source.height * settings.webcamCropRegion.height)),
-		};
-	};
+	const webcamSourceSizeOf = (clip: AxcutClip) =>
+		webcamBoxSourceSize(
+			assetById.get(clip.assetId)?.cameraTrack,
+			webcamSourceSize,
+			settings.webcamCropRegion,
+		);
 	const layoutForClip = (
 		screenSize: { width: number; height: number },
 		hasCamera: boolean,
@@ -982,16 +1136,16 @@ export function buildSceneDescription(
 		const preset = resolveWebcamLayoutPreset(settings.webcamLayoutPreset, hasCamera);
 		return computeCompositeLayout({
 			canvasSize: outputDims,
-			maxContentSize: {
-				width: Math.round(outputDims.width * paddingFit),
-				height: Math.round(outputDims.height * paddingFit),
-			},
-			screenSize,
+			maxContentSize,
+			// Filled, the screen takes the whole padded area; the compositor cuts the window.
+			screenSize: formatFill ? maxContentSize : screenSize,
 			webcamSize: preset === "no-webcam" ? null : camSize,
 			layoutPreset: preset,
 			webcamSizePreset: settings.webcamSizePreset,
-			webcamPosition: preset === "picture-in-picture" ? settings.webcamPosition : null,
+			webcamAnchor: settings.webcamAnchor,
 			webcamMaskShape: settings.webcamMaskShape,
+			webcamRoundness: settings.webcamRoundness,
+			frame: settings.frame,
 		});
 	};
 	const toFrameFractions = (r: RenderRect) => ({
@@ -1016,7 +1170,7 @@ export function buildSceneDescription(
 					screenRadiusFrac: radiusFractionOf(layout.screenRect, layout.screenBorderRadius),
 					webcamRadiusFrac: radiusFractionOf(layout.webcamRect, layout.webcamRect?.borderRadius),
 					webcamShape: layout.webcamRect?.maskShape ?? settings.webcamMaskShape,
-					screenCover: layout.screenCover ?? false,
+					screenCover: formatFill || (layout.screenCover ?? false),
 				}
 			: null;
 	// One resolved layout per visible clip, index-aligned with `clips` / `cropByClip`.
@@ -1040,6 +1194,14 @@ export function buildSceneDescription(
 		? toFrameFractions(computedLayout.webcamRect)
 		: null;
 	const screenRect = computedLayout ? toFrameFractions(computedLayout.screenRect) : null;
+	// The deepest zoom each clip takes before its recording blurs (`zoomScaleLimitOf`).
+	const zoomLimitByClip = visibleClips.map((clip, index) =>
+		zoomScaleLimitOf(
+			layoutByClip[index]?.screenRect ?? screenRect,
+			outputDims,
+			screenSourceSizeOf(clip, index),
+		),
+	);
 
 	return {
 		clips,
@@ -1052,13 +1214,18 @@ export function buildSceneDescription(
 			// rectangle, whatever shape the user last picked under picture-in-picture.
 			webcamShape: computedLayout?.webcamRect?.maskShape ?? settings.webcamMaskShape,
 			webcamMirror: settings.webcamMirrored,
-			webcamPosition: settings.webcamPosition,
+			// The centre of the rect the anchor resolved to. Native places the camera from
+			// `webcamRect`; this only keeps the field's meaning for anything that reads it.
+			webcamPosition: webcamRect
+				? { cx: webcamRect.x + webcamRect.width / 2, cy: webcamRect.y + webcamRect.height / 2 }
+				: null,
 			// Gated by the preset: the block layouts size their camera off the screen
 			// box, so it must never shrink mid-zoom (the UI hides the toggle too).
 			webcamReactiveZoom: resolveWebcamReactiveZoom(
 				settings.webcamLayoutPreset,
 				settings.webcamReactiveZoom,
 			),
+			webcamAnchor: settings.webcamAnchor,
 			webcamCrop: settings.webcamCropRegion,
 			webcamRect,
 			screenRect,
@@ -1066,7 +1233,8 @@ export function buildSceneDescription(
 				computedLayout?.screenRect,
 				computedLayout?.screenBorderRadius,
 			),
-			screenCover: computedLayout?.screenCover ?? false,
+			screenCover: formatFill || (computedLayout?.screenCover ?? false),
+			...(formatFill ? { screenFollow: true as const } : {}),
 			webcamRadiusFrac: radiusFractionOf(
 				computedLayout?.webcamRect,
 				computedLayout?.webcamRect?.borderRadius,
@@ -1075,12 +1243,19 @@ export function buildSceneDescription(
 		},
 		effects: {
 			padding: settings.padding / 100,
-			blur: settings.showBlur,
+			blur: settings.backgroundBlur,
 			shadow: settings.shadowIntensity,
-			// The slider is in output pixels; the contract is in fractions of the frame's
-			// short side. This division is the whole conversion — see `roundnessFrac`.
+			// The slider is in pixels of a 1080 reference, whatever the source resolution —
+			// see `roundnessFrac`. No padding and no frame: the footage meets the scene's edges,
+			// with no background to round against, so the corners go square and the stored value
+			// waits for the padding to come back. Under a frame the frame meets the edges, and
+			// the footage keeps its corners. A block layout's screen carries its own radius
+			// (`screenRadiusFrac`), so this only ever squares Picture in Picture and camera-less
+			// clips.
 			roundnessFrac:
-				settings.borderRadius / Math.max(1, Math.min(outputDims.width, outputDims.height)),
+				settings.padding > 0 || settings.frame !== "none"
+					? settings.borderRadius / ROUNDNESS_REFERENCE_PX
+					: 0,
 			motionBlur: settings.motionBlurAmount,
 			// Omitted at their defaults, like `webcamEffect`: the Rust side defaults both fields,
 			// so a project with no frame serializes exactly as it did before they existed.
@@ -1098,7 +1273,11 @@ export function buildSceneDescription(
 			motionBlur: settings.cursor.motionBlur,
 			clickBounce: settings.cursor.clickBounce,
 			model3d: settings.cursor.model3d,
-			clipToBounds: settings.cursor.clipToBounds,
+			asArrow: settings.cursor.asArrow,
+			...(settings.cursor.clickImpact ? { clickImpact: true as const } : {}),
+			// The "Keep inside frame" option is gone: the cursor always overflows into the
+			// background. The field stays because the compositor's scene requires it.
+			clipToBounds: false,
 			theme: settings.cursorTheme,
 		},
 		audio: {
@@ -1124,7 +1303,14 @@ export function buildSceneDescription(
 			// [1.0, 5.0] que l'UI applique. Or `zoomRegionSchema` n'exige de `customScale`
 			// que d'être positif : un document portant `customScale: 12` est valide, rendait
 			// 5× dans l'aperçu web et 12× ici. Même désaccord que ci-dessus, un cran plus bas.
-			scale: getZoomScale(region),
+			//
+			// Bounded per clip: crop and zoom multiply, and past `MAX_SOURCE_MAGNIFICATION` the
+			// recording blurs. The inspector greys those levels out; this catches a level set
+			// before a crop or a format change made it too deep.
+			scale: Math.min(
+				getZoomScale(region),
+				zoomLimitByClip[region.clipIndex ?? 0] ?? MAX_ZOOM_SCALE,
+			),
 			focusX: region.focus.cx,
 			focusY: region.focus.cy,
 			// The global Auto-Focus toggle OVERRIDES each region's own mode rather than merely
@@ -1136,16 +1322,20 @@ export function buildSceneDescription(
 			clipIndex: region.clipIndex,
 			...(region.underTrim ? { underTrim: true } : {}),
 			...(region.hideCursor ? { hideCursor: true } : {}),
-			...(region.clickImpact ? { clickImpact: true as const } : {}),
 		})),
 		annotations: projectedAnnotations
 			.map((region) => {
 				const style = region.style;
-				// Only captions carry a space; annotations must keep emitting the exact same keys
-				// they always have, so the field is omitted rather than sent as null/undefined.
-				const space = (region as { space?: "frame" }).space;
-				// Same treatment, same reason: only captions pin an edge.
-				const verticalAlign = (region as { verticalAlign?: "top" | "bottom" }).verticalAlign;
+				// Omitted rather than sent as null/undefined when absent: an annotation still on the
+				// footage keeps emitting the exact keys it always has.
+				const space = region.space;
+				// Same treatment, same reason: only captions pin an edge. That includes the
+				// caption annotations `openscreen captions` writes, whose box is the editor's
+				// caption box: bottom-anchored, a caption that wraps grows upward from the inset
+				// instead of past the frame's edge.
+				const verticalAlign =
+					(region as { verticalAlign?: "top" | "bottom" }).verticalAlign ??
+					(region.annotationSource === "auto-caption" ? "bottom" : undefined);
 				const base = {
 					id: region.id,
 					startSec: region.startMs / 1000,
@@ -1176,7 +1366,10 @@ export function buildSceneDescription(
 							color: style.color,
 							backgroundColor: style.backgroundColor,
 							fontSizeRel: annotationFontSizeFraction(style.fontSize),
-							fontFamily: style.fontFamily,
+							// The one place every drawn text passes: a family that does not ship
+							// (a project saved with any other name) draws in the default rather
+							// than in whatever the machine falls back to.
+							fontFamily: resolveTextFontFamily(style.fontFamily),
 							fontWeight: style.fontWeight,
 							fontStyle: style.fontStyle,
 							textDecoration: style.textDecoration,

@@ -51,7 +51,7 @@ buildNpmPackage {
       );
     };
 
-  npmDepsHash = "sha256-hxbD3nQBxB9fPecXDyvjSJYjA+JKztJN5lfUhLb/hXU=";
+  npmDepsHash = "sha256-VeehS9Cp7Z/tcKgPAkjTzRLORqMuSp1pRf2AIOgm6q4=";
 
   env.ELECTRON_SKIP_BINARY_DOWNLOAD = "1";
 
@@ -90,6 +90,9 @@ buildNpmPackage {
     # packaged layout (electron-builder extraResources -> resources/wallpapers).
     mkdir -p "$out/lib/openscreen/public"
     cp -r public/wallpapers "$out/lib/openscreen/public/wallpapers"
+    # Same for the caption/annotation fonts: the renderer's picker loads them from
+    # there. The compositor itself finds the copy Vite put in dist/fonts.
+    cp -r public/fonts "$out/lib/openscreen/public/fonts"
 
     # Wrap system electron with the app directory.
     #

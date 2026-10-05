@@ -68,7 +68,7 @@ export OPENSCREEN_MAC_CURSOR_HELPER_EXE=/path/to/openscreen-macos-cursor-helper
 npm run dev
 ```
 
-macOS recording requires Screen Recording permission. Accessibility permission is optional and enables text and pointer affordance detection. After changing either permission, fully quit and relaunch the development app so the process observes the new state.
+macOS recording requires Screen Recording permission, except on macOS 15.2+ where sources are picked in Apple's system picker, which needs none. Accessibility permission is optional and enables text and pointer affordance detection. After changing either permission, fully quit and relaunch the development app so the process observes the new state. The app's permissions window (tray → *Permissions…*) shows both and opens the matching System Settings pane.
 
 ## Reading the JSON report
 

@@ -30,10 +30,10 @@ Une barre d'icônes flottante se superpose à l'aperçu. Elle donne accès à ci
 
 | Onglet | Ce qu'il contrôle |
 |---|---|
-| **Composition** | Une section d'arrière-plan (image, couleur unie ou dégradé derrière votre enregistrement ; importez votre propre image ou choisissez parmi les préréglages), puis le flou d'arrière-plan, l'ombre, le flou de mouvement, l'arrondi des coins et la marge. Sa ligne **Format** définit la forme de sortie pour l'aperçu et l'export : les formes propres à vos clips sous **Original**, plus 16:9, 9:16, 1:1, 4:3, 4:5, 16:10 et 10:16. |
-| **Disposition caméra** | La composition de la webcam : incrustation d'image, empilement vertical, double cadre ou sans webcam. Effet miroir, « réduire au zoom », forme de la caméra (rectangle/cercle/carré/arrondi) et taille. Faites glisser la bulle de la webcam directement sur le canevas pour la déplacer. |
+| **Composition** | Une section d'arrière-plan (image, couleur unie ou dégradé derrière votre enregistrement ; importez votre propre image ou choisissez parmi les préréglages), avec une ligne **Animation** (Aucun, Dérive, Aurore, Vagues) qui anime aussi bien les dégradés que les images, et un flou d'arrière-plan de 0 à 100 %. Puis le cadre : l'ombre (Aucune, Légère, Moyenne, Forte), la marge, l'arrondi des coins et le flou de mouvement. Sa ligne **Format** définit la forme de sortie pour l'aperçu et l'export : **Auto** (par défaut pour les nouveaux projets), qui ajuste le cadre autour de votre enregistrement et de la disposition caméra avec une marge égale sur chaque bord, les formes propres à vos clips sous **Original**, plus 16:9, 9:16, 1:1, 4:3, 4:5, 16:10 et 10:16. |
+| **Disposition caméra** | La composition de la webcam : incrustation d'image, empilement vertical, double cadre ou sans webcam. Effet miroir et « réduire au zoom ». En incrustation : forme de la caméra (carrée, ou originale : les proportions de la caméra elle-même, une caméra en portrait reste en portrait), arrondi (tout à fait ronde, une caméra carrée devient un cercle), taille et position : l'un des huit emplacements le long du bord, toujours à la même distance de celui-ci. Faites glisser la webcam sur le canevas : elle se cale sur l'emplacement le plus proche. |
 | **Audio** | Le niveau de sortie, appliqué de la même façon dans l'aperçu et à l'export. |
-| **Curseur** | Utile uniquement pour les enregistrements faits en mode curseur éditable, sous Windows, macOS ou Linux. Afficher/masquer, rogner au canevas, une bande de thèmes de curseur, et des glissières pour la taille, le lissage, le flou de mouvement et le rebond au clic. |
+| **Curseur** | Utile uniquement pour les enregistrements faits en mode curseur éditable, sous Windows, macOS ou Linux. Afficher/masquer et le masquage automatique, le style du curseur avec son interrupteur **Curseur 3D**, les types de curseur (chaque type que montre la vidéo, dessiné tel qu'enregistré ou comme la flèche), des glissières pour la taille (jusqu'à quatre fois la taille par défaut), le lissage et le flou de mouvement, le rebond au clic (Aucun, Léger, Marqué), et **Impact du clic**, qui repousse l'écran à chaque clic, avec toutes les caméras. |
 | **Transcription** | La transcription agrégée de tous les clips, modifiable : voir [Montage par la transcription](./captions.md#transcript-editing). Son bouton **Sous-titres** active les sous-titres, les met en forme et les traduit : voir [Sous-titres et transcription](./captions.md#captions). |
 
 Le bouton **crayon** de la même barre ouvre la fenêtre **Modifier le clip** pour le clip sélectionné : un rectangle de recadrage déplaçable avec des champs numériques X/Y/L/H et des préréglages de proportions, plus les points d'entrée et de sortie du clip. Le recadrage se règle clip par clip, pas pour tout le projet.
@@ -43,7 +43,7 @@ Sélectionner une région sur la timeline (un bloc de zoom, de coupe, d'annotati
 ## Barre d'outils de la timeline {#timeline-toolbar}
 
 - **Amélioration auto** (icône baguette) : un menu qui propose deux traitements à lancer ponctuellement :
-  - **Zooms automatiques** : lit le mouvement enregistré du curseur et place des régions de zoom aux moments où le curseur s'attarde. Pas de réseau, pas de modèle. [Zoom automatique](/features/auto-zoom/) explique comment ces moments sont choisis.
+  - **Zooms automatiques** : lit les clics enregistrés et zoome dessus. Pas de réseau, pas de modèle. [Zoom automatique](/features/auto-zoom/) explique comment les zooms sont placés.
   - **Coupes intelligentes** (avec la mention *Avec l'IA*) : confie plutôt la tâche à l'agent IA, qui a besoin d'un [fournisseur connecté](./ai-editing.md).
 - **Vitesse** (`S`) : ajoute une région de changement de vitesse à la tête de lecture.
 - **Commentaire** (`A`) : ajoute une annotation à la tête de lecture.
@@ -54,13 +54,13 @@ Sélectionner une région sur la timeline (un bloc de zoom, de coupe, d'annotati
 
 Faites glisser les bords d'une région pour la redimensionner, ou le bloc lui-même pour la déplacer. Les régions s'aimantent à la tête de lecture, aux bords des autres régions, ainsi qu'au début et à la fin de la timeline. `Ctrl/Cmd + C` / `Ctrl/Cmd + V` copie les attributs d'une région sélectionnée sur une autre région du même type.
 
-`Shift` + molette fait défiler la timeline ; `Ctrl`/`Cmd` + molette zoome et dézoome. Ces deux gestes sont rappelés sous la barre de transport.
+`Shift` + molette fait défiler la timeline ; `Ctrl`/`Cmd` + molette zoome et dézoome. Ces deux gestes sont rappelés à côté des commandes de lecture.
 
 ### Régions de zoom {#zoom-regions}
 
 Cliquez sur un bloc de zoom pour ouvrir son inspecteur :
 - Six préréglages de profondeur : 1.25× / 1.5× / 1.8× / 2.2× / 3.5× / 5×.
-- **Rotation 3D** : Aucune, Iso, Gauche ou Droite.
+- **Caméra 3D** : Désactivée, Écran tourné à gauche, Écran tourné à droite ou Orbite 3D (une caméra qui se déplace avec le zoom et suit son mode de focus).
 - **Mode focus** : Manuel (faites glisser le repère de focus dans l'aperçu) ou Auto (suit le curseur enregistré). Verrouillé sur Auto quand l'interrupteur Mise au point automatique de la barre d'outils est activé.
 - **Position du focus** : pourcentage X/Y numérique en mode manuel.
 
@@ -72,7 +72,7 @@ Un passage coupé est retiré de la lecture et de l'export. L'inspecteur se rés
 
 ### Régions de vitesse {#speed-regions}
 
-Une liste déroulante de préréglages (de 0.25× à 5×, plus 1× pour revenir à la normale) et un champ numérique libre qui accepte toute valeur jusqu'à 100×. Dans les deux cas, l'export restitue la vitesse réelle.
+Une rangée de boutons de préréglage (0.5×, 1×, 1.5×, 2×, 4×) et un champ numérique libre pour toute autre vitesse de 0.25× à 16×. Dans les deux cas, l'export restitue la vitesse réelle.
 
 ### Régions Caméra plein écran {#full-camera-regions}
 
@@ -80,12 +80,14 @@ Un passage où la webcam remplit le cadre au lieu de rester dans l'emplacement q
 
 ### Annotations {#annotations}
 
-Quatre types, que l'on change avec la liste déroulante **Type** de l'inspecteur. Changer de type conserve la plage et le cadre de la région : une erreur de choix coûte un clic, pas un nouveau tracé.
+Quatre types, à choisir dans la rangée **Type** de l'inspecteur. Changer de type conserve la plage de la région et sa place à l'image.
 
-- **Texte** : contenu, taille, couleur de fond avec interrupteur, couleur du texte et animation d'apparition (Aucune / Fondu / Monter / Apparition / Glisser à gauche / Machine à écrire / Pulsation).
-- **Image** : importez un JPG, PNG, GIF ou WebP.
-- **Flèche** : huit directions, épaisseur du trait (1–20) et couleur.
-- **Flou** : un masque de confidentialité. Gaussien ou Mosaïque, rectangle ou ovale, avec une intensité (ou une taille de blocs pour la mosaïque). Faites-le glisser et redimensionnez-le sur l'aperçu comme toute autre annotation.
+Textes, images et flèches se posent sur le cadre : faites-les glisser où vous voulez, marge comprise. Ni la marge ni la taille de l'enregistrement ne les déplacent, et un changement de format garde leur forme. Un flou reste sur l'enregistrement, sur ce qu'il cache.
+
+- **Texte** : contenu, taille (24, 32, 48 ou 72, ou toute taille saisie à côté), arrière-plan (Aucune / Sombre / Claire), couleur du texte et animation d'apparition (Aucune / Fondu / Monter / Apparition / Glisser à gauche / Machine à écrire / Pulsation). Le cadre de sélection est le texte lui-même : tirez un coin pour le redimensionner.
+- **Image** : importez un JPG, PNG, GIF ou WebP.
+- **Flèche** : huit directions, épaisseur du trait (1–20) et couleur.
+- **Flou** : un masque de confidentialité. Gaussien ou Mosaïque, rectangle ou ovale. Faites-le glisser et redimensionnez-le sur l'enregistrement comme toute autre annotation.
 
 :::note
 Il n'est plus possible de dessiner des formes de flou à main levée. Celles qui existent s'affichent encore, mais sous la forme de leur boîte englobante : elles couvrent volontairement trop, plutôt que de laisser visible dans l'export quelque chose que vous aviez marqué comme privé. L'inspecteur le signale quand il en rencontre une.
@@ -93,7 +95,7 @@ Il n'est plus possible de dessiner des formes de flou à main levée. Celles qui
 
 ## Style du curseur {#cursor-styling}
 
-Si votre enregistrement contient des données de curseur éditables (capture native en mode curseur éditable, sous Windows, macOS ou Linux ; [Mode du curseur](./recording.md#cursor-mode) détaille ce que chaque plateforme enregistre), l'onglet Curseur vous permet de choisir parmi une bibliothèque de thèmes de curseur et de régler la taille, le lissage, le flou de mouvement et le rebond au clic indépendamment de la capture brute. Le tracé sous-jacent du curseur est lissé de façon déterministe : ce que vous voyez dans l'aperçu correspond à l'export final.
+Si votre enregistrement contient des données de curseur éditables (capture native en mode curseur éditable, sous Windows, macOS ou Linux ; [Mode du curseur](./recording.md#cursor-mode) détaille ce que chaque plateforme enregistre), l'onglet Curseur vous permet de régler son style, sa taille, son lissage, son flou de mouvement, son rebond au clic et son impact du clic indépendamment de la capture brute. Le tracé sous-jacent du curseur est lissé de façon déterministe : ce que vous voyez dans l'aperçu correspond à l'export final.
 
 ## Raccourcis clavier {#keyboard-shortcuts}
 

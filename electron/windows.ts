@@ -20,6 +20,7 @@ import {
 	sameRect,
 } from "./hudWindowBounds";
 import { followAcrossSpaces } from "./macSpaces";
+import { markSheetless } from "./messageBox";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -448,6 +449,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 		});
 	}
 
+	markSheetless(win);
 	return win;
 }
 
@@ -485,7 +487,11 @@ export function createEditorWindow(query: Record<string, string> = {}): BrowserW
 		titleBarStyle: "hidden",
 		...(isMac
 			? { trafficLightPosition: { x: 18, y: 21 } }
-			: { titleBarOverlay: { color: "#09090b", symbolColor: "#a1a1aa", height: 58 } }),
+			: // Windows fixes the width of its caption buttons (46px) and leaves us the height: at
+				// 46px each hover area is a square in the top-right corner, as in Chrome or Explorer,
+				// instead of a 58px-tall slab, and the top bar's bottom rule runs on under it.
+				// Native, so Snap Layouts stays on the maximise button.
+				{ titleBarOverlay: { color: "#09090b", symbolColor: "#a1a1aa", height: 46 } }),
 		transparent: false,
 		resizable: true,
 		alwaysOnTop: false,
@@ -500,6 +506,10 @@ export function createEditorWindow(query: Record<string, string> = {}): BrowserW
 			contextIsolation: true,
 			webSecurity: false,
 			backgroundThrottling: false,
+			// Media track lists: the preview's hidden <video> and <audio> deselect their video
+			// track, so Chromium stops decoding pictures the native compositor already draws
+			// (`dropVideoTrack` in VirtualPreview.tsx).
+			enableBlinkFeatures: "AudioVideoTracks",
 		},
 	});
 
@@ -601,6 +611,7 @@ export function createSourceSelectorWindow(): BrowserWindow {
 		});
 	}
 
+	markSheetless(win);
 	return win;
 }
 
@@ -649,6 +660,48 @@ export function createCountdownOverlayWindow(): BrowserWindow {
 	} else {
 		win.loadFile(path.join(RENDERER_DIST, "index.html"), {
 			query: { windowType: "countdown-overlay" },
+		});
+	}
+
+	markSheetless(win);
+	return win;
+}
+
+/**
+ * The macOS permissions window: first run, the app menu, and wherever a missing permission
+ * would otherwise stop a recording. An ordinary opaque window on purpose -- it has to sit
+ * beside System Settings and macOS' own prompts, not float above them like the HUD.
+ */
+export function createPermissionsWindow(): BrowserWindow {
+	const win = new BrowserWindow({
+		width: 520,
+		height: 640,
+		resizable: false,
+		minimizable: false,
+		maximizable: false,
+		fullscreenable: false,
+		title: "OpenScreen",
+		backgroundColor: "#0b0c0f",
+		show: false,
+		webPreferences: {
+			preload: path.join(__dirname, "preload.mjs"),
+			additionalArguments: [ASSET_BASE_URL_ARG],
+			nodeIntegration: false,
+			contextIsolation: true,
+		},
+	});
+
+	win.once("ready-to-show", () => {
+		if (!HEADLESS) {
+			win.show();
+		}
+	});
+
+	if (VITE_DEV_SERVER_URL) {
+		win.loadURL(VITE_DEV_SERVER_URL + "?windowType=permissions");
+	} else {
+		win.loadFile(path.join(RENDERER_DIST, "index.html"), {
+			query: { windowType: "permissions" },
 		});
 	}
 

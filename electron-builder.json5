@@ -3,9 +3,9 @@
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
   "appId": "local.openscreen.copilot",
   "asar": true,
-  // .node binaries can't be dlopen'd from inside an asar — must live unpacked.
-  // onnxruntime-node distributes as a `.node` shared object that whisper.cpp
-  // helpers run from process spawn, so they all unpack via the same glob.
+  // The GitHub Copilot provider loads @github/copilot-sdk from node_modules at runtime
+  // (external to the Vite bundle). Its platform binary and koffi's `.node` object
+  // can't run from inside an asar, so they must live unpacked.
   "asarUnpack": [
     "**/*.node",
     "node_modules/@github/copilot-sdk*/**"
@@ -60,6 +60,30 @@
   // let electron-builder use the prebuilt instead of recompiling.
   "buildDependenciesFromSource": false,
   "compression": "normal",
+  // Strip unused Chromium locale pak files (saves ~20 MB). Only package locales supported by OpenScreen.
+  // Note: macOS uses underscore variants (e.g. pt_BR.lproj, zh_CN.lproj, zh_TW.lproj), while Windows
+  // and Linux use hyphenated pak files (e.g. pt-BR.pak, zh-CN.pak, zh-TW.pak). Both forms are listed
+  // so app-builder-lib retains the correct locale assets across all platforms.
+  "electronLanguages": [
+    "en-US",
+    "fr",
+    "ar",
+    "cs",
+    "de",
+    "es",
+    "it",
+    "ja",
+    "ko",
+    "pt-BR",
+    "pt_BR",
+    "ru",
+    "tr",
+    "vi",
+    "zh-CN",
+    "zh_CN",
+    "zh-TW",
+    "zh_TW"
+  ],
   "directories": {
     "output": "release/${version}",
     // Electron-builder's default, spelled out because the appx target depends on it:
@@ -73,6 +97,22 @@
   "files": [
     "dist",
     "dist-electron",
+    // public/demo.gif and public/preview*.png are kept only so external pages that hotlink the
+    // old raw.githubusercontent.com URLs keep working; Vite copies them into dist/, so drop them.
+    "!dist/demo.gif",
+    "!dist/preview*.png",
+    // Exclude assets already bundled into extraResources (saves ~17 MB duplicate in asar)
+    "!dist/wallpapers/**",
+    "!dist/cursors/**",
+    "!dist/mediapipe/**",
+    "!dist/fonts/**",
+    // Exclude dead-weight node_modules: all frontend and electron code is pre-bundled by Vite (saves ~238 MB)
+    "!node_modules/**",
+    // ...except the Copilot provider's runtime, which vite.config.ts keeps external.
+    "node_modules/@github/copilot-sdk*/**",
+    "node_modules/koffi/**",
+    "node_modules/vscode-jsonrpc/**",
+    "node_modules/zod/**",
     "!*.png",
     "!preview*.png",
     "!*.md",
@@ -118,6 +158,15 @@
     {
       "from": "public/mediapipe",
       "to": "mediapipe"
+    },
+    // The only fonts captions and annotations are drawn in: the compositor registers them
+    // privately (OPENSCREEN_FONTS_DIR, compositorViewService.ts) and never reads the machine's
+    // installed fonts. Out of the asar for the same raw-path reason as the model above; the
+    // renderer's picker specimens load the same copy through the asset base URL. 2.3 MB, with
+    // each family's OFL text beside it as the licence requires.
+    {
+      "from": "public/fonts",
+      "to": "fonts"
     }
   ],
 

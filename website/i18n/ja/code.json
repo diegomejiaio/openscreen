@@ -16,8 +16,7 @@
     "message": "x86_64 · .dmg"
   },
   "download.macos.footnote": {
-    "message": "署名・公証済みのため、ターミナルでの操作なしで開けます。初回起動時に「画面収録」と「アクセシビリティ」を許可してください。",
-    "description": "Screen Recording and Accessibility are macOS privacy settings: use the names macOS shows in your language."
+    "message": "署名・公証済みのため、ターミナルでの操作なしで開けます。初回起動時に表示されるウィンドウから権限を許可してください。"
   },
   "download.windows.store.label": {
     "message": "Microsoft Store"
@@ -110,29 +109,13 @@
     "message": "無料・オープンソースの画面録画・動画編集ソフト"
   },
   "home.meta.description": {
-    "message": "OpenScreen は Windows・macOS・Linux に対応した、無料・オープンソースの画面録画・動画編集ソフトです。OS ネイティブのキャプチャ、端末上で生成する字幕、透かしなし。"
-  },
-  "home.hero.badge.new": {
-    "message": "NEW"
-  },
-  "home.hero.badge.text": {
-    "message": "1.11：macOS・Linux でエクスポート高速化",
-    "description": "Links to an English-only blog post. Must fit on one line on a 375px phone."
-  },
-  "home.hero.titleTagline": {
-    "message": "無料・オープンソースの画面録画・動画編集ソフト"
+    "message": "画面録画を、見栄えのよいデモ動画に。自動ズーム、背景のカスタマイズ、カーソル編集に対応。Windows、macOS、Linuxで使える無料のオープンソース。透かしなし。"
   },
   "home.hero.tagline": {
-    "message": "ネイティブキャプチャ、ローカル AI、課金不要の画面録画。"
+    "message": "自動ズーム、なめらかなカーソル、見栄えのよいフレーム。録画して、調整して、共有しましょう。"
   },
   "home.hero.download": {
     "message": "ダウンロード"
-  },
-  "home.hero.readDocs": {
-    "message": "ドキュメントを読む"
-  },
-  "home.hero.scrollHint": {
-    "message": "下にスクロール"
   },
   "home.features.kicker": {
     "message": "さらに"
@@ -248,16 +231,16 @@
     "message": "そして、ファイルに書き出します。"
   },
   "showcase.export.body": {
-    "message": "MP4 は 720p から元の解像度まで、24・30・60 fps、H.264 または H.265。GIF も選べます。エンコードはお使いのパソコン上で行われ、処理中はフレーム数をカウントします。順番待ちも、アカウントも、透かしもありません。バーが埋まった時点で、ファイルはディスク上にあります。"
+    "message": "MP4 は 720p から元の解像度まで、24・30・60 fps、H.264。GIF も選べます。エンコードはお使いのパソコン上で行われ、処理中はフレーム数をカウントします。順番待ちも、アカウントも、透かしもありません。バーが埋まった時点で、ファイルはディスク上にあります。"
   },
   "showcase.export.fact": {
-    "message": "H.264 / H.265 · 24・30・60 fps · 透かしなし"
+    "message": "H.264 · 24・30・60 fps · 透かしなし"
   },
   "showcase.export.link.docs": {
     "message": "動画エクスポートのドキュメント"
   },
   "showcase.export.label": {
-    "message": "エクスポートパネルのイラスト：recording-1783066227227.mp4 を MP4 としてエクスポートしています。H.264、1080p、60 fps、GIF と並んで H.265 が選択され、進行状況バーは 62% の位置で frame 1 488 of 2 400 と表示し、Movies フォルダーに書き込んでいます。",
+    "message": "エクスポートパネルのイラスト：recording-1783066227227.mp4 を MP4 として 1080p、60 fps でエクスポートしています。画質とフレームレートの行の下に進行状況バーがあります。進行状況バーは 62% の位置で frame 1 488 of 2 400 と表示し、Movies フォルダーに書き込んでいます。",
     "description": "Describes a drawing of the app for screen readers. The drawing is in English: keep the quoted words as drawn."
   },
   "showcase.captions.kicker": {
@@ -279,15 +262,11 @@
     "message": "ローカル字幕の比較",
     "description": "Link label under the panel."
   },
-  "showcase.captions.label": {
-    "message": "字幕パネルのイラスト：動画の上に「amber day on the validator, and it」という一行が大きく表示されています。その横では字幕がオンになっていて、7 行の字幕が文字起こしからリアルタイムに生成されているという注記と、English、Français、Translate ボタン、翻訳を削除するオプションが並ぶ言語の行があります。",
-    "description": "Describes a drawing of the app for screen readers. The drawing is in English: keep the quoted words as drawn."
-  },
   "showcase.agent.kicker": {
     "message": "エージェント"
   },
   "showcase.agent.claim": {
-    "message": "または、カットする箇所を言葉で指示。"
+    "message": "編集内容を伝えるだけ。エージェントが実行します。"
   },
   "showcase.agent.body": {
     "message": "このページの上にあるウィザードは、カーソルの動きを見てズームを配置します。エージェントはさらに踏み込み、実際の文字起こしと実際のタイムラインを読み取ります。そのため、どの区間をカットし、それでどれだけ短くなるかを、確認できるタイムコード付きで答えます。エージェントの編集はどれも通常どおり元に戻せる操作で、あなたが用意したプロバイダーのキーが必要です。キーを接続するまで、何も実行されません。"
@@ -301,10 +280,6 @@
   "showcase.agent.link.feature": {
     "message": "自動ズームの仕組み",
     "description": "Link label under the panel."
-  },
-  "showcase.agent.label": {
-    "message": "エージェントの返答のイラスト。無音部分のカットを頼まれ、タイムコードで答えています。「Hi」の前の導入部 0〜2.19 秒と、「think.」の後の末尾 35.12〜40.03 秒をカットし、再生できる映像を 40 秒から 33 秒にします。既存のズームは同じ場面に残ります。最後に「applied: added 2 trims」という緑色の行があります。",
-    "description": "Describes a drawing of the app for screen readers. The drawing is in English: keep the quoted words as drawn."
   },
   "showcase.title": {
     "message": "レコーダー、字幕、エージェント、エンコーダー。"
@@ -762,5 +737,349 @@
   "download.option.size": {
     "message": "{size} MB",
     "description": "{size} is a whole number of megabytes. Use your language's unit symbol (Mo in French)."
+  },
+  "download.started.title": {
+    "message": "ダウンロードを開始しました"
+  },
+  "download.started.blurb": {
+    "message": "OpenScreen は無料で、MIT ライセンスです。GitHub でスターを付けると、他の人が見つけやすくなります。"
+  },
+  "download.started.cta": {
+    "message": "GitHub でスターを付ける"
+  },
+  "demoLoop.pause": {
+    "message": "動画を一時停止"
+  },
+  "demoLoop.play": {
+    "message": "動画を再生"
+  },
+  "demoLoop.classic-zoom": {
+    "message": "OpenScreen で録画したタスクボード。チェックリストの項目と Ship ボタンがクリックされると画面がズームインし、その後ボード全体までズームアウトします。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.3d-camera": {
+    "message": "同じ録画を 3D カメラで見たもの。カーソルを追いながら画面を傾け、その周りを回ります。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.3d-cursors": {
+    "message": "録画した 1 つのポインターを、録画を再生したまま 5 つのカーソルスタイルで順に描き直します。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.automatic-subtitles": {
+    "message": "ナレーション付きの録画の下に字幕が表示され、英語からフランス語、スペイン語、韓国語へと切り替わります。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.caption-styles": {
+    "message": "同じ字幕を 5 つのスタイルで表示します。シンプルな字幕、太字の黄色、手書き風、等幅、そして 1 語ずつ表示するスタイルです。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.edit-by-transcript": {
+    "message": "エディターの文字起こしで文を選択して削除すると、対応するカットがタイムラインに現れます。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.tighten-pauses": {
+    "message": "文字起こしの無音マーカーを 2 回クリックすると、2 つの間がタイムラインからカットされます。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.background-picker": {
+    "message": "エディターの背景ピッカーで壁紙、グラデーション、単色を順に選び、最後にアニメーション背景 Aurora をオンにします。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.every-format": {
+    "message": "同じ録画を 16:9、正方形、縦長の順に書き出し、構図はカーソルを追います。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.sensitive-data-mask": {
+    "message": "ログインフォームへの入力中。メールアドレスとパスワードの欄は、入力している間ぼかされたままです。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.every-layout": {
+    "message": "ウェブカメラ付きの 1 つの録画で、レイアウトを順に切り替えます。ピクチャーインピクチャー、横並び、縦並び、カメラ全画面、最後に画面のみ。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.device-frames": {
+    "message": "再生中の同じ録画を、ブラウザーウィンドウ、スマートフォン、ノートパソコン、デスクトップモニターの順にフレームで囲みます。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.animated-backgrounds": {
+    "message": "無地の背景の上の録画が、背後でゆっくり動くぼかした写真の背景に変わります。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.beautiful-by-default": {
+    "message": "加工前の画面キャプチャー、次に OpenScreen が開いたときの同じテイク。すでにズーム、フレーミング、カーソルのスタイル変更が済んでおり、その後いくつかの見た目に切り替わります。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.simpler-editor": {
+    "message": "OpenScreen のエディター。背景のサムネイルを 1 回クリックすると動画全体の見た目が変わり、その後サイドパネルが文字起こしに切り替わります。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.edit-like-a-doc": {
+    "message": "文字起こしで選択したテキストをドキュメントのように削除すると、動画もそれに合わせてカットされます。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "demoLoop.ask-the-agent": {
+    "message": "エディターのチャットパネルに入力した依頼と、エージェントによる編集がタイムラインに現れる様子。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "films.default.kicker": {
+    "message": "最初から"
+  },
+  "films.default.title": {
+    "message": "最初のテイクから見栄えよく。"
+  },
+  "films.default.lead": {
+    "message": "新しい録画はどれも{zoomed}状態で開き、壁紙、余白、影、角丸もついています。好きなところを変えても、そのまま書き出しても構いません。"
+  },
+  "films.default.lead.zoomed": {
+    "message": "クリックした箇所にすでにズームした"
+  },
+  "films.default.note.zooms": {
+    "message": "{t} 各テイクはクリックした位置で、決まったルールに従ってズームされます。AI もネットワーク通信も使いません。録画モードでオフにできます。"
+  },
+  "films.default.note.zooms.t": {
+    "message": "クリックからズーム。"
+  },
+  "films.default.note.frame": {
+    "message": "{t} 壁紙、余白、影、角丸、少しのモーションブラーが、何も触らないうちから適用されています。"
+  },
+  "films.default.note.frame.t": {
+    "message": "仕上がったフレーム。"
+  },
+  "films.default.note.cursor": {
+    "message": "{t} ポインターはピクセルとは別に記録されるので、テイクの後でもサイズとスタイルを変えられます。"
+  },
+  "films.default.note.cursor.t": {
+    "message": "やり直せるカーソル。"
+  },
+  "films.depth.kicker": {
+    "message": "3D"
+  },
+  "films.depth.title": {
+    "message": "ズームだけでなく、奥行きを。"
+  },
+  "films.depth.lead": {
+    "message": "ズームしながら画面を傾けたり{orbit}、ポインターを影つきの{cursor}として描いたり、テイク全体を{device}、動く背景の上に置いたりできます。"
+  },
+  "films.depth.lead.orbit": {
+    "message": "周りを回ったり"
+  },
+  "films.depth.lead.cursor": {
+    "message": "3D カーソル"
+  },
+  "films.depth.lead.device": {
+    "message": "デバイスの中に収めて"
+  },
+  "films.depth.tab.camera": {
+    "message": "3D カメラ"
+  },
+  "films.depth.tab.cursors": {
+    "message": "カーソル"
+  },
+  "films.depth.tab.frames": {
+    "message": "デバイスフレーム"
+  },
+  "films.depth.tab.backgrounds": {
+    "message": "アニメーション背景"
+  },
+  "films.depth.note.camera": {
+    "message": "{t} 各ズームは平面のまま、画面を左右に回転、またはズームの焦点を追いながら周りを回ることができます。被写界深度が奥側をぼかします。"
+  },
+  "films.depth.note.camera.t": {
+    "message": "3D カメラ。"
+  },
+  "films.depth.note.cursors": {
+    "message": "{t} Studio Ink, Prism Glow, Pop Coral, Pixel Candy、Star Sprout の 5 種類。どれも影つきの 3D オブジェクトとして描けます。"
+  },
+  "films.depth.note.cursors.t": {
+    "message": "5 つのカーソルパック。"
+  },
+  "films.depth.note.frames": {
+    "message": "{t} ウィンドウ、ノート PC、スマートフォン、ディスプレイをライトかダークで。背景はドリフト、オーロラ、ウェーブでアニメーションできます。"
+  },
+  "films.depth.note.frames.t": {
+    "message": "フレームと動き。"
+  },
+  "films.camera.kicker": {
+    "message": "カメラ"
+  },
+  "films.camera.title": {
+    "message": "カメラも、画面も、その両方も。"
+  },
+  "films.camera.lead": {
+    "message": "ウェブカメラ付きのテイクは{layouts}にでき、背後の部屋はお使いのコンピューター上で{blurred}、切り抜いたり、差し替えたりできます。グリーンバックは不要です。"
+  },
+  "films.camera.lead.layouts": {
+    "message": "ピクチャーインピクチャ、横並び、縦並び、全画面"
+  },
+  "films.camera.tab.layouts": {
+    "message": "レイアウト"
+  },
+  "films.camera.note.layouts": {
+    "message": "{t} ピクチャーインピクチャ、デュアルフレーム、縦並び、またはウェブカメラなし。"
+  },
+  "films.camera.note.layouts.t": {
+    "message": "4 つのレイアウト。"
+  },
+  "films.camera.note.full": {
+    "message": "{t} タイムラインの一区間をカメラに任せると、全画面に広がってから滑らかに戻ります。"
+  },
+  "films.camera.note.full.t": {
+    "message": "フルスクリーンカメラ。"
+  },
+  "films.camera.note.background": {
+    "message": "{t} セグメンテーションモデルが、お使いのコンピューター上であなたと部屋を切り分けます。何もアップロードされません。"
+  },
+  "films.camera.note.background.t": {
+    "message": "ぼかし、切り抜き、差し替え。"
+  },
+  "films.ship.kicker": {
+    "message": "公開の前に"
+  },
+  "films.ship.title": {
+    "message": "どんな形式にも合わせて。見せたくないものはぼかして。"
+  },
+  "films.ship.lead": {
+    "message": "1 つのテイクが{formats}になり、見せたくないものは{blur}。"
+  },
+  "films.ship.lead.formats": {
+    "message": "横長、正方形、縦長"
+  },
+  "films.ship.lead.blur": {
+    "message": "ぼかしの下に隠れたまま"
+  },
+  "films.ship.formats": {
+    "message": "{t} 同じテイクを 16:9、9:16、1:1、4:3、4:5、16:10、10:16 で構成します。"
+  },
+  "films.ship.formats.t": {
+    "message": "あらゆるアスペクト比。"
+  },
+  "films.ship.blur": {
+    "message": "{t} ガウスまたはモザイクで、長方形、楕円、フリーハンドの形に。メールアドレス、キー、パスワードの上に。"
+  },
+  "films.ship.blur.t": {
+    "message": "ぼかし領域。"
+  },
+  "films.label": {
+    "message": "動くアプリをもっと",
+    "description": "Read by screen readers only: names the section of feature videos"
+  },
+  "demoLoop.camera-blur": {
+    "message": "画面録画の上の正方形のウェブカメラ枠。話し手の背後の部屋がぼけていく間にカメラが寄り、その後引いていきます。",
+    "description": "Describes a short silent video loop of the app for screen readers."
+  },
+  "films.camera.lead.blurred": {
+    "message": "ぼかしたり"
+  },
+  "films.camera.tab.blur": {
+    "message": "背景ぼかし"
+  },
+  "demoLoop.title.classic-zoom": {
+    "message": "クリックへの自動ズーム",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.3d-camera": {
+    "message": "画面の周りを回る 3D カメラ",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.3d-cursors": {
+    "message": "3D で描かれるカーソルパック",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.automatic-subtitles": {
+    "message": "他の言語に翻訳された字幕",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.caption-styles": {
+    "message": "5 つの字幕スタイル",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.edit-by-transcript": {
+    "message": "文字起こしのテキストを消して動画をカット",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.tighten-pauses": {
+    "message": "文字起こしから無音をカット",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.background-picker": {
+    "message": "録画の背景を変更",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.every-format": {
+    "message": "1 つの録画を 16:9、1:1、9:16 で",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.sensitive-data-mask": {
+    "message": "メールアドレスとパスワードをぼかす",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.camera-blur": {
+    "message": "ウェブカメラの背景ぼかし",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.every-layout": {
+    "message": "ウェブカメラのレイアウト",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.device-frames": {
+    "message": "デバイスフレーム",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.animated-backgrounds": {
+    "message": "アニメーション背景",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.beautiful-by-default": {
+    "message": "加工前の画面キャプチャーから完成したデモへ",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.simpler-editor": {
+    "message": "OpenScreen エディター",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.edit-like-a-doc": {
+    "message": "ドキュメントのように動画を編集",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "demoLoop.title.ask-the-agent": {
+    "message": "エディターのエージェントに編集を依頼",
+    "description": "The name of a short silent video of the app, given to search engines (schema.org VideoObject)."
+  },
+  "home.hero.title": {
+    "message": "一度の録画で、美しいデモに。"
+  },
+  "home.hero.reassurance": {
+    "message": "無料でオープンソース。透かしなし。アカウント不要。"
+  },
+  "home.hero.explore": {
+    "message": "スクロールしてエディターを見る"
+  },
+  "recreation.pause": {
+    "message": "アニメーションを一時停止"
+  },
+  "recreation.play": {
+    "message": "アニメーションを再生"
+  },
+  "announcement.v2.title": {
+    "message": "OpenScreen v2が登場"
+  },
+  "announcement.v2.link": {
+    "message": "新機能を見る（英語）",
+    "description": "Links to an English-only blog post. Mention English in translated labels."
+  },
+  "download.cta.mac": {
+    "message": "Mac用をダウンロード"
+  },
+  "download.cta.windows": {
+    "message": "Windows用をダウンロード"
+  },
+  "download.cta.linux": {
+    "message": "Linux用をダウンロード"
+  },
+  "download.cta.chooseMac": {
+    "message": "Macの種類を選択"
+  },
+  "download.cta.otherVersions": {
+    "message": "その他のバージョン"
   }
 }

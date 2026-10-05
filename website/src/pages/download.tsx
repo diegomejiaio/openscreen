@@ -11,11 +11,14 @@ import {
 	Download,
 	ExternalLink,
 	FlaskConical,
+	Star,
 	TerminalSquare,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 
 import AppLanguages from "../components/AppLanguages";
+import useDownloadTarget from "../components/PlatformDownload/useDownloadTarget";
+import { STORE_INSTALLER_URL, STORE_URL } from "../lib/download-target";
 import { type AppLanguage, type AssetKind, findAsset, type LatestRelease } from "../lib/release";
 import { jsonLd, SOFTWARE_ID, softwareApplicationLd, WEBSITE_ID } from "../lib/structured-data";
 import styles from "./download.module.css";
@@ -23,8 +26,6 @@ import styles from "./download.module.css";
 const REPO_URL = "https://github.com/getopenscreen/openscreen";
 const RELEASES_URL = `${REPO_URL}/releases`;
 const LATEST_URL = `${RELEASES_URL}/latest`;
-// The listing README.md recommends on Windows, and the ID in its winget command.
-const STORE_URL = "https://apps.microsoft.com/detail/9MXQ1HQJL5G5";
 
 type PlatformSpec = {
 	id: string;
@@ -40,7 +41,7 @@ type PlatformSpec = {
 };
 
 /** Built at render, because translate() answers in the locale being rendered. */
-function getPlatforms(): PlatformSpec[] {
+function getPlatforms(windowsStoreUrl: string): PlatformSpec[] {
 	return [
 		{
 			id: "macos",
@@ -67,9 +68,7 @@ function getPlatforms(): PlatformSpec[] {
 			footnote: translate({
 				id: "download.macos.footnote",
 				message:
-					"Signed and notarized, so it opens with no terminal step. Grant Screen Recording and Accessibility on first launch.",
-				description:
-					"Screen Recording and Accessibility are macOS privacy settings: use the names macOS shows in your language.",
+					"Signed and notarized, so it opens with no terminal step. On first launch, grant permissions from the window it shows.",
 			}),
 		},
 		{
@@ -81,7 +80,7 @@ function getPlatforms(): PlatformSpec[] {
 			// Store, and it is unsigned, which the winget panel below spells out.
 			options: [
 				{
-					href: STORE_URL,
+					href: windowsStoreUrl,
 					label: translate({ id: "download.windows.store.label", message: "Microsoft Store" }),
 					sublabel: translate({
 						id: "download.windows.store.sublabel",
@@ -189,10 +188,46 @@ function downloadPageLd(
 	);
 }
 
+/** Shown in a platform card once one of its file options has been clicked. The download is a
+ *  plain browser navigation to the asset — this renders *after* it, never in front of it, so
+ *  nothing here can delay or block getting the app. Stars are the project's only real
+ *  distribution signal and most visitors arrive from search without ever seeing the repo.
+ *
+ *  `starCount` comes from the same build-time lookup that feeds the navbar badge: asking the
+ *  GitHub API from the browser would cost a request per visitor and rate-limit shared IPs. */
+function StarPrompt({ starCount, locale }: { starCount: number | null; locale: string }) {
+	return (
+		<div className={styles.started} role="status">
+			<span className={styles.startedTitle}>
+				<Translate id="download.started.title">Download started</Translate>
+			</span>
+			<p className={styles.startedText}>
+				<Translate id="download.started.blurb">
+					OpenScreen is free and MIT licensed. A star on GitHub helps other people find it.
+				</Translate>
+			</p>
+			<a className={styles.startedCta} href={REPO_URL} target="_blank" rel="noopener noreferrer">
+				<Star size={14} />
+				<Translate id="download.started.cta">Star on GitHub</Translate>
+				{starCount !== null ? (
+					<span className={styles.startedCount}>{starCount.toLocaleString(locale)}</span>
+				) : null}
+			</a>
+		</div>
+	);
+}
+
 export default function DownloadPage() {
 	const { siteConfig, i18n } = useDocusaurusContext();
 	const release = (siteConfig.customFields?.latestRelease ?? null) as LatestRelease;
+	const target = useDownloadTarget();
+	const platforms = getPlatforms(target.os === "windows" ? STORE_INSTALLER_URL : STORE_URL);
 	const languages = (siteConfig.customFields?.appLanguages ?? []) as AppLanguage[];
+	const starCount = (siteConfig.customFields?.starCount ?? null) as number | null;
+	// Which platform card has had a file option clicked. One at a time: the prompt belongs to
+	// the card the user just acted on, and a second click elsewhere moves it rather than
+	// leaving a trail of them down the grid.
+	const [startedId, setStartedId] = useState<string | null>(null);
 	const page = {
 		url: `${siteConfig.url}${useBaseUrl("/download/")}`,
 		title: translate({
@@ -256,7 +291,7 @@ export default function DownloadPage() {
 			<section className={styles.platforms}>
 				<div className={styles.platformsInner}>
 					<div className={styles.grid}>
-						{getPlatforms().map(({ id, name, icon: Icon, options, footnote }) => (
+						{platforms.map(({ id, name, icon: Icon, options, footnote }) => (
 							<article key={id} className={styles.card}>
 								<div className={styles.cardHeader}>
 									<Icon size={15} />
@@ -280,13 +315,15 @@ export default function DownloadPage() {
 													{ size: Math.round(asset.size / 1048576) },
 												)
 											: "";
-										// A set href is a listing (the Store), not a file.
-										const OptionIcon = href ? ExternalLink : Download;
+										const isDownload = Boolean(asset?.url) || href === STORE_INSTALLER_URL;
+										const OptionIcon = isDownload ? Download : ExternalLink;
 										return (
 											<a
 												key={kind ?? href}
 												className={styles.option}
 												href={href ?? asset?.url ?? LATEST_URL}
+												// Keep the link's default download; listing/fallback links navigate away.
+												onClick={isDownload ? () => setStartedId(id) : undefined}
 											>
 												<span className={styles.optionText}>
 													<span className={styles.optionLabel}>{label}</span>
@@ -297,6 +334,9 @@ export default function DownloadPage() {
 											</a>
 										);
 									})}
+									{startedId === id ? (
+										<StarPrompt starCount={starCount} locale={i18n.currentLocale} />
+									) : null}
 								</div>
 								{footnote ? <p className={styles.cardFoot}>{footnote}</p> : null}
 							</article>

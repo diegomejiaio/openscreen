@@ -13,6 +13,9 @@ import {
 import {
 	collectEffectiveClipDims,
 	collectNativeFormats,
+	formatFillAvailability,
+	isAutoFormatAvailable,
+	isFormatFillActive,
 	pickOutputDims,
 	referenceClipDims,
 	resolveAspectRatioValue,
@@ -296,5 +299,165 @@ describe("resolveAspectRatioValue", () => {
 		const d = doc([asset("a1", 1080, 1920)], [clip("c1", "a1")]);
 		expect(resolveAspectRatioValue(d, "4:5")).toBeCloseTo(0.8, 6);
 		expect(resolveAspectRatioValue(d, "64:27")).toBeCloseTo(64 / 27, 6);
+	});
+});
+
+describe("Auto", () => {
+	const withEditor = (d: AxcutDocument, editor: Record<string, unknown>): AxcutDocument => ({
+		...d,
+		legacyEditor: { aspectRatio: "auto", ...editor },
+	});
+	const withCamera = (a: AxcutAsset): AxcutAsset => ({
+		...a,
+		cameraTrack: { sourcePath: "/tmp/cam.mp4", startMs: 0, offsetMs: 0, visible: true },
+	});
+	const auto = (d: AxcutDocument) => resolveAspectRatioValue(d, "auto");
+
+	it("is the clip's cropped shape at 0% padding", () => {
+		const d = withEditor(
+			doc([asset("a1", 1920, 1080)], [clip("c1", "a1", { x: 0.25, y: 0, width: 0.5, height: 1 })]),
+			{ padding: 0 },
+		);
+		expect(auto(d)).toBeCloseTo(960 / 1080, 6);
+	});
+
+	it("pulls toward square as padding grows, so the border stays even", () => {
+		const d = withEditor(doc([asset("a1", 1920, 1080)], [clip("c1", "a1")]), { padding: 50 });
+		expect(auto(d)).toBeCloseTo(0.8 * (16 / 9) + 0.2, 6);
+	});
+
+	it("widens for side by side only when the clip carries a camera", () => {
+		const editor = { padding: 0, webcamLayoutPreset: "dual-frame" };
+		const h = 1080 / 1920;
+		const withCam = withEditor(
+			doc([withCamera(asset("a1", 1920, 1080))], [clip("c1", "a1")]),
+			editor,
+		);
+		const without = withEditor(doc([asset("a1", 1920, 1080)], [clip("c1", "a1")]), editor);
+		expect(auto(withCam)).toBeCloseTo((1 + 0.02 + h) / h, 6);
+		expect(auto(without)).toBeCloseTo(16 / 9, 6);
+	});
+
+	it("keeps its frame when a larger clip of another shape is added after the first", () => {
+		// A project on Auto that turns mixed: Auto is no longer offered, and the frame must not
+		// jump to the new clip's shape. Only the output size follows the larger clip.
+		const before = withEditor(doc([asset("screen", 1280, 720)], [clip("c1", "screen")]), {
+			padding: 0,
+		});
+		const after = withEditor(
+			doc(
+				[asset("screen", 1280, 720), asset("phone", 1080, 1920)],
+				[
+					clip("c1", "screen"),
+					{ ...clip("c2", "phone"), timelineStartSec: 10, timelineEndSec: 20 },
+				],
+			),
+			{ padding: 0 },
+		);
+		expect(isAutoFormatAvailable(after)).toBe(false);
+		expect(auto(after)).toBeCloseTo(auto(before), 6);
+		expect(pickOutputDims(after, "auto")).toEqual({ width: 1920, height: 1080 });
+	});
+
+	describe("is offered only for a timeline of one composition", () => {
+		const offered = (d: AxcutDocument) => isAutoFormatAvailable(d);
+		const block = { webcamLayoutPreset: "vertical-stack" };
+		const pip = { webcamLayoutPreset: "picture-in-picture" };
+
+		it("offers it for one clip, and for clips of one shape at different sizes", () => {
+			expect(offered(withEditor(doc([asset("a1", 1920, 1080)], [clip("c1", "a1")]), {}))).toBe(
+				true,
+			);
+			const sizes = doc(
+				[asset("hd", 1920, 1080), asset("uhd", 3840, 2160)],
+				[clip("c1", "hd"), clip("c2", "uhd")],
+			);
+			expect(offered(withEditor(sizes, {}))).toBe(true);
+		});
+
+		it("withholds it when the recordings have different shapes", () => {
+			const d = doc(
+				[asset("wide", 1920, 1080), asset("mac", 1440, 900)],
+				[clip("c1", "wide"), clip("c2", "mac")],
+			);
+			expect(offered(withEditor(d, {}))).toBe(false);
+		});
+
+		it("withholds it when one clip of the same recording is cropped differently", () => {
+			const d = doc(
+				[asset("a1", 1920, 1080)],
+				[clip("c1", "a1"), clip("c2", "a1", { x: 0, y: 0, width: 0.5, height: 1 })],
+			);
+			expect(offered(withEditor(d, {}))).toBe(false);
+		});
+
+		it("withholds it when a clip has no camera, whatever the layout that shows the others", () => {
+			const d = doc(
+				[withCamera(asset("cam", 1920, 1080)), asset("nocam", 1920, 1080)],
+				[clip("c1", "cam"), clip("c2", "nocam")],
+			);
+			expect(offered(withEditor(d, block))).toBe(false);
+			// Same frame shape under picture-in-picture, but not the same look: still withheld.
+			expect(offered(withEditor(d, pip))).toBe(false);
+			// With the camera turned off for the whole project, every clip is laid out alike.
+			expect(offered(withEditor(d, { webcamLayoutPreset: "no-webcam" }))).toBe(true);
+		});
+
+		it("ignores a clip whose dimensions are not probed yet", () => {
+			const d = doc(
+				[asset("a1", 1920, 1080), asset("pending", 0, 0)],
+				[clip("c1", "a1"), clip("c2", "pending")],
+			);
+			expect(offered(withEditor(d, {}))).toBe(true);
+		});
+	});
+
+	it("keeps the reference long side and even pixels for the output", () => {
+		const d = withEditor(doc([asset("a1", 1920, 1080)], [clip("c1", "a1")]), { padding: 50 });
+		expect(pickOutputDims(d, "auto")).toEqual({ width: 1920, height: 1184 });
+	});
+
+	it("falls back to 16:9 with no document to resolve against", () => {
+		expect(resolveAspectRatioValue(null, "auto")).toBeCloseTo(16 / 9, 6);
+	});
+});
+
+describe("formatFillAvailability", () => {
+	const at = (d: AxcutDocument, editor: Record<string, unknown>): AxcutDocument => ({
+		...d,
+		legacyEditor: { aspectRatio: "9:16", ...editor },
+	});
+	const hd = doc([asset("a1", 1920, 1080)], [clip("c1", "a1")]);
+
+	it("is only offered when a fixed format differs from the recording", () => {
+		expect(formatFillAvailability(at(hd, {}))).toBe("available");
+		expect(formatFillAvailability(at(hd, { aspectRatio: "16:9" }))).toBe("none");
+		expect(formatFillAvailability(at(hd, { aspectRatio: "auto" }))).toBe("none");
+		// 1366×768 is 16:9 to within 0.1 %: nothing worth a window.
+		const laptop = doc([asset("a1", 1366, 768)], [clip("c1", "a1")]);
+		expect(formatFillAvailability(at(laptop, { aspectRatio: "16:9" }))).toBe("none");
+	});
+
+	it("says why it is unavailable instead of picking a clip", () => {
+		const mixed = doc(
+			[asset("wide", 1920, 1080), asset("mac", 1440, 900)],
+			[clip("c1", "wide"), clip("c2", "mac")],
+		);
+		expect(formatFillAvailability(at(mixed, {}))).toBe("mixed");
+		const camera = { sourcePath: "/c.mp4", startMs: 0, offsetMs: 0, visible: true };
+		const cam = doc([{ ...asset("a1", 1920, 1080), cameraTrack: camera }], [clip("c1", "a1")]);
+		expect(formatFillAvailability(at(cam, { webcamLayoutPreset: "vertical-stack" }))).toBe(
+			"layout",
+		);
+		expect(formatFillAvailability(at(cam, { webcamLayoutPreset: "picture-in-picture" }))).toBe(
+			"available",
+		);
+		expect(formatFillAvailability(at(hd, { frame: "laptop" }))).toBe("frame");
+	});
+
+	it("is drawn only when asked for and available", () => {
+		expect(isFormatFillActive(at(hd, {}))).toBe(false);
+		expect(isFormatFillActive(at(hd, { formatFollowCursor: true }))).toBe(true);
+		expect(isFormatFillActive(at(hd, { formatFollowCursor: true, frame: "phone" }))).toBe(false);
 	});
 });

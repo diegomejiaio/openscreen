@@ -27,7 +27,7 @@ Esta página é publicada pelo projeto OpenScreen. Os dados sobre o Screen Studi
 | Áudio do sistema | O monitor do sink do PipeWire, mixado com o microfone |
 | Cursor | Posição e formato vindos do portal. Cliques com o botão esquerdo, com o grupo `input` |
 | Legendas | Whisper local em Vulkan, com alternativa na CPU. Embutidas no vídeo |
-| Exportação | MP4 (H.264 ou H.265) ou GIF, sem marca d'água. H.264 na GPU pelo VAAPI quando o driver permite |
+| Exportação | MP4 (H.264) ou GIF, sem marca d'água. H.264 na GPU pelo VAAPI quando o driver permite |
 | Atualizações integradas | AppImage, `.deb`, `.rpm` e `.pacman`. Exceto Nix |
 
 ## Wayland e PipeWire {#wayland-and-pipewire}
@@ -46,13 +46,13 @@ O OpenScreen grava a tela no Linux com o próprio auxiliar nativo, não com o mo
 
 O Screen Studio dá suporte só ao macOS (em setembro de 2026). O OpenScreen oferece o mesmo tipo de acabamento no Linux, e as ferramentas de edição dele são as mesmas no Windows, no macOS e no Linux.
 
-- **Zooms automáticos.** **Melhoria automática → Zooms automáticos** posiciona zooms a partir do movimento gravado do cursor, sem chamada de rede e sem modelo. Os zooms manuais têm seis profundidades. Mais em [zoom automático](/features/auto-zoom/).
+- **Zooms automáticos.** **Melhoria automática → Zooms automáticos** posiciona zooms nos cliques gravados, sem chamada de rede e sem modelo. Os zooms manuais têm seis profundidades. Mais em [zoom automático](/features/auto-zoom/).
 - **Estilização do cursor.** Mostre ou oculte o cursor, redimensione e suavize-o, e adicione desfoque de movimento e rebote de clique. Os efeitos de clique exigem cliques gravados, então de novo o grupo `input`.
 - **Fundos e enquadramento.** 18 papéis de parede inclusos, uma cor sólida, um gradiente ou sua própria imagem, com espaçamento, cantos arredondados e sombra. Saída em 16:9, 9:16, 1:1 e outras proporções.
 - **Legendas locais.** O whisper.cpp roda na sua máquina, em Vulkan com alternativa na CPU. Ele usa um modelo Whisper Small de cerca de 264 MB, baixado uma vez. As legendas são embutidas no vídeo, e apagar palavras na transcrição as corta do vídeo. Mais em [legendas](/features/captions/).
 - **Layouts de webcam.** Picture-in-picture e outros layouts, com o fundo da câmera removido, borrado ou substituído sem tela verde.
 - **Uma linha do tempo com vários clipes.** Vários clipes por projeto, cortes, regiões de velocidade, anotações de texto, seta, imagem e desfoque, uma faixa de locução e música. Veja [Edição e linha do tempo](/docs/editing-timeline/).
-- **Exportação sem marca d'água.** MP4 em H.264 ou H.265 até 60 fps, ou GIF. No Linux, o compositor renderiza pelo Vulkan, e o H.264 vai para a GPU pelo `h264_vaapi` quando o driver expõe VAAPI e o dispositivo Vulkan consegue repassar os quadros. Veja [Exportação](/docs/export/).
+- **Exportação sem marca d'água.** MP4 em H.264 até 60 fps, ou GIF. No Linux, o compositor renderiza pelo Vulkan, e o H.264 vai para a GPU pelo `h264_vaapi` quando o driver expõe VAAPI e o dispositivo Vulkan consegue repassar os quadros. Veja [Exportação](/docs/export/).
 - **Edição por chat opcional, com sua própria chave.** Descreva cortes, zooms ou anotações em linguagem natural. Fica desligado até você conectar um provedor, e cada mudança vira uma edição comum, que pode ser desfeita. Veja [Edição com IA](/docs/ai-editing/).
 
 ## Pacotes {#packages}
@@ -72,7 +72,7 @@ O Screen Studio dá suporte só ao macOS (em setembro de 2026). O OpenScreen ofe
 
 1. Baixe o pacote para sua distribuição na [página de download](/download/), ou use o flake Nix.
 2. Siga os [passos de instalação para Linux](/docs/installation/#linux). Adicione seu usuário ao grupo `input` se quiser que cliques sejam gravados, e aceite o que esse grupo permite.
-3. Faça uma primeira gravação com o [início rápido](/docs/quick-start/), responda à caixa de diálogo do portal quando ela abrir, depois rode **Melhoria automática → Zooms automáticos** na gravação.
+3. Faça uma primeira gravação com o [início rápido](/docs/quick-start/) e responda à caixa de diálogo do portal quando ela abrir. A gravação abre no editor com os zooms automáticos já posicionados.
 
 Em outro sistema? Veja as páginas de [Windows](/screen-recorder-windows/) e [macOS](/screen-recorder-mac/). Vindo de um app para Mac? Veja a [alternativa ao Screen Studio](/alternatives/screen-studio/). Ou volte para a [página inicial do OpenScreen](/).
 

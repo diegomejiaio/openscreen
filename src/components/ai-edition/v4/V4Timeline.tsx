@@ -2,6 +2,7 @@ import {
 	AudioLines,
 	Clock,
 	Crosshair,
+	Eraser,
 	Loader2,
 	Maximize2,
 	MessageSquare,
@@ -10,7 +11,6 @@ import {
 	Pencil,
 	Scissors,
 	Sparkles,
-	SplitSquareHorizontal,
 	Trash2,
 	Wand2,
 	ZoomIn,
@@ -18,6 +18,7 @@ import {
 import {
 	Fragment,
 	memo,
+	type KeyboardEvent as ReactKeyboardEvent,
 	type PointerEvent as ReactPointerEvent,
 	useCallback,
 	useEffect,
@@ -151,20 +152,19 @@ const PILL_SNAP_PX = 8;
  *  clips that follow — which is what a flex `gap` did, once per junction. */
 /** Below this a clip cannot show a label and a delete button inside itself. */
 const NARROW_CLIP_PX = 120;
-// Whether a card can also carry its edited duration. The label pill is capped at
-// `calc(100% - 50px)` so it clears the delete button, and everything inside it
-// but the name is incompressible: 15px of pill padding (`3px 9px 3px 6px`), the
-// pencil and two 8px gaps — 47px. The timecode is the part that varies —
-// `formatSec` never prints an hour field, so a clip past ten minutes reads
-// `16:40.0` and one past a hundred `100:00.0` — so its width is measured with
-// canvas `measureText` in the face `.tlClipDuration` actually renders, rather
-// than guessed from a per-character average. Only where canvas is unavailable
-// (jsdom) does the gate fall back to the first cut's estimate: 6px per
-// character at 10px in the mono face.
+// Whether a card can also carry its edited duration. The label row is capped at
+// `calc(100% - 50px)` so it clears the delete button, and everything in it but
+// the duration is incompressible: the 30px edit button and the 8px gap after it.
+// The timecode is the part that varies — `formatSec` never prints an hour field,
+// so a clip past ten minutes reads `16:40.0` and one past a hundred `100:00.0` —
+// so its width is measured with canvas `measureText` in the face
+// `.tlClipDuration` actually renders, rather than guessed from a per-character
+// average. Only where canvas is unavailable (jsdom) does the gate fall back to an
+// estimate: 7px per character at 12px.
 const CLIP_LABEL_RESERVE_PX = 50;
-const CLIP_LABEL_FIXED_PX = 47;
-const CLIP_LABEL_FALLBACK_CHAR_PX = 6;
-// `.tlClipDuration` renders `500 10px/1.2 var(--font-mono)`; canvas wants the
+const CLIP_LABEL_FIXED_PX = 38;
+const CLIP_LABEL_FALLBACK_CHAR_PX = 7;
+// `.tlClipDuration` renders `500 12px/1.2 var(--font-body)`; canvas wants the
 // same face without the line height, so the family comes from the token itself.
 let durationMeasureCtx: CanvasRenderingContext2D | null | undefined;
 function durationTextPx(text: string): number | undefined {
@@ -173,9 +173,14 @@ function durationTextPx(text: string): number | undefined {
 	}
 	const ctx = durationMeasureCtx;
 	if (ctx === null) return undefined;
-	const family = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim();
-	ctx.font = `500 10px ${family || "monospace"}`;
-	return ctx.measureText(text).width;
+	const family = getComputedStyle(document.documentElement).getPropertyValue("--font-body").trim();
+	ctx.font = `500 12px ${family || "sans-serif"}`;
+	// `.tlClipDuration` sets tabular numerals, which canvas cannot: there, every digit takes the
+	// advance of the widest one, so count each digit at that width rather than at its own.
+	let digitPx = 0;
+	for (const digit of "0123456789") digitPx = Math.max(digitPx, ctx.measureText(digit).width);
+	const others = text.replace(/[0-9]/g, "");
+	return ctx.measureText(others).width + digitPx * (text.length - others.length);
 }
 function cardFitsDuration(cardPx: number, text: string): boolean {
 	const textPx = durationTextPx(text) ?? text.length * CLIP_LABEL_FALLBACK_CHAR_PX;
@@ -183,6 +188,13 @@ function cardFitsDuration(cardPx: number, text: string): boolean {
 }
 
 const CLIP_GUTTER_PX = 6;
+
+/** Enter and Space belong to the focused button. The shell's play/pause shortcut is Space on
+ *  WINDOW and `preventDefault()`s it, which cancels the button's own activation, so the
+ *  keystroke stops here, natively, and is not prevented. */
+function keepActivationKey(e: ReactKeyboardEvent) {
+	if (e.key === "Enter" || e.key === " ") e.nativeEvent.stopPropagation();
+}
 /**
  * Shortest region a resize may leave behind — the storage grid itself (regions
  * are `Math.round`ed to whole ms, and coalesceRegionsForRuler's epsilon is 1 ms),
@@ -297,9 +309,37 @@ const PlayheadOverlay = memo(function PlayheadOverlay({
 	);
 });
 
-// Waveform preview bars inside a timeline clip. Derived from peaks data;
-// asset only decode once. Renders nothing while decoding or if the source has
-// no audio track, so the clip pill just shows its label until peaks arrive.
+/**
+ * A clip's loudness as one smooth shape standing on its bottom edge, the way Screen Studio
+ * draws it: a filled area under a line, not a row of 2px bars, which read as a barcode.
+ *
+ * `heights` are percentages of the wave box, one per sample, spread evenly across it. The
+ * curve is a Catmull-Rom spline through the samples, so each sample is a point ON the line:
+ * the shape is smoothed between them, never moved at them. Control points are held inside
+ * the box, and a Bézier stays within its control points, so no stretch of it can poke above
+ * full scale or below the baseline.
+ */
+function waveformPaths(heights: readonly number[]): { area: string; line: string } {
+	const n = heights.length;
+	const y = (i: number) => 100 - (heights[Math.min(n - 1, Math.max(0, i))] ?? 0);
+	const r = (v: number) => Math.round(v * 100) / 100;
+	const inBox = (v: number) => r(Math.min(100, Math.max(0, v)));
+	let curve = "";
+	for (let i = 0; i < n - 1; i++) {
+		const c1 = inBox(y(i) + (y(i + 1) - y(i - 1)) / 6);
+		const c2 = inBox(y(i + 1) - (y(i + 2) - y(i)) / 6);
+		curve += ` C${r(i + 1 / 6)},${c1} ${r(i + 1 - 1 / 6)},${c2} ${i + 1},${r(y(i + 1))}`;
+	}
+	const start = `0,${r(y(0))}`;
+	return {
+		area: `M0,100 L${start}${curve} L${n - 1},100 Z`,
+		line: `M${start}${curve}`,
+	};
+}
+
+// The waveform inside a timeline clip. Derived from peaks data; each asset only
+// decodes once. Renders nothing while decoding or if the source has no audio
+// track, so the clip pill just shows its label until peaks arrive.
 const ClipWaveform = memo(function ClipWaveform({
 	videoUrl,
 	assetDurationSec,
@@ -321,7 +361,7 @@ const ClipWaveform = memo(function ClipWaveform({
 	// The duration is what tells `useAudioPeaks` whether this recording is small
 	// enough to decode whole — the file's byte size does not, on compressed video.
 	const peaks = useAudioPeaks(videoUrl, assetDurationSec);
-	const bars = useMemo(() => {
+	const levels = useMemo(() => {
 		if (!peaks || peaks.length === 0 || !assetDurationSec) return null;
 		const totalBlocks = Math.floor(peaks.length / 2);
 		if (totalBlocks === 0) return null;
@@ -329,17 +369,19 @@ const ClipWaveform = memo(function ClipWaveform({
 		const startBlock = Math.max(0, Math.floor(sourceStartSec * blocksPerSec));
 		const endBlock = Math.min(totalBlocks, Math.ceil(sourceEndSec * blocksPerSec));
 		const rangeBlocks = Math.max(1, endBlock - startBlock);
-		// One bar per ~120ms of clip duration — dense enough to read as a
-		// continuous waveform — but capped so a long recording doesn't spawn
-		// thousands of DOM nodes in a single clip (a clip is at most ~the timeline
-		// width on screen, so beyond a few hundred bars they're sub-pixel anyway).
-		const barCount = Math.min(400, Math.max(20, Math.round((sourceEndSec - sourceStartSec) * 8)));
+		// One sample per ~120ms of clip duration — dense enough to follow speech —
+		// but capped so a long recording doesn't build a path of thousands of
+		// points for a clip that is at most ~the timeline width on screen.
+		const sampleCount = Math.min(
+			400,
+			Math.max(20, Math.round((sourceEndSec - sourceStartSec) * 8)),
+		);
 		const result: number[] = [];
-		for (let i = 0; i < barCount; i++) {
-			const blockStart = startBlock + Math.floor((i / barCount) * rangeBlocks);
+		for (let i = 0; i < sampleCount; i++) {
+			const blockStart = startBlock + Math.floor((i / sampleCount) * rangeBlocks);
 			const blockEnd = Math.max(
 				blockStart + 1,
-				startBlock + Math.floor(((i + 1) / barCount) * rangeBlocks),
+				startBlock + Math.floor(((i + 1) / sampleCount) * rangeBlocks),
 			);
 			let amp = 0;
 			for (let b = blockStart; b < blockEnd && b < totalBlocks; b++) {
@@ -352,42 +394,38 @@ const ClipWaveform = memo(function ClipWaveform({
 		return result;
 	}, [peaks, assetDurationSec, sourceStartSec, sourceEndSec]);
 
-	if (!bars) return null;
+	if (!levels) return null;
+	// Gain is applied HERE and not inside the memo above, which scans the whole
+	// asset's blocks: a slider drag fires one setLive per pointer move, so this
+	// keeps a tick at one multiply per sample instead of re-folding the peaks.
+	//
+	// Clamped because `finish_audio` clamps: it does `(sample * trim).clamp(-1, 1)`
+	// per sample, and a sample here is `max|sample|` over its bucket. Gain is positive
+	// and clamping is monotonic, so `clamp(max(|s|) * g)` IS the peak of the gained,
+	// clipped signal — the shape is exact at every sample, not an impression.
+	//
+	// The 8% floor is deliberately NOT scaled: it exists so an empty clip still
+	// reads as a clip, and it is not amplitude.
+	const { area, line } = waveformPaths(
+		levels.map((h) => Math.max(8, Math.round(Math.min(1, h * gain) * 100))),
+	);
 	return (
-		<div aria-hidden className={styles.tlWave}>
-			{bars.map((h, bi) => {
-				// Gain is applied HERE and not inside the memo above, which scans the whole
-				// asset's blocks: a slider drag fires one setLive per pointer move, so this
-				// keeps a tick at `barCount` multiplies instead of re-folding the peaks.
-				//
-				// Clamped because `finish_audio` clamps: it does `(sample * trim).clamp(-1, 1)`
-				// per sample, and this bar is `max|sample|` over its bucket. Gain is positive
-				// and clamping is monotonic, so `clamp(max(|s|) * g)` IS the peak of the gained,
-				// clipped signal — the bar is exact, not an impression. Without the clamp a
-				// 0.5 peak at +12 dB computes `height: 199%` and is merely hidden by the clip's
-				// `overflow`, which draws a signal the export will never write.
-				//
-				// The 8% floor is deliberately NOT scaled: it exists so an empty clip still
-				// reads as a clip, and it is not amplitude.
-				const amplitude = Math.min(1, h * gain);
-				return (
-					<span
-						key={bi}
-						style={{
-							height: `${Math.max(8, Math.round(amplitude * 100))}%`,
-							opacity: (0.5 + amplitude * 0.5).toFixed(2),
-						}}
-					/>
-				);
-			})}
-		</div>
+		<svg
+			aria-hidden
+			className={styles.tlWave}
+			viewBox={`0 0 ${levels.length - 1} 100`}
+			preserveAspectRatio="none"
+		>
+			<path className={styles.tlWaveArea} d={area} />
+			<path className={styles.tlWaveLine} d={line} />
+		</svg>
 	);
 });
 
 // One imported audio track on its lane (issue #350). Grab the body to move it,
 // the edge handles to trim (left = in-point, which moves the head too; right =
-// out-point). The waveform reuses ClipWaveform (its `.tlWave` is inset:0, so it
-// paints behind the label here just as it does inside a clip), windowed to the
+// out-point). The waveform reuses ClipWaveform (its `.tlWave` stands on the pill's
+// bottom edge, behind the label, just as it does inside a clip), windowed to the
 // track's trim and scaled by the track's own gain. `leftPct`/`widthPct` are
 // precomputed by the parent — during a drag they carry the live preview geometry
 // — so this stays memoisable: a doc edit that doesn't touch this track, and a
@@ -504,7 +542,7 @@ const AudioLanePill = memo(function AudioLanePill({
 					e.nativeEvent.stopPropagation();
 					onSelect(track.id);
 				}}
-				title={`${label} — ${slipHint}`}
+				title={`${label}\n${slipHint}`}
 			>
 				<span
 					className={styles.lanePillHandle}
@@ -537,7 +575,7 @@ const AudioLanePill = memo(function AudioLanePill({
 						)
 					: null}
 				<span className={styles.laneAudioLabel}>
-					<Music size={11} />
+					<Music size={12} />
 					{label}
 				</span>
 				<span
@@ -568,8 +606,6 @@ export function V4Timeline({
 	videoSources = [],
 	playing,
 	onTogglePlay,
-	onPrevClip,
-	onNextClip,
 	onEditClip,
 	onAddVoiceover,
 }: {
@@ -580,8 +616,6 @@ export function V4Timeline({
 	videoSources?: VideoSource[];
 	playing: boolean;
 	onTogglePlay: () => void;
-	onPrevClip: () => void;
-	onNextClip: () => void;
 	/** Opens the (now single, shell-level) EditClipModal for this clip —
 	 * trim in/out and crop both live there per-clip. */
 	onEditClip: (clip: AxcutClip) => void;
@@ -1385,15 +1419,15 @@ export function V4Timeline({
 						: styles.laneZoom;
 	const pillIcon = (kind: LanePill["kind"]) =>
 		kind === "annotation" ? (
-			<MessageSquare size={11} />
+			<MessageSquare size={12} />
 		) : kind === "speed" ? (
-			<Clock size={11} />
+			<Clock size={12} />
 		) : kind === "trim" ? (
-			<Scissors size={11} />
+			<Scissors size={12} />
 		) : kind === "cameraFullscreen" ? (
-			<Maximize2 size={11} />
+			<Maximize2 size={12} />
 		) : (
-			<ZoomIn size={11} />
+			<ZoomIn size={12} />
 		);
 
 	// Drag a clip left/right to reorder it relative to its neighbours. Pointer-
@@ -1492,15 +1526,32 @@ export function V4Timeline({
 		[clips, tl],
 	);
 
-	const tools: Array<{ id: ToolId; label: string; icon: React.ReactNode }> = [
-		{ id: "cut", label: t("buttons.addTrim"), icon: <SplitSquareHorizontal size={15} /> },
-		{ id: "comment", label: t("toolbar.comment"), icon: <MessageSquare size={15} /> },
-		{ id: "speed", label: t("buttons.addSpeed"), icon: <Clock size={15} /> },
+	// `shortcut` is the user's live binding, shown as the tooltip's chip. The strings carry no key:
+	// these actions can be remapped, and a key written into a translation would then lie.
+	const tools: Array<{ id: ToolId; label: string; shortcut: string; icon: React.ReactNode }> = [
+		{
+			id: "cut",
+			label: t("buttons.addTrim"),
+			shortcut: formatBinding(shortcuts.addTrim, isMac),
+			icon: <Scissors size={16} />,
+		},
+		{
+			id: "comment",
+			label: t("buttons.addAnnotation"),
+			shortcut: formatBinding(shortcuts.addAnnotation, isMac),
+			icon: <MessageSquare size={16} />,
+		},
+		{
+			id: "speed",
+			label: t("buttons.addSpeed"),
+			shortcut: formatBinding(shortcuts.addSpeed, isMac),
+			icon: <Clock size={16} />,
+		},
 	];
 
 	// Auto-enhance option 1 — the deterministic cursor-telemetry auto-zoom
-	// (ported from main; NOT AI). Reads the recorded cursor movement and drops
-	// zoom-ins on the dwell moments.
+	// (ported from main; NOT AI). Reads the clicks recorded with each take and
+	// plans zooms around them.
 	//
 	// Telemetry belongs to a RECORDING, not to a clip: it is fetched per asset and read in
 	// that asset's source time. Projecting it onto the ruler is `buildAutoZoomSuggestionsForClips`'
@@ -1648,7 +1699,9 @@ export function V4Timeline({
 							}
 						: undefined
 				}
-				title={p.label}
+				// The name on hover only where the pill cannot show it: a pill that draws its own
+				// label would repeat it.
+				title={seg.showContent && roomForLabel ? undefined : p.label}
 			>
 				{seg.interactive ? (
 					<span
@@ -1774,12 +1827,17 @@ export function V4Timeline({
 											type="button"
 											className={styles.tlToolBtn}
 											aria-label={t("toolbar.autoEnhance")}
-											disabled={autoBusy}
+											// `aria-disabled`, not `disabled`, so the tooltip still opens while a pass runs; the
+											// click must not open the menu meanwhile (Radix skips a prevented click).
+											aria-disabled={autoBusy || undefined}
+											onClick={(e) => {
+												if (autoBusy) e.preventDefault();
+											}}
 										>
 											{autoBusy ? (
-												<Loader2 className="animate-spin" size={15} />
+												<Loader2 className="animate-spin" size={16} />
 											) : (
-												<Wand2 size={15} />
+												<Wand2 size={16} />
 											)}
 										</button>
 									</PopoverTrigger>
@@ -1799,10 +1857,10 @@ export function V4Timeline({
 											className={styles.recMenuRow}
 											onClick={() => void runAutoZooms()}
 										>
-											<ZoomIn size={15} style={{ flexShrink: 0 }} />
+											<ZoomIn size={16} style={{ flexShrink: 0 }} />
 											<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
 												<span style={{ fontWeight: 600 }}>{t("toolbar.automaticZooms")}</span>
-												<span style={{ fontSize: 11, color: "var(--muted)" }}>
+												<span style={{ fontSize: 12, color: "var(--muted)" }}>
 													{t("toolbar.automaticZoomsHint")}
 												</span>
 											</span>
@@ -1820,13 +1878,13 @@ export function V4Timeline({
 											}
 										>
 											{transcriptGate.state === "pending" ? (
-												<Loader2 size={15} className="animate-spin" style={{ flexShrink: 0 }} />
+												<Loader2 size={16} className="animate-spin" style={{ flexShrink: 0 }} />
 											) : (
-												<Sparkles size={15} style={{ flexShrink: 0 }} />
+												<Sparkles size={16} style={{ flexShrink: 0 }} />
 											)}
 											<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
 												<span style={{ fontWeight: 600 }}>{t("toolbar.smartZoomsAndCuts")}</span>
-												<span style={{ fontSize: 11, color: "var(--muted)" }}>{smartCutsHint}</span>
+												<span style={{ fontSize: 12, color: "var(--muted)" }}>{smartCutsHint}</span>
 											</span>
 										</button>
 									</div>
@@ -1835,7 +1893,7 @@ export function V4Timeline({
 							<span className={styles.tlToolSep} aria-hidden />
 							{tools.map((tool) => (
 								<Fragment key={tool.id}>
-									<Tooltip content={tool.label}>
+									<Tooltip content={tool.label} shortcut={tool.shortcut}>
 										<button
 											type="button"
 											className={styles.tlToolBtn}
@@ -1867,7 +1925,7 @@ export function V4Timeline({
 														className={styles.tlToolBtn}
 														aria-label={t("toolbar.addAudioTooltip")}
 													>
-														<AudioLines size={15} />
+														<AudioLines size={16} />
 													</button>
 												</PopoverTrigger>
 											</Tooltip>
@@ -1889,10 +1947,10 @@ export function V4Timeline({
 															onAddVoiceover();
 														}}
 													>
-														<Mic size={15} style={{ flexShrink: 0 }} />
+														<Mic size={16} style={{ flexShrink: 0 }} />
 														<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
 															<span style={{ fontWeight: 600 }}>{t("audio.addVoiceover")}</span>
-															<span style={{ fontSize: 11, color: "var(--muted)" }}>
+															<span style={{ fontSize: 12, color: "var(--muted)" }}>
 																{t("audio.addVoiceoverHint")}
 															</span>
 														</span>
@@ -1908,10 +1966,10 @@ export function V4Timeline({
 															void tl.addAudio();
 														}}
 													>
-														<Music size={15} style={{ flexShrink: 0 }} />
+														<Music size={16} style={{ flexShrink: 0 }} />
 														<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
 															<span style={{ fontWeight: 600 }}>{ts("audioTrack.add")}</span>
-															<span style={{ fontSize: 11, color: "var(--muted)" }}>
+															<span style={{ fontSize: 12, color: "var(--muted)" }}>
 																{t("audio.importFileHint")}
 															</span>
 														</span>
@@ -1925,45 +1983,66 @@ export function V4Timeline({
 									) : null}
 								</Fragment>
 							))}
-							<Tooltip content={t("buttons.addZoom")}>
+							<Tooltip
+								content={t("buttons.addZoom")}
+								shortcut={formatBinding(shortcuts.addZoom, isMac)}
+							>
 								<button
 									type="button"
 									className={styles.tlToolBtn}
 									aria-label={t("buttons.addZoom")}
 									onClick={() => void tl.addZoom(newRegionDurationSec())}
 								>
-									<ZoomIn size={15} />
+									<ZoomIn size={16} />
 								</button>
 							</Tooltip>
-							<Tooltip
-								content={t(
-									settings.autoFocusAll ? "buttons.autoFocusAllOn" : "buttons.autoFocusAllOff",
-								)}
-							>
+							{/* One name and one tip for both states: `aria-pressed` carries which one it is. */}
+							<Tooltip content={t("buttons.autoFocusAllTip")}>
 								<button
 									type="button"
 									className={styles.tlToolBtn}
 									aria-pressed={settings.autoFocusAll}
-									aria-label={t(
-										settings.autoFocusAll ? "buttons.autoFocusAllOn" : "buttons.autoFocusAllOff",
-									)}
+									aria-label={t("buttons.autoFocusAll")}
 									onClick={() => void setSettings({ autoFocusAll: !settings.autoFocusAll })}
 								>
-									<Crosshair size={15} />
+									<Crosshair size={16} />
 								</button>
 							</Tooltip>
-							<Tooltip content={t("buttons.addCameraFullscreen")}>
-								<button
-									type="button"
-									className={styles.tlToolBtn}
-									aria-label={t("buttons.addCameraFullscreen")}
-									disabled={!hasAnyCamera}
-									style={!hasAnyCamera ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
-									onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}
+							{/* Absent, not greyed out, in a project with no camera: nothing to show full screen. */}
+							{hasAnyCamera ? (
+								<Tooltip
+									content={t("buttons.addCameraFullscreen")}
+									shortcut={formatBinding(shortcuts.addCameraFullscreen, isMac)}
 								>
-									<Maximize2 size={15} />
-								</button>
-							</Tooltip>
+									<button
+										type="button"
+										className={styles.tlToolBtn}
+										aria-label={t("buttons.addCameraFullscreen")}
+										onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}
+									>
+										<Maximize2 size={16} />
+									</button>
+								</Tooltip>
+							) : null}
+							{/* Last, behind a divider: every button before it adds a region, this one
+							    clears them. Absent with its divider, not greyed out, when there is
+							    nothing to clear. One write in the store, so one Ctrl+Z restores every
+							    region. */}
+							{tl.hasEditRegions ? (
+								<>
+									<span className={styles.tlToolSep} aria-hidden />
+									<Tooltip content={t("buttons.clearTimeline")}>
+										<button
+											type="button"
+											className={styles.tlToolBtn}
+											aria-label={t("buttons.clearTimeline")}
+											onClick={() => void tl.clearTimeline()}
+										>
+											<Eraser size={16} />
+										</button>
+									</Tooltip>
+								</>
+							) : null}
 						</div>
 					</TooltipProvider>
 				) : (
@@ -1983,22 +2062,22 @@ export function V4Timeline({
 						<span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-2)" }}>
 							{t("toolbar.arrangeClips")}
 						</span>
-						<span style={{ fontSize: 11.5, color: "var(--meta)" }}>
+						<span style={{ fontSize: 12, color: "var(--meta)" }}>
 							{t("toolbar.arrangeClipsHint")}
 						</span>
 					</div>
 				)}
 				{showLanes ? (
 					<>
-						<TransportBar
-							playing={playing}
-							overrideTimeSec={scrubbingTimeSec}
-							clips={clips}
-							onTogglePlay={onTogglePlay}
-							onPrevClip={onPrevClip}
-							onNextClip={onNextClip}
-							onSeek={setCurrentTime}
-						/>
+						{/* Its own provider, like the tool strip above: TransportBar has a tooltip too. */}
+						<TooltipProvider>
+							<TransportBar
+								playing={playing}
+								overrideTimeSec={scrubbingTimeSec}
+								clips={clips}
+								onTogglePlay={onTogglePlay}
+							/>
+						</TooltipProvider>
 						<div className={styles.tlHints}>
 							<span className={styles.tlHint}>
 								<span className={styles.tlKbd}>Shift+Scroll</span> {t("labels.pan")}
@@ -2047,22 +2126,46 @@ export function V4Timeline({
 							<>
 								{/* An empty lane advertises the shortcut that fills it ("Press A to add
 								    annotation") rather than restating that it is empty — the same hint
-								    strings the pre-v4 timeline used, so the keys stay translated. */}
+								    strings the pre-v4 timeline used, so the keys stay translated. The key
+								    is the live binding, formatted like the toolbar tooltip's chip, so a
+								    rebind in the shortcuts dialog moves the hint with it (#966). */}
 								<div className={styles.tlLane}>
-									{renderPills(annPills, t("hints.pressAnnotation"))}
+									{renderPills(
+										annPills,
+										t("hints.pressAnnotation", {
+											key: formatBinding(shortcuts.addAnnotation, isMac),
+										}),
+									)}
 								</div>
 								<div className={styles.tlLane}>
-									{renderPills(speedPills, t("hints.pressSpeed"))}
+									{renderPills(
+										speedPills,
+										t("hints.pressSpeed", { key: formatBinding(shortcuts.addSpeed, isMac) }),
+									)}
 								</div>
-								<div className={styles.tlLane}>{renderPills(trimPills, t("hints.pressTrim"))}</div>
-								<div className={styles.tlLane}>{renderPills(zoomPills, t("hints.pressZoom"))}</div>
+								<div className={styles.tlLane}>
+									{renderPills(
+										trimPills,
+										t("hints.pressTrim", { key: formatBinding(shortcuts.addTrim, isMac) }),
+									)}
+								</div>
+								<div className={styles.tlLane}>
+									{renderPills(
+										zoomPills,
+										t("hints.pressZoom", { key: formatBinding(shortcuts.addZoom, isMac) }),
+									)}
+								</div>
 								<div className={styles.tlLane}>
 									{/* Advertising "Press C" on a project with no webcam invites a keystroke
 									    that `addCameraFullscreen` now refuses (#353). The toolbar button is
 									    already disabled; this keeps the lane from contradicting it. */}
 									{renderPills(
 										cameraFullscreenPills,
-										hasAnyCamera ? t("hints.pressCameraFullscreen") : ts("layout.noWebcam"),
+										hasAnyCamera
+											? t("hints.pressCameraFullscreen", {
+													key: formatBinding(shortcuts.addCameraFullscreen, isMac),
+												})
+											: ts("layout.noWebcam"),
 									)}
 								</div>
 								{/* Imported audio tracks (issue #350). Always shown, like every other
@@ -2086,7 +2189,10 @@ export function V4Timeline({
 											className={styles.laneEmpty}
 											style={{ left: `${nav.start * 100}%`, width: `${navSpan * 100}%` }}
 										>
-											{t("hints.pressAudio")}
+											{t("hints.pressAudio", {
+												audioKey: formatBinding(shortcuts.addAudio, isMac),
+												voiceoverKey: formatBinding(shortcuts.addVoiceover, isMac),
+											})}
 										</span>
 									) : (
 										// One pill per user-visible track: the document stores one
@@ -2126,7 +2232,9 @@ export function V4Timeline({
 													onStartDrag={startAudioDrag}
 													onSelect={tl.selectAudioTrack}
 													label={track.label || asset?.label || ts("audioTrack.defaultLabel")}
-													slipHint={ts("audioTrack.slipHint")}
+													slipHint={ts("audioTrack.slipHint", {
+														modifier: isMac ? "Option" : "Alt",
+													})}
 													slipArmed={slipArmed}
 													outputGain={audioGainScalar(settings.audioGainDb)}
 													ghost={((g) =>
@@ -2206,6 +2314,9 @@ export function V4Timeline({
 								// The gutter is taken out of the card's own width below, so the
 								// room the label actually has is that much less than the span.
 								const durText = formatSec(dur);
+								// The gutter separates two cards; the last one has nothing after it and
+								// reaches the end of the timeline.
+								const gutterPx = i === clips.length - 1 ? 0 : CLIP_GUTTER_PX;
 								return (
 									<div
 										key={c.id}
@@ -2223,7 +2334,9 @@ export function V4Timeline({
 											// flex row's `gap`). A clip shorter than the gutter lands on
 											// .tlClip's 1px min-width instead of collapsing — same rule as
 											// the lane pills above.
-											width: `calc(${pctOf(boxLen)}% - ${CLIP_GUTTER_PX}px)`,
+											width: gutterPx
+												? `calc(${pctOf(boxLen)}% - ${gutterPx}px)`
+												: `${pctOf(boxLen)}%`,
 											transform: clipTransform,
 										}}
 										onPointerDown={(e) => startClipDrag(e, c)}
@@ -2241,7 +2354,9 @@ export function V4Timeline({
 											e.stopPropagation();
 											onEditClip(c);
 										}}
-										title={t("toolbar.dragToReorderHint")}
+										// The file name is here rather than on the card: which file a clip
+										// comes from matters less than what can be done with it.
+										title={`${asset?.label ?? c.assetId}\n${t("toolbar.dragToReorderHint")}`}
 									>
 										<ClipWaveform
 											videoUrl={clipVideoUrl}
@@ -2251,21 +2366,21 @@ export function V4Timeline({
 											gain={audioGainScalar(settings.audioGainDb)}
 										/>
 										<div className={styles.tlClipLabel}>
-											<span
-												className={styles.tlClipIcon}
+											<button
+												type="button"
+												className={styles.tlClipEdit}
 												data-no-clip-drag
 												title={t("toolbar.editInOutPoints")}
+												aria-label={t("toolbar.editInOutPoints")}
 												onClick={(e) => {
 													e.stopPropagation();
 													onEditClip(c);
 												}}
+												onKeyDown={keepActivationKey}
 											>
-												<Pencil size={9} />
-											</span>
-											<span className={styles.tlClipName}>
-												{tl.assets.find((a) => a.id === c.assetId)?.label ?? c.assetId}
-											</span>
-											{cardFitsDuration(boxLen * pxPerSec - CLIP_GUTTER_PX, durText) ? (
+												<Pencil size={15} />
+											</button>
+											{cardFitsDuration(boxLen * pxPerSec - gutterPx, durText) ? (
 												<span className={styles.tlClipDuration}>{durText}</span>
 											) : null}
 										</div>
@@ -2281,8 +2396,9 @@ export function V4Timeline({
 													e.stopPropagation();
 													void tl.removeClip(c.id);
 												}}
+												onKeyDown={keepActivationKey}
 											>
-												<Trash2 size={13} />
+												<Trash2 size={15} />
 											</button>
 										) : null}
 									</div>
@@ -2317,28 +2433,32 @@ export function V4Timeline({
 			    on screen at once, and there is nothing to zoom INTO without lanes. */}
 			{showLanes ? (
 				<div ref={navRef} className={styles.tlNav}>
-					<div className={styles.tlNavTrack} />
+					<div className={styles.tlNavTrack} aria-hidden />
 					<div
 						className={styles.tlNavWindow}
+						// Whole timeline in view: the thumb goes quiet (see .tlNavWindow[data-full]).
+						data-full={navSpan >= 0.999 || undefined}
+						title={t("labels.panTip")}
 						style={{
 							left: `${(nav.start * 100).toFixed(2)}%`,
 							width: `${((nav.end - nav.start) * 100).toFixed(2)}%`,
 						}}
 						onPointerDown={(e) => startNavDrag("pan", e)}
-					/>
-					<div
-						className={styles.tlNavHandle}
-						style={{ left: `calc(${(nav.start * 100).toFixed(2)}% - 6px)` }}
-						onPointerDown={(e) => startNavDrag("left", e)}
 					>
-						<span />
-					</div>
-					<div
-						className={styles.tlNavHandle}
-						style={{ left: `calc(${(nav.end * 100).toFixed(2)}% - 6px)` }}
-						onPointerDown={(e) => startNavDrag("right", e)}
-					>
-						<span />
+						{/* Grips on the window's own edges: pulling one zooms, as a range slider's
+						    thumbs would. */}
+						<span
+							className={styles.tlNavGrip}
+							data-edge="start"
+							title={t("labels.zoomTip")}
+							onPointerDown={(e) => startNavDrag("left", e)}
+						/>
+						<span
+							className={styles.tlNavGrip}
+							data-edge="end"
+							title={t("labels.zoomTip")}
+							onPointerDown={(e) => startNavDrag("right", e)}
+						/>
 					</div>
 				</div>
 			) : null}

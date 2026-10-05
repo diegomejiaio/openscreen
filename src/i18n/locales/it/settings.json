@@ -5,13 +5,14 @@
 		"motionDrift": "Deriva",
 		"motionAurora": "Aurora",
 		"motionWaves": "Onde",
-		"motionGradientOnly": "L'animazione si applica solo agli sfondi sfumati. Scegli una sfumatura per animarla.",
 		"gradientLabel": "Sfumatura {{index}}",
 		"uploadCustom": "Carica personalizzato",
 		"unsupportedImage": "Immagine non supportata. Usa un file JPG o PNG.",
 		"title": "Sfondo",
 		"imageLabel": "Sfondo {{index}}",
 		"custom": "Personalizzato",
+		"customColor": "Colore personalizzato",
+		"customGradient": "Sfumatura da un colore",
 		"help": "Scegli cosa appare dietro la registrazione: uno sfondo incluso, un colore pieno, un gradiente o un'immagine personale dal disco.",
 		"gradient": "Sfumatura",
 		"colorLabel": "Colore {{color}}",
@@ -50,9 +51,9 @@
 		"errorReading": "Si è verificato un errore durante la lettura del file."
 	},
 	"annotation": {
-		"supportedFormats": "Formati supportati: JPG, PNG, GIF, WebP",
 		"blurShapeRectangle": "Rettangolo",
 		"size": "Dimensione",
+		"customSize": "Dimensione personalizzata",
 		"tipShiftTabCycle": "Usa Maiusc+Tab per scorrere all'indietro.",
 		"clearBackground": "Rimuovi sfondo",
 		"colorPalette": "Tavolozza dei colori",
@@ -106,17 +107,20 @@
 		"blurBg": "Sfuma sfondo",
 		"help": "Stile della cornice della registrazione: sfocatura dello sfondo, ombra, sfocatura di movimento, raggio degli angoli e margine attorno al video.",
 		"fitClipOne": "{{count}} clip",
+		"formatAuto": "Auto",
+		"formatAutoMixed": "Clip diversi",
+		"formatFill": "Registrazione",
+		"formatFillFit": "Intera",
+		"formatFillFollow": "Segui il cursore",
 		"formatOriginal": "Originale",
 		"fitClipMany": "{{count}} clip",
 		"frame": "Cornice",
 		"motion": "Movimento",
 		"padding": "Spaziatura",
 		"format": "Formato",
-		"fitClip": "Adatta",
 		"motionBlur": "Sfocatura movimento",
 		"depthOfField": "Profondità di campo",
-		"depthOfFieldHint": "Zoom 3D",
-		"depthOfFieldNoTilt": "Nessuno zoom 3D in questo progetto",
+		"depthOfFieldTip": "Sfoca il lato lontano di uno schermo inclinato",
 		"roundness": "Arrotondamento",
 		"frameStyle": "Stile",
 		"windowNone": "Nessuna",
@@ -127,9 +131,11 @@
 		"frameTheme": "Tema",
 		"frameThemeLight": "Chiaro",
 		"frameThemeDark": "Scuro",
-		"frameThemeHelp": "Corpo argento con cornice chiara, o grafite con cornice scura. Vale per tutte le cornici.",
-		"windowHelp": "Disegna una finestra, o un dispositivo modellato in 3D, attorno alla registrazione.",
-		"roundnessFrameHelp": "L'intervallo si adatta alla cornice: 100 % è l'arrotondamento massimo che le sta bene."
+		"roundnessFrameHelp": "L'intervallo dipende dalla cornice. 100 % è l'arrotondamento massimo che sta ancora bene.",
+		"shadowNone": "Nessuna",
+		"shadowLight": "Leggera",
+		"shadowMedium": "Media",
+		"shadowStrong": "Forte"
 	},
 	"stylePresets": {
 		"button": "Preset",
@@ -146,6 +152,9 @@
 		"revealLinux": "Mostra nella cartella",
 		"rename": "Rinomina",
 		"update": "Aggiorna dal progetto corrente",
+		"useForNewProjects": "Usa per i nuovi progetti",
+		"stopForNewProjects": "Non usare più per i nuovi progetti",
+		"newProjectsBadge": "Nuovi progetti",
 		"delete": "Elimina",
 		"confirmDelete": "Eliminare «{{name}}»?",
 		"applied": "«{{name}}» applicato",
@@ -167,7 +176,7 @@
 		"help": "Trascrizione aggregata di tutti i clip sulla timeline. Backspace / Canc su una parola o selezione la taglia dal video (in rosso). Fai doppio clic su una parola per correggerne il testo. Passa sopra una parola contrassegnata per annullare.",
 		"editWord": "Modifica «{{word}}»",
 		"laneFeedsCaptions": "I sottotitoli vengono impressi da questa traccia.",
-		"insertedWord": "Aggiunta da te — nessun audio dietro",
+		"insertedWord": "Aggiunta da te. Non c'è alcun audio.",
 		"whisperHint": "La trascrizione usa Whisper in locale: gira sul tuo computer, nessun dato lascia il dispositivo.",
 		"insertAria": "Nuova parola",
 		"editorAria": "Trascrizione di {{filename}}",
@@ -180,7 +189,7 @@
 		"laneVoiceover": "Voce fuori campo",
 		"silence": "[silenzio {{duration}} s]",
 		"clipLabel": "Clip {{index}}",
-		"correctedWord": "Corretta — la trascrizione diceva «{{original}}»",
+		"correctedWord": "Corretta. La trascrizione diceva «{{original}}».",
 		"noClipTranscript": "Nessuna trascrizione per questo clip: apri la scheda della risorsa e rigenerala.",
 		"editingHintDev": "Fai doppio clic su una parola per correggerla, Backspace la taglia dal video, scrivi tra due parole per aggiungerne una.",
 		"noAudio": "Questo contenuto non ha una traccia audio",
@@ -200,15 +209,12 @@
 		"legacyAnnotations": "Questo progetto contiene ancora annotazioni di sottotitoli della vecchia funzione ({{count}}). Vengono disegnate sopra il livello dei sottotitoli.",
 		"backgroundOpacity": "Opacità",
 		"backgroundColor": "Colore dello sfondo",
-		"alignCenter": "Centro",
 		"translationIsNonDestructive": "Le traduzioni vengono salvate accanto alla trascrizione, mai al suo interno: il testo originale e i suoi tempi restano intatti.",
 		"distanceFromRight": "Distanza da destra",
 		"language": "Lingua",
 		"text": "Testo",
-		"anchorHintBottom": "I sottotitoli lunghi crescono verso l'alto: il bordo inferiore non si sposta.",
 		"distanceFromTop": "Distanza dall'alto",
 		"translateFailed": "Traduzione non riuscita.",
-		"alignLeft": "Sinistra",
 		"distanceFromBottom": "Distanza dal basso",
 		"derivedFromTranscript": "{{count}} righe di sottotitoli, derivate dal vivo dalla trascrizione.",
 		"translate": "Traduci",
@@ -217,14 +223,10 @@
 		"hiddenHint": "I sottotitoli provengono dalla trascrizione di questo media. Attivali per vederli nell'anteprima e nelle esportazioni.",
 		"noTranscript": "I sottotitoli vengono letti dalla trascrizione del media. Trascrivi questo video per attivarli.",
 		"distanceFromLeft": "Distanza da sinistra",
-		"anchorBottom": "Basso",
 		"transcribe": "Trascrivi video",
 		"bold": "Grassetto",
-		"alignRight": "Destra",
-		"anchorTop": "Alto",
 		"minWords": "Parole min. per riga",
 		"translateHint": "Traduci la trascrizione con il provider IA configurato",
-		"anchorHintTop": "I sottotitoli lunghi crescono verso il basso: il bordo superiore non si sposta.",
 		"displayLanguage": "Visualizzazione",
 		"removeLegacyAnnotations": "Rimuovi le vecchie annotazioni dei sottotitoli",
 		"background": "Sfondo",
@@ -234,7 +236,15 @@
 		"font": "Carattere",
 		"translating": "Traduzione…",
 		"show": "Mostra sottotitoli",
-		"textColor": "Colore del testo"
+		"textColor": "Colore del testo",
+		"style": "Stile",
+		"styles": {
+			"classic": "Classico",
+			"bold": "Grassetto",
+			"minimal": "Minimale",
+			"light": "Chiaro"
+		},
+		"customize": "Personalizza"
 	},
 	"panes": {
 		"help": "Aiuto"
@@ -265,20 +275,30 @@
 		"fadeIn": "Dissolvenza in entrata",
 		"remove": "Elimina traccia",
 		"loop": "Ripeti",
-		"slipHint": "Alt + trascina per far scorrere l’audio all’interno",
-		"help": "Volume, dissolvenze e loop di questa traccia audio. Viene mixata sopra la registrazione nell’anteprima e nell’esportazione. Trascina la traccia sulla timeline per spostarla o ridimensionarla, oppure tieni premuto Alt e trascina per far scorrere l’audio all’interno.",
+		"slipHint": "Tieni premuto {{modifier}} e trascina per far scorrere l'audio nella traccia",
+		"help": "Volume, dissolvenze e loop di questa traccia audio. Viene mixata sopra la registrazione nell’anteprima e nell’esportazione. Una traccia musicale si abbassa da sola mentre qualcuno parla. Trascina la traccia sulla timeline per spostarla o ridimensionarla, oppure tieni premuto Alt e trascina per far scorrere l’audio all’interno.",
 		"add": "Aggiungi traccia audio",
 		"mute": "Muto"
 	},
 	"layout": {
-		"help": "Come la webcam viene composta con lo schermo: picture-in-picture, pila verticale, doppio riquadro, forma della maschera, dimensione e effetto specchio.",
+		"help": "Come la webcam viene composta con lo schermo: picture-in-picture, pila verticale, doppio riquadro, forma, arrotondamento, dimensione, posizione e effetto specchio.",
 		"mirrorWebcam": "Specchia webcam",
 		"webcamFraming": "Inquadratura webcam",
+		"webcamFramingDrag": "Trascina il riquadro per spostarlo, o un angolo per lo zoom.",
 		"shapes": {
-			"rectangle": "Rett.",
-			"rounded": "Arrotondato",
-			"circle": "Cerchio",
-			"square": "Quadrato"
+			"square": "Quadrato",
+			"original": "Originale"
+		},
+		"webcamPosition": "Posizione",
+		"anchors": {
+			"topLeft": "In alto a sinistra",
+			"top": "In alto",
+			"topRight": "In alto a destra",
+			"left": "A sinistra",
+			"right": "A destra",
+			"bottomLeft": "In basso a sinistra",
+			"bottom": "In basso",
+			"bottomRight": "In basso a destra"
 		},
 		"selectPreset": "Seleziona predefinito",
 		"bgModes": {
@@ -287,18 +307,15 @@
 			"blur": "Sfocato",
 			"transparent": "Scontornato"
 		},
-		"reactiveWebcamDescription": "La webcam si riduce dolcemente durante lo zoom, così non intralcia.",
 		"webcamBlurIntensity": "Intensità sfocatura",
 		"preset": "Predefinito",
-		"webcamCropZoom": "Zoom ritaglio",
 		"webcamSize": "Dimensione webcam",
 		"dualFrame": "Doppio frame",
-		"webcamCropY": "Spostamento verticale",
 		"verticalStack": "Pila verticale",
 		"pictureInPicture": "Immagine nell'immagine",
 		"webcamShape": "Forma fotocamera",
-		"webcamCropX": "Spostamento orizzontale",
 		"reactiveWebcam": "Riduci con lo zoom",
+		"reactiveWebcamTip": "La fotocamera si riduce mentre il video è ingrandito",
 		"webcamBackground": "Sfondo della fotocamera",
 		"helpNoWebcam": "Questo progetto non ha una webcam, quindi i controlli di layout sono disattivati e il preset mostra «Nessuna webcam». Il layout salvato viene conservato per quando aggiungerai una webcam.",
 		"title": "Disposizione camera",
@@ -317,7 +334,14 @@
 	},
 	"facets": {
 		"transcript": "Trascrizione",
-		"captions": "Sottotitoli"
+		"captions": "Sottotitoli",
+		"tips": {
+			"effects": "Composizione: sfondo, cornice, ombra e spaziatura",
+			"layout": "Disposizione camera: posizione, forma e dimensione della fotocamera",
+			"audio": "Audio: livello di uscita di tutto il video",
+			"cursor": "Cursore: stile, dimensione ed effetti",
+			"transcript": "Trascrizione: modifica le parole per tagliare il video"
+		}
 	},
 	"crop": {
 		"title": "Ritaglia",
@@ -341,39 +365,20 @@
 			"lockedDisclaimer": "Controllato dall'interruttore globale di messa a fuoco automatica nella timeline. Disattivalo per impostare la modalità di messa a fuoco per ogni zoom.",
 			"auto": "Automatico",
 			"manual": "Manuale",
-			"autoDescription": "La fotocamera segue la posizione del cursore registrato",
 			"title": "Modalità messa a fuoco"
 		},
 		"camera": {
 			"title": "Camera 3D",
 			"off": "Disattivata",
-			"fixed": "Angolo fisso",
-			"moving": "Camera in movimento",
 			"preset": {
-				"iso": "Dall'alto di sbieco",
 				"left": "Schermo ruotato a sinistra",
 				"right": "Schermo ruotato a destra",
-				"followCursor": "Ruota con il cursore"
-			},
-			"description": {
-				"off": "Lo schermo resta piatto.",
-				"iso": "Mantiene una sola posa: ruotato a sinistra e visto dall'alto.",
-				"left": "Mantiene una sola posa: lo schermo guarda a sinistra e il bordo destro avanza.",
-				"right": "Mantiene una sola posa: lo schermo guarda a destra e il bordo sinistro avanza.",
-				"followCursor": "Lo schermo resta fermo; la telecamera gli gira intorno dal lato del cursore e sale o scende con esso."
-			},
-			"needsCursor": "Il cursore è nascosto: questa telecamera non ha nulla da seguire e mantiene l'angolo iniziale."
-		},
-		"clickImpact": {
-			"title": "Impatto del clic",
-			"description": "Ogni clic preme lo schermo inclinato: il lato cliccato si abbassa, poi torna.",
-			"needsRotation": "Scegli prima una camera 3D: si può premere solo uno schermo inclinato.",
-			"needsCursor": "Il cursore è nascosto: lo schermo reagisce solo ai clic visibili.",
-			"descriptionCamera": "Ogni clic fa arretrare un po' la telecamera, che poi torna avanti."
+				"orbit": "Orbita 3D"
+			}
 		},
 		"level": "Livello zoom",
-		"previewHold": "Tieni premuto per vedere l'anteprima dell'effetto zoom",
 		"customScale": "Zoom personalizzato",
+		"customScaleRange": "Lo zoom va da {{min}}× a {{max}}×",
 		"selectRegion": "Seleziona una regione zoom da regolare",
 		"cursor": {
 			"title": "Cursore",
@@ -383,7 +388,7 @@
 	},
 	"audio": {
 		"outputGain": "Livello di uscita",
-		"help": "Regola il livello di uscita audio. Si applica allo stesso modo nell’anteprima e nell’esportazione.",
+		"help": "Le voci vengono livellate automaticamente a un volume percepito standard. Regola il livello di uscita a partire da lì; si applica allo stesso modo nell’anteprima e nell’esportazione.",
 		"reset": "Reimposta audio",
 		"title": "Audio"
 	},
@@ -404,18 +409,33 @@
 		"smoothing": "Smussatura",
 		"clickBounce": "Rimbalzo clic",
 		"model3d": "Cursore 3D",
-		"model3dHint": "Stile predefinito: tutte le forme del cursore diventano 3D. Gli altri stili restano piatti.",
-		"model3dNeedsCursor": "Attiva «Mostra cursore» per usare il cursore 3D.",
+		"model3dTip": "Disegna il cursore predefinito come oggetto 3D con ombra",
+		"clickImpact": "Impatto del clic",
+		"clickImpactTip": "Lo schermo si muove un po' a ogni clic",
 		"help": "Resa del cursore dalla telemetria registrata: tema, dimensione, smussatura, sfocatura di movimento e rimbalzo al clic.",
-		"clipToBoundsDescription": "Mantiene il cursore all'interno del fotogramma video. Disattiva per lasciare che il cursore superi i bordi — utile quando si esegue zoom o panoramica.",
 		"size": "Dimensione",
 		"title": "Cursore",
 		"show": "Mostra cursore",
 		"themeDefault": "Predefinito",
-		"clipToBounds": "Ritaglia al canvas",
+		"types": "Tipi di cursore",
+		"typeArrow": "Freccia",
+		"typePointer": "Mano",
+		"typeText": "Testo",
+		"typeGrab": "Afferra",
+		"typeResize": "Ridimensiona",
+		"typeBusy": "Occupato",
+		"typeCrosshair": "Mirino",
+		"typeNotAllowed": "Non disponibile",
+		"typeHelp": "Guida",
+		"typeUpArrow": "Selezione alternativa",
+		"typeAsArrow": "{{type}}: al suo posto la freccia",
 		"motionBlur": "Sfocatura movimento",
 		"theme": "Stile del cursore",
-		"autoHide": "Nascondi se inattivo"
+		"autoHide": "Nascondi se inattivo",
+		"autoHideTip": "Il cursore svanisce quando smette di muoversi",
+		"bounceNone": "Nessuno",
+		"bounceLight": "Leggero",
+		"bounceStrong": "Marcato"
 	},
 	"export": {
 		"gifButton": "Esporta GIF",
@@ -424,5 +444,11 @@
 	},
 	"trim": {
 		"deleteRegion": "Elimina regione taglio"
+	},
+	"textPlate": {
+		"none": "Nessuna",
+		"dark": "Scura",
+		"light": "Chiara",
+		"custom": "Personalizzata"
 	}
 }

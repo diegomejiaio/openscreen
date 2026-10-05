@@ -74,6 +74,7 @@
 use crate::compositor::Compositor;
 use crate::config::Cfg;
 use crate::d3d::Gpu;
+use crate::gif_export_control::{with_gif_output, GifExportControl};
 use crate::pipeline::{ClipSource, Decoder};
 use crate::timeline_walk::walk_composited_timeline;
 use anyhow::{anyhow, bail, Context, Result};
@@ -132,10 +133,12 @@ pub struct GifExportParams {
 	/// `None` or `0` → infinite loop (the historical GIF default).
 	/// Otherwise finite count.
 	pub loop_count: Option<u16>,
-	/// Floyd-Steinberg dithering before quantization. Default off —
-	/// the quantized result without dithering is usually acceptable
-	/// for screen content, and dithering roughly doubles the per-frame
-	/// CPU cost.
+	/// Floyd-Steinberg dithering at quantization. Default ON: the median
+	/// cut spreads its 256 entries over the whole frame, so a gradient
+	/// wallpaper gets a few dozen of them and, mapped to the nearest one,
+	/// breaks into flat bands. Error diffusion keeps its local average on
+	/// the ramp, and leaves a flat area flat: a colour that is in the
+	/// palette has no error to spread.
 	pub dither: bool,
 }
 
@@ -146,7 +149,7 @@ impl Default for GifExportParams {
 			height: Some(DEFAULT_GIF_HEIGHT),
 			fps: Some(DEFAULT_GIF_FPS),
 			loop_count: None, // infinite
-			dither: false,
+			dither: true,
 		}
 	}
 }
@@ -160,9 +163,7 @@ impl Default for GifExportParams {
 /// MP4 hands the composed texture to a hardware NV12 encoder, GIF reads it back
 /// to the CPU and quantizes it to 256 colours.
 ///
-/// A failed run leaves a truncated GIF under exactly the name the user thinks
-/// they exported. Remove it rather than leave it lying around — same contract
-/// as `discard_partial_output` on the MP4 path.
+/// Publish only a finished GIF; errors leave an existing destination intact.
 pub fn export_gif(
 	clips: &[ClipSource],
 	out_path: &Path,
@@ -172,22 +173,36 @@ pub fn export_gif(
 	params: &GifExportParams,
 	progress: &mut dyn FnMut(u64),
 ) -> Result<GifStats> {
-	let result = export_gif_inner(clips, out_path, gpu, comp, cfg, params, progress);
-	if result.is_err() {
-		let _ = std::fs::remove_file(out_path);
-	}
-	result
+    export_gif_cancellable(clips, out_path, gpu, comp, cfg, params, progress, &GifExportControl::default())
+}
+
+pub fn export_gif_cancellable(
+    clips: &[ClipSource],
+    out_path: &Path,
+    gpu: &Gpu,
+    comp: &Compositor,
+    cfg: &Cfg,
+    params: &GifExportParams,
+    progress: &mut dyn FnMut(u64),
+    control: &GifExportControl,
+) -> Result<GifStats> {
+    with_gif_output(out_path, control, |file, staging_path| {
+        export_gif_inner(clips, staging_path, file, gpu, comp, cfg, params, progress, control)
+    })
 }
 
 fn export_gif_inner(
 	clips: &[ClipSource],
 	out_path: &Path,
+	file: File,
 	gpu: &Gpu,
 	comp: &Compositor,
 	cfg: &Cfg,
 	params: &GifExportParams,
 	progress: &mut dyn FnMut(u64),
+	control: &GifExportControl,
 ) -> Result<GifStats> {
+	control.check()?;
 	if clips.is_empty() {
 		bail!("export_gif: aucun clip à exporter");
 	}
@@ -203,26 +218,14 @@ fn export_gif_inner(
 	// per-frame local palette (the standard "high-quality" form: a
 	// palette tuned to each frame's colours), so the global palette in
 	// the header is empty.
-	if let Some(parent) = out_path.parent() {
-		if !parent.as_os_str().is_empty() {
-			std::fs::create_dir_all(parent).ok();
-		}
-	}
-	let file = File::create(out_path)
-		.with_context(|| format!("export_gif: create {}", out_path.display()))?;
 	let mut writer = BufWriter::new(file);
 
-	// GIF frame delay in centiseconds (= 1/100 s). `fps` →
-	// `100 / fps` cs per frame, rounded to the nearest unit the
-	// GIF spec supports. u16 caps at 65535 — 10.9 minutes per
-	// frame, plenty.
-	//
-	// ponytail: integer centiseconds can't express every fps exactly
-	// (12 → 8 cs → 12.5 fps). `video_duration_s` below is computed
-	// from the delays actually written, so the reported duration never
-	// disagrees with the file. Fractional accumulation if a viewer ever
-	// cares about the ~4% drift.
-	let delay_cs: u16 = (100_u32 / fps).max(1) as u16;
+	// GIF frame delays are integer centiseconds, which can't express most
+	// fps exactly (15 fps = 6.67 cs). Each frame's delay comes from
+	// `frame_delay_cs`, which accumulates the fractional remainder
+	// (15 fps → 7,7,6,…) so playback length tracks frames / fps. The sum of
+	// delays actually written is kept for `video_duration_s`.
+	let mut total_delay_cs: u64 = 0;
 
 	// Pre-allocate the per-frame index buffer. Reused across
 	// frames so we don't hit the allocator in the hot loop.
@@ -268,6 +271,7 @@ fn export_gif_inner(
 				&mut screen_decs,
 				&mut webcam_decs,
 				&mut |frame_index| {
+					control.check()?;
 					// CPU readback of the staged RT (RGBA8 tightly-packed,
 					// `width * height * 4` bytes). The dominant per-frame cost,
 					// and the reason GIF can't use the MP4 zero-copy sink.
@@ -302,27 +306,31 @@ fn export_gif_inner(
 					}
 
 					// Per-frame palette (GIF local palette, written by `write_frame`).
+					control.check()?;
+					let delay_cs = frame_delay_cs(frame_index as u64, fps);
+					total_delay_cs += delay_cs as u64;
 					gw.write_frame(&indices, &palette_rgb, delay_cs, fps)?;
 					progress(frame_index + 1);
 					Ok(())
 				},
 				// GIF has no audio track, so clip boundaries need no work.
-				&mut |_, _, _, _| Ok(()),
+				&mut |_, _, _, _| control.check(),
 			)?
 		};
 
+		control.check()?;
 		gw.finish()?;
 		frames
 	};
 	// Drop the writer before stat-ing the file so the trailer is
 	// flushed.
+	writer.flush().context("flushing completed GIF")?;
 	drop(writer);
 
 	let wall_s = t0.elapsed().as_secs_f64();
 	let fps_actual = if wall_s > 0.0 { frames as f64 / wall_s } else { 0.0 };
-	// From the delays actually written, not from the requested fps — see the
-	// `delay_cs` note above.
-	let video_duration_s = frames as f64 * (delay_cs as f64 / 100.0);
+	// From the delays actually written, not from the requested fps.
+	let video_duration_s = total_delay_cs as f64 / 100.0;
 	let file_bytes = std::fs::metadata(out_path).map(|m| m.len()).unwrap_or(0);
 
 	Ok(GifStats { frames, wall_s, fps: fps_actual, video_duration_s, file_bytes })
@@ -969,10 +977,37 @@ fn map_to_indices_dithered(
 // the Floyd-Steinberg dither. The full `export_gif` pipeline
 // (Player + GPU + readback) is exercised by the bench, not here.
 
+/// Delay in centiseconds for frame `index` at `fps`: the difference between
+/// the rounded end and start times of the frame, so the fractional remainder
+/// carries over and the running total stays within half a centisecond of
+/// `(index + 1) * 100 / fps`. Never 0 (browsers treat 0 as "as fast as
+/// possible" / 10 cs).
+fn frame_delay_cs(index: u64, fps: u32) -> u16 {
+	let fps = fps.max(1) as u64;
+	let rounded_cs = |n: u64| (n * 200 + fps) / (2 * fps);
+	(rounded_cs(index + 1) - rounded_cs(index)).clamp(1, u16::MAX as u64) as u16
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use std::io::Cursor;
+
+	#[test]
+	fn frame_delays_sum_to_programme_duration() {
+		for fps in [15u32, 30, 12, 20, 25, 24, 60] {
+			for n in [1u64, 2, 3, 7, 100, 508, 10_000] {
+				let delays: Vec<u16> = (0..n).map(|i| frame_delay_cs(i, fps)).collect();
+				assert!(delays.iter().all(|&d| d >= 1), "fps {fps}: zero delay");
+				let sum: u64 = delays.iter().map(|&d| d as u64).sum();
+				let expected = (n as f64 * 100.0 / fps as f64).round() as i64;
+				assert!((sum as i64 - expected).abs() <= 1, "fps {fps} n {n}: {sum} vs {expected}");
+			}
+		}
+		// 15 fps alternates 7/7/6 rather than a flat (fast) 6.
+		let d: Vec<u16> = (0..3).map(|i| frame_delay_cs(i, 15)).collect();
+		assert_eq!(d.iter().sum::<u16>(), 20);
+	}
 
 	/// The most basic round-trip: write a 2×2 frame and check the
 	/// file is well-formed GIF89a. No decode — we just walk the
@@ -1336,6 +1371,64 @@ mod tests {
 			&mut indices,
 		);
 		assert!((indices[0] as usize) < PALETTE_COLORS);
+	}
+
+	/// What the dithering is for: a smooth ramp against a palette too coarse for it. That is
+	/// what a real frame hands a wallpaper gradient, since the median cut spreads 256 entries
+	/// over the whole frame, not over the one gradient. Nearest-colour mapping flattens the ramp
+	/// into wide bands; Floyd-Steinberg keeps its local average on the ramp.
+	#[test]
+	fn dithering_keeps_a_gradient_on_its_ramp_where_plain_mapping_bands() {
+		let (w, h) = (512usize, 8usize);
+		let ramp = |x: usize| (64 + x / 4) as u8; // grey 64..=191, a new level every 4 px
+		let rgba: Vec<u8> = (0..h)
+			.flat_map(|_| (0..w).flat_map(move |x| [ramp(x), ramp(x), ramp(x), 255]))
+			.collect();
+		// 16 greys, 17 levels apart, repeated to fill the 256 entries.
+		let palette: Vec<u8> =
+			(0..PALETTE_COLORS).flat_map(|i| [((i % 16) * 17) as u8; 3]).collect();
+
+		let mut plain = vec![0u8; w * h];
+		map_to_indices(&palette, &rgba, &mut plain);
+		let mut dithered = vec![0u8; w * h];
+		let (mut err_cur, mut err_next) = (vec![0.0f32; w * 3], vec![0.0f32; w * 3]);
+		map_to_indices_dithered(
+			&palette,
+			&rgba,
+			w as u32,
+			h as u32,
+			&mut err_cur,
+			&mut err_next,
+			&mut dithered,
+		);
+
+		// RMS distance between the ramp and a 16-px moving average of what a row maps to: the
+		// eye averages neighbouring pixels, so this is the banding it sees.
+		let row = h / 2;
+		let banding = |indices: &[u8]| -> f64 {
+			let k = 16;
+			let grey = |x: usize| palette[indices[row * w + x] as usize * 3] as f64;
+			let sq: Vec<f64> = (0..=w - k)
+				.map(|x0| {
+					let seen = (x0..x0 + k).map(grey).sum::<f64>() / k as f64;
+					let truth = (x0..x0 + k).map(|x| ramp(x) as f64).sum::<f64>() / k as f64;
+					(seen - truth).powi(2)
+				})
+				.collect();
+			(sq.iter().sum::<f64>() / sq.len() as f64).sqrt()
+		};
+		let (plain_err, dithered_err) = (banding(&plain), banding(&dithered));
+		assert!(plain_err > 3.0, "this palette should band the ramp (error {plain_err:.2})");
+		assert!(
+			dithered_err < 1.5,
+			"dithering left the ramp banded: {dithered_err:.2} vs {plain_err:.2} undithered"
+		);
+	}
+
+	/// The export dithers unless told not to: without it every gradient wallpaper bands.
+	#[test]
+	fn gif_export_dithers_by_default() {
+		assert!(GifExportParams::default().dither);
 	}
 
 	/// `GifWriter::new` rejects zero dimensions.

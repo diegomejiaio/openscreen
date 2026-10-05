@@ -5,13 +5,14 @@
 		"motionDrift": "Deriva",
 		"motionAurora": "Aurora",
 		"motionWaves": "Ondas",
-		"motionGradientOnly": "La animación solo se aplica a fondos degradados. Elige un degradado para animarlo.",
 		"gradientLabel": "Degradado {{index}}",
 		"uploadCustom": "Subir personalizado",
 		"unsupportedImage": "Imagen no compatible. Usa un archivo JPG o PNG.",
 		"title": "Fondo",
 		"imageLabel": "Fondo {{index}}",
 		"custom": "Personalizado",
+		"customColor": "Color personalizado",
+		"customGradient": "Degradado a partir de un color",
 		"help": "Elige qué aparece detrás de la grabación: un fondo incluido, un color sólido, un degradado o una imagen propia del disco.",
 		"gradient": "Degradado",
 		"colorLabel": "Color {{color}}",
@@ -50,9 +51,9 @@
 		"errorReading": "Hubo un error al leer el archivo."
 	},
 	"annotation": {
-		"supportedFormats": "Formatos compatibles: JPG, PNG, GIF, WebP",
 		"blurShapeRectangle": "Rectángulo",
 		"size": "Tamaño",
+		"customSize": "Tamaño personalizado",
 		"tipShiftTabCycle": "Usa Shift+Tab para recorrer hacia atrás.",
 		"clearBackground": "Quitar fondo",
 		"colorPalette": "Paleta de colores",
@@ -106,17 +107,20 @@
 		"blurBg": "Desenfocar fondo",
 		"help": "Estilo del marco de la grabación: desenfoque de fondo, sombra, desenfoque de movimiento, radio de esquinas y margen alrededor del vídeo.",
 		"fitClipOne": "{{count}} clip",
+		"formatAuto": "Auto",
+		"formatAutoMixed": "Clips distintos",
+		"formatFill": "Grabación",
+		"formatFillFit": "Completa",
+		"formatFillFollow": "Seguir el cursor",
 		"formatOriginal": "Original",
 		"fitClipMany": "{{count}} clips",
 		"frame": "Marco",
 		"motion": "Movimiento",
 		"padding": "Relleno",
 		"format": "Formato",
-		"fitClip": "Ajustar",
 		"motionBlur": "Desenfoque de movimiento",
 		"depthOfField": "Profundidad de campo",
-		"depthOfFieldHint": "Zooms 3D",
-		"depthOfFieldNoTilt": "No hay zoom 3D en este proyecto",
+		"depthOfFieldTip": "Desenfoca el lado lejano de una pantalla inclinada",
 		"roundness": "Redondez",
 		"frameStyle": "Estilo",
 		"windowNone": "Ninguna",
@@ -127,9 +131,11 @@
 		"frameTheme": "Tema",
 		"frameThemeLight": "Claro",
 		"frameThemeDark": "Oscuro",
-		"frameThemeHelp": "Cuerpo plateado con marco claro, o grafito con marco oscuro. Se aplica a todos los marcos.",
-		"windowHelp": "Dibuja una ventana, o un dispositivo modelado en 3D, alrededor de la grabación.",
-		"roundnessFrameHelp": "El rango se adapta al marco: 100 % es el redondeo máximo que le sienta bien."
+		"roundnessFrameHelp": "El rango depende del marco. 100 % es el redondeo máximo que aún se ve bien.",
+		"shadowNone": "Ninguna",
+		"shadowLight": "Suave",
+		"shadowMedium": "Media",
+		"shadowStrong": "Fuerte"
 	},
 	"stylePresets": {
 		"button": "Preajustes",
@@ -146,6 +152,9 @@
 		"revealLinux": "Mostrar en carpeta",
 		"rename": "Renombrar",
 		"update": "Actualizar desde el proyecto actual",
+		"useForNewProjects": "Usar para proyectos nuevos",
+		"stopForNewProjects": "Dejar de usar para proyectos nuevos",
+		"newProjectsBadge": "Proyectos nuevos",
 		"delete": "Eliminar",
 		"confirmDelete": "¿Eliminar «{{name}}»?",
 		"applied": "Se aplicó «{{name}}»",
@@ -167,7 +176,7 @@
 		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la corta del vídeo (en rojo). Haz doble clic en una palabra para corregir su texto. Pasa el cursor sobre una palabra marcada para deshacer.",
 		"editWord": "Editar «{{word}}»",
 		"laneFeedsCaptions": "Los subtítulos se graban desde esta pista.",
-		"insertedWord": "Añadida por ti: no hay audio detrás",
+		"insertedWord": "Añadida por ti. No hay audio para ella.",
 		"whisperHint": "La transcripción usa Whisper local: se ejecuta en tu equipo y ningún dato sale del dispositivo.",
 		"insertAria": "Palabra nueva",
 		"editorAria": "Transcripción de {{filename}}",
@@ -180,7 +189,7 @@
 		"laneVoiceover": "Voz en off",
 		"silence": "[silencio {{duration}} s]",
 		"clipLabel": "Clip {{index}}",
-		"correctedWord": "Corregida: la transcripción decía «{{original}}»",
+		"correctedWord": "Corregida. La transcripción decía «{{original}}».",
 		"noClipTranscript": "Este clip no tiene transcripción: abre la ficha del recurso y vuelve a generarla.",
 		"editingHintDev": "Haz doble clic en una palabra para corregirla, Retroceso la corta del vídeo, escribe entre dos palabras para añadir una.",
 		"noAudio": "Este medio no tiene pista de audio",
@@ -200,15 +209,12 @@
 		"legacyAnnotations": "Este proyecto todavía contiene anotaciones de subtítulos de la función antigua ({{count}}). Se dibujan encima de la capa de subtítulos.",
 		"backgroundOpacity": "Opacidad",
 		"backgroundColor": "Color del fondo",
-		"alignCenter": "Centro",
 		"translationIsNonDestructive": "Las traducciones se guardan junto a la transcripción, nunca dentro: el texto original y sus tiempos quedan intactos.",
 		"distanceFromRight": "Distancia desde la derecha",
 		"language": "Idioma",
 		"text": "Texto",
-		"anchorHintBottom": "Los subtítulos largos crecen hacia arriba: el borde inferior no se mueve.",
 		"distanceFromTop": "Distancia desde arriba",
 		"translateFailed": "La traducción ha fallado.",
-		"alignLeft": "Izquierda",
 		"distanceFromBottom": "Distancia desde abajo",
 		"derivedFromTranscript": "{{count}} líneas de subtítulos, derivadas en vivo de la transcripción.",
 		"translate": "Traducir",
@@ -217,14 +223,10 @@
 		"hiddenHint": "Los subtítulos provienen de la transcripción de este recurso. Actívalos para verlos en la vista previa y en las exportaciones.",
 		"noTranscript": "Los subtítulos se leen de la transcripción del recurso. Transcribe este vídeo para activarlos.",
 		"distanceFromLeft": "Distancia desde la izquierda",
-		"anchorBottom": "Abajo",
 		"transcribe": "Transcribir vídeo",
 		"bold": "Negrita",
-		"alignRight": "Derecha",
-		"anchorTop": "Arriba",
 		"minWords": "Mín. palabras por línea",
 		"translateHint": "Traducir la transcripción con el proveedor de IA configurado",
-		"anchorHintTop": "Los subtítulos largos crecen hacia abajo: el borde superior no se mueve.",
 		"displayLanguage": "Visualización",
 		"removeLegacyAnnotations": "Eliminar anotaciones de subtítulos antiguas",
 		"background": "Fondo",
@@ -234,7 +236,15 @@
 		"font": "Fuente",
 		"translating": "Traduciendo…",
 		"show": "Mostrar subtítulos",
-		"textColor": "Color del texto"
+		"textColor": "Color del texto",
+		"style": "Estilo",
+		"styles": {
+			"classic": "Clásico",
+			"bold": "Negrita",
+			"minimal": "Minimalista",
+			"light": "Claro"
+		},
+		"customize": "Personalizar"
 	},
 	"panes": {
 		"help": "Ayuda"
@@ -265,20 +275,30 @@
 		"fadeIn": "Aparición",
 		"remove": "Eliminar pista",
 		"loop": "Bucle",
-		"slipHint": "Alt + arrastrar para desplazar el audio dentro",
-		"help": "Volumen, fundidos y bucle de esta pista de audio. Se mezcla sobre la grabación en la vista previa y en la exportación. Arrastra la pista en la línea de tiempo para moverla o redimensionarla, o mantén Alt y arrastra para desplazar el audio dentro.",
+		"slipHint": "Mantén presionado {{modifier}} y arrastra para desplazar el audio dentro de la pista",
+		"help": "Volumen, fundidos y bucle de esta pista de audio. Se mezcla sobre la grabación en la vista previa y en la exportación. Una pista de música baja sola mientras alguien habla. Arrastra la pista en la línea de tiempo para moverla o redimensionarla, o mantén Alt y arrastra para desplazar el audio dentro.",
 		"add": "Añadir pista de audio",
 		"mute": "Silenciar"
 	},
 	"layout": {
-		"help": "Cómo se compone la webcam con la pantalla: imagen en imagen, pila vertical, marco doble, forma de máscara, tamaño y efecto espejo.",
+		"help": "Cómo se compone la webcam con la pantalla: imagen en imagen, pila vertical, marco doble, forma, redondez, tamaño, posición y efecto espejo.",
 		"mirrorWebcam": "Reflejar cámara",
 		"webcamFraming": "Encuadre de cámara",
+		"webcamFramingDrag": "Arrastra el marco para moverlo, o una esquina para hacer zoom.",
 		"shapes": {
-			"rectangle": "Rect.",
-			"rounded": "Redondeado",
-			"circle": "Círculo",
-			"square": "Cuadrado"
+			"square": "Cuadrado",
+			"original": "Original"
+		},
+		"webcamPosition": "Posición",
+		"anchors": {
+			"topLeft": "Arriba a la izquierda",
+			"top": "Arriba",
+			"topRight": "Arriba a la derecha",
+			"left": "Izquierda",
+			"right": "Derecha",
+			"bottomLeft": "Abajo a la izquierda",
+			"bottom": "Abajo",
+			"bottomRight": "Abajo a la derecha"
 		},
 		"selectPreset": "Seleccionar predefinido",
 		"bgModes": {
@@ -287,18 +307,15 @@
 			"blur": "Desenfocado",
 			"transparent": "Recortado"
 		},
-		"reactiveWebcamDescription": "La cámara se reduce suavemente mientras el vídeo está ampliado, para no estorbar.",
 		"webcamBlurIntensity": "Intensidad del desenfoque",
 		"preset": "Predefinido",
-		"webcamCropZoom": "Zoom de recorte",
 		"webcamSize": "Tamaño de cámara",
 		"dualFrame": "Marco dual",
-		"webcamCropY": "Desplazamiento vertical",
 		"verticalStack": "Apilado vertical",
 		"pictureInPicture": "Imagen en imagen",
 		"webcamShape": "Forma de cámara",
-		"webcamCropX": "Desplazamiento horizontal",
 		"reactiveWebcam": "Reducir al ampliar",
+		"reactiveWebcamTip": "La cámara se reduce mientras el vídeo está ampliado",
 		"webcamBackground": "Fondo de la cámara",
 		"helpNoWebcam": "Este proyecto no tiene cámara, así que los controles de diseño están desactivados y el preajuste muestra «Sin cámara». Tu diseño guardado se conserva para cuando añadas una cámara.",
 		"title": "Disposición de cámara",
@@ -317,7 +334,14 @@
 	},
 	"facets": {
 		"transcript": "Transcripción",
-		"captions": "Subtítulos"
+		"captions": "Subtítulos",
+		"tips": {
+			"effects": "Composición: fondo, marco, sombra y relleno",
+			"layout": "Disposición de cámara: posición, forma y tamaño de la cámara",
+			"audio": "Audio: nivel de salida de todo el video",
+			"cursor": "Cursor: estilo, tamaño y efectos",
+			"transcript": "Transcripción: edita las palabras para cortar el video"
+		}
 	},
 	"crop": {
 		"title": "Recortar",
@@ -341,39 +365,20 @@
 			"lockedDisclaimer": "Controlado por el interruptor global de enfoque automático en la línea de tiempo. Desactívalo para configurar el modo de enfoque por cada zoom.",
 			"auto": "Auto",
 			"manual": "Manual",
-			"autoDescription": "La cámara sigue la posición del cursor grabado",
 			"title": "Modo de enfoque"
 		},
 		"camera": {
 			"title": "Cámara 3D",
 			"off": "Desactivada",
-			"fixed": "Ángulo fijo",
-			"moving": "Cámara en movimiento",
 			"preset": {
-				"iso": "Picado en diagonal",
 				"left": "Pantalla girada a la izquierda",
 				"right": "Pantalla girada a la derecha",
-				"followCursor": "Gira con el cursor"
-			},
-			"description": {
-				"off": "La pantalla se queda plana.",
-				"iso": "Mantiene una sola pose: girada a la izquierda y vista desde arriba.",
-				"left": "Mantiene una sola pose: la pantalla mira a la izquierda y su borde derecho avanza.",
-				"right": "Mantiene una sola pose: la pantalla mira a la derecha y su borde izquierdo avanza.",
-				"followCursor": "La pantalla no se mueve; la cámara la rodea hacia el lado del cursor y sube o baja con él."
-			},
-			"needsCursor": "El cursor está oculto: esta cámara no tiene nada que seguir y mantiene su ángulo inicial."
-		},
-		"clickImpact": {
-			"title": "Impacto del clic",
-			"description": "Cada clic presiona la pantalla inclinada: el lado pulsado se hunde y luego vuelve.",
-			"needsRotation": "Elige primero una cámara 3D: solo se puede presionar una pantalla inclinada.",
-			"needsCursor": "El cursor está oculto: la pantalla solo reacciona a los clics visibles.",
-			"descriptionCamera": "Cada clic hace retroceder un poco la cámara, que luego vuelve."
+				"orbit": "Órbita 3D"
+			}
 		},
 		"level": "Nivel de zoom",
-		"previewHold": "Mantener para previsualizar el efecto de zoom",
 		"customScale": "Zoom personalizado",
+		"customScaleRange": "El zoom va de {{min}}× a {{max}}×",
 		"selectRegion": "Selecciona una región de zoom para ajustar",
 		"cursor": {
 			"title": "Cursor",
@@ -383,7 +388,7 @@
 	},
 	"audio": {
 		"outputGain": "Ajuste de salida",
-		"help": "Ajusta el nivel de salida del audio. Se aplica igual en la vista previa y en la exportación.",
+		"help": "Las voces se nivelan automáticamente a una sonoridad estándar. Ajusta el nivel de salida a partir de ahí; se aplica igual en la vista previa y en la exportación.",
 		"reset": "Restablecer audio",
 		"title": "Audio"
 	},
@@ -404,18 +409,33 @@
 		"smoothing": "Suavizado",
 		"clickBounce": "Rebote al clic",
 		"model3d": "Cursor 3D",
-		"model3dHint": "Estilo predeterminado: todas las formas del cursor pasan a 3D. Los demás estilos siguen planos.",
-		"model3dNeedsCursor": "Activa «Mostrar cursor» para usar el cursor 3D.",
+		"model3dTip": "Dibuja el cursor predeterminado como un objeto 3D con sombra",
+		"clickImpact": "Impacto del clic",
+		"clickImpactTip": "La pantalla se mueve un poco con cada clic",
 		"help": "Representación del cursor a partir de la telemetría grabada: tema, tamaño, suavizado, desenfoque de movimiento y rebote al hacer clic.",
-		"clipToBoundsDescription": "Mantiene el cursor dentro del cuadro del vídeo. Desactívalo para dejar que el cursor sobrepase los bordes; útil al hacer zoom o desplazar la imagen.",
 		"size": "Tamaño",
 		"title": "Cursor",
 		"show": "Mostrar cursor",
 		"themeDefault": "Predeterminado",
-		"clipToBounds": "Recortar al lienzo",
+		"types": "Tipos de cursor",
+		"typeArrow": "Flecha",
+		"typePointer": "Mano",
+		"typeText": "Texto",
+		"typeGrab": "Agarrar",
+		"typeResize": "Cambiar tamaño",
+		"typeBusy": "Ocupado",
+		"typeCrosshair": "Precisión",
+		"typeNotAllowed": "No disponible",
+		"typeHelp": "Ayuda",
+		"typeUpArrow": "Selección alternativa",
+		"typeAsArrow": "{{type}}: se muestra la flecha",
 		"motionBlur": "Desenfoque de movimiento",
 		"theme": "Estilo del cursor",
-		"autoHide": "Ocultar si está inactivo"
+		"autoHide": "Ocultar si está inactivo",
+		"autoHideTip": "El cursor se desvanece cuando deja de moverse",
+		"bounceNone": "Ninguno",
+		"bounceLight": "Suave",
+		"bounceStrong": "Marcado"
 	},
 	"export": {
 		"gifButton": "Exportar GIF",
@@ -424,5 +444,11 @@
 	},
 	"trim": {
 		"deleteRegion": "Eliminar región de recorte"
+	},
+	"textPlate": {
+		"none": "Ninguna",
+		"dark": "Oscura",
+		"light": "Clara",
+		"custom": "Personalizada"
 	}
 }

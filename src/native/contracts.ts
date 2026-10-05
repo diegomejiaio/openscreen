@@ -27,13 +27,17 @@ export interface CursorTelemetryPoint {
 	timeMs: number;
 	cx: number;
 	cy: number;
+	visible?: boolean;
 }
 
 export interface CursorRecordingSample extends CursorTelemetryPoint {
 	assetId?: string | null;
 	visible?: boolean;
 	cursorType?: NativeCursorType | null;
-	interactionType?: "move" | "click" | "mouseup";
+	/** The full interaction contract the sidecar may carry; matches the renderer's
+	 * CursorTelemetryPoint. The old narrow override ("move" | "click" | "mouseup")
+	 * legitimized coercing every other click kind to "move" at parse time. */
+	interactionType?: "move" | "click" | "double-click" | "right-click" | "middle-click" | "mouseup";
 }
 
 export interface NativeCursorAsset {
@@ -156,6 +160,36 @@ export interface CompositorFramePacket {
 	width: number;
 	height: number;
 	data: Buffer;
+	/** The footage in this frame: its TL, TR, BR, BL corners (x, y as fractions of the frame,
+	 *  eight numbers), where a privacy blur's gimbal goes. Absent before anything is composed. */
+	footage?: number[] | null;
+	/** The footage maps from those corners by their homography (real camera), not bilinearly. */
+	footageProjective?: boolean;
+	/** Where the view was when it composed this frame: the active clip in the scene's clips and
+	 *  the screen frame's time in its source file. Absent from an older addon. */
+	clipIndex?: number;
+	sourceTimeSec?: number;
+}
+
+/** What travels with a preview frame handed over as a shared GPU texture (Windows): all a
+ *  {@link CompositorFramePacket} says but the pixels, plus the view the frame belongs to. The
+ *  main process sends it alongside the texture, to `electronAPI.onCompositorFrame`. */
+export interface CompositorSharedFrameMeta {
+	viewId: number;
+	gen: number;
+	width: number;
+	height: number;
+	footage: number[] | null;
+	footageProjective: boolean;
+	/** See {@link CompositorFramePacket.clipIndex}. */
+	clipIndex?: number;
+	sourceTimeSec?: number;
+}
+
+/** `readFrame`'s answer for a frame sent as a shared texture. The texture reached
+ *  `onCompositorFrame` before this reply did, so only the generation is news here. */
+export interface CompositorSharedFrameReceipt extends CompositorSharedFrameMeta {
+	shared: true;
 }
 
 /** Un clip de la timeline pour l'export multiclip natif (fichiers screen+webcam + trim). */
@@ -192,23 +226,23 @@ export interface CompositorExportParams {
 	fps?: number;
 	/** "h264" | "h265" — pas de vp9 (aucun équivalent matériel AMF côté natif). */
 	codec?: string;
+	/** Débit vidéo visé (bits/s), d'après la taille ET la cadence
+	 *  (`calculateMp4ExportSettings`). Omis → 8 Mb/s à 1080p quelle que soit la cadence. */
+	bitrate?: number;
 }
 
 /** Sortie GIF native (le seul chemin GIF de l'app).
- *  Tout omis → 854×480, 12 fps, boucle infinie, pas de dithering —
- *  défauts choisis pour un GIF 8-bit-indexed lisible : 12 fps est la
- *  cadence historique de `gif.js` côté renderer, 854×480 tient
- *  confortablement dans la palette 256-couleurs sans banding visible
- *  sur du contenu de présentation. Le dithering Floyd-Steinberg est off
- *  par défaut (qualité acceptable sans, et double تقريبًا le coût CPU
- *  du quantize par frame). */
+ *  Tout omis → 854×480, 12 fps, boucle infinie, dithering Floyd-Steinberg :
+ *  12 fps est la cadence historique de `gif.js` côté renderer, et le
+ *  dithering empêche un fond en dégradé de se découper en bandes sur la
+ *  palette de 256 couleurs. */
 export interface CompositorExportGifParams {
 	width?: number;
 	height?: number;
 	fps?: number;
 	/** Compteur de loop GIF : `0` ou omis = infini, sinon `n` boucles finies. */
 	loopCount?: number;
-	/** Floyd-Steinberg error diffusion avant quantification. `false` par défaut. */
+	/** Floyd-Steinberg error diffusion à la quantification. `true` par défaut. */
 	dither?: boolean;
 }
 
@@ -288,6 +322,46 @@ export interface AiEditionLlmProviderModelsResult {
 	models: string[];
 	error?: string;
 }
+
+/** The local MCP server that offers the agent's tools to external MCP clients. */
+export interface AiEditionMcpStatus {
+	enabled: boolean;
+	port: number;
+	/** Whether clients may run the tools that change the project. Off by default. */
+	allowEdits: boolean;
+	running: boolean;
+	/** `http://127.0.0.1:<port>/mcp` — what a client is pointed at. */
+	url: string;
+	/** Bearer token a client must send. Only filled in while the server is enabled. */
+	token: string | null;
+	/** Why the server is enabled but not running (port taken, keychain unavailable…). */
+	error: string | null;
+}
+
+/**
+ * Main → editor window: the MCP server reading or writing the live document.
+ * The editor answers every request on `AI_EDITION_MCP_RESPONSE_CHANNEL`.
+ */
+export type AiEditionMcpHostRequest =
+	| { requestId: string; op: "snapshot" }
+	| { requestId: string; op: "apply"; document: unknown; expectedRevision: number };
+
+export interface AiEditionMcpHostSnapshot {
+	document: unknown;
+	revision: number;
+}
+
+export type AiEditionMcpApplyResult = "applied" | "conflict" | "save-failed" | "no-live-document";
+
+export interface AiEditionMcpHostResponse {
+	requestId: string;
+	result: AiEditionMcpHostSnapshot | null | AiEditionMcpApplyResult;
+}
+
+/** Editor → main: `true` when an editor starts answering MCP requests, `false` when it stops. */
+export const AI_EDITION_MCP_HOST_CHANNEL = "ai-edition.mcp-host";
+export const AI_EDITION_MCP_REQUEST_CHANNEL = "ai-edition.mcp-request";
+export const AI_EDITION_MCP_RESPONSE_CHANNEL = "ai-edition.mcp-response";
 
 /** One executed agent tool call, rendered as a compact "applied: …" line in
  * the chat panel (P1.7). */
@@ -388,6 +462,7 @@ export interface StylePresetRevealResult {
 }
 
 export type NativeBridgeErrorCode =
+	| "CANCELLED"
 	| "INVALID_REQUEST"
 	| "UNSUPPORTED_ACTION"
 	| "NOT_FOUND"
@@ -605,6 +680,36 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "aiEdition";
+			action: "mcp.getStatus";
+			payload?: EmptyPayload;
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "mcp.setEnabled";
+			payload: { enabled: boolean };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "mcp.setPort";
+			payload: { port: number };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "mcp.setAllowEdits";
+			payload: { allowEdits: boolean };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "mcp.regenerateToken";
+			payload?: EmptyPayload;
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
 			action: "chat.run";
 			payload: {
 				projectId: string;
@@ -724,6 +829,13 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "compositor";
+			action: "segmentFrame";
+			/** One camera frame, 256x144 RGBA8 — the segmentation model's input size. */
+			payload: { rgba: Uint8Array };
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
 			action: "setRect";
 			payload: { id: number; rect: CompositorViewRect };
 			requestId?: string;
@@ -738,6 +850,14 @@ export type NativeBridgeRequest =
 			 *  already holds the current generation — the idle path, no buffer copied).
 			 *  The nested `data` Buffer survives IPC via Electron's structured clone. */
 			payload: { id: number; sinceGen: number };
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			/** Back to read-back frames: a shared frame reached the canvas as nothing, i.e.
+			 *  Chromium could not open the texture. */
+			action: "stopSharedFrames";
+			payload: { id: number };
 			requestId?: string;
 	  }
 	| {
@@ -804,11 +924,18 @@ export type NativeBridgeRequest =
 			 *  l'encodeur. La scène porte fond / layout / webcam / curseur, donc
 			 *  il n'y a aucune entrée spécifique au GIF. */
 			payload: {
+				exportId?: string;
 				clips: CompositorClipInput[];
 				outPath?: string;
 				sceneJson?: string;
 				params?: CompositorExportGifParams;
 			};
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "cancelGifExport";
+			payload: { exportId: string };
 			requestId?: string;
 	  }
 	| {
@@ -839,6 +966,13 @@ export type NativeBridgeRequest =
 			domain: "presets";
 			action: "delete";
 			payload: { id: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "presets";
+			action: "setForNewProjects";
+			/** `null` clears the mark: new projects then start from the last project's look. */
+			payload: { id: string | null };
 			requestId?: string;
 	  }
 	| {

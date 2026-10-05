@@ -45,6 +45,11 @@ pub struct SceneLayout {
     pub webcam_position: Option<WebcamPosition>,
     /// la webcam rétrécit pendant un zoom actif.
     pub webcam_reactive_zoom: bool,
+    /// Picture-in-picture : le coin ou le milieu de bord où la caméra est ancrée, à marge
+    /// constante du bord (`WEBCAM_ANCHORS`, TS : "top-left", "top", …, "bottom-right"). Le
+    /// rétrécissement du zoom réactif se fait vers lui (`anchor_fractions`). Absent : le centre.
+    #[serde(default)]
+    pub webcam_anchor: Option<String>,
     /// User-authored source crop for the camera. Absent keeps the full frame.
     #[serde(default)]
     pub webcam_crop: Option<SceneCrop>,
@@ -79,9 +84,19 @@ pub struct SceneLayout {
     /// remplir le slot — d'autant plus visible sur un clip recadré, le crop éloignant encore le
     /// ratio de la source de celui du slot.
     ///
+    /// Le slot MASQUE aussi l'écran : zoom et 3D y restent, rognés au lieu de déborder sur la
+    /// caméra (`frame_geometry::ScreenMask`).
+    ///
     /// `#[serde(default)]` : absent → `false` → comportement "contain" historique.
     #[serde(default)]
     pub screen_cover: bool,
+    /// Remplissage du format : la boîte écran est la zone paddée entière, et la fenêtre que le
+    /// `cover` y découpe SUIT le curseur lissé au lieu de rester centrée
+    /// (`frame_geometry::follow_cover`). Sans effet si `screen_cover` est faux.
+    ///
+    /// `#[serde(default)]` : absent → `false` → fenêtre centrée, comme avant.
+    #[serde(default)]
+    pub screen_follow: bool,
     /// Un layout résolu PAR CLIP visible, aligné par index sur `Scene::clips` / `crop_by_clip`.
     /// Les champs scalaires ci-dessus sont ceux du PREMIER clip (repli pour un payload sans ce
     /// tableau, et valeur de départ tant qu'aucun clip n'est actif).
@@ -106,6 +121,19 @@ pub struct SceneLayout {
     /// `#[serde(default)]` : ancien payload / tests → None → table Rust historique.
     #[serde(default)]
     pub webcam_radius_frac: Option<f32>,
+}
+
+impl SceneLayout {
+    /// L'ancre de la caméra en fractions de sa boîte, par axe : 0, 0,5 ou 1, la part de la place
+    /// libre qu'elle laisse d'un côté (`webcamAnchorFractions`, TS). Le centre sans ancre.
+    pub fn webcam_anchor_fractions(&self) -> [f32; 2] {
+        let Some(anchor) = self.webcam_anchor.as_deref() else { return [0.5, 0.5] };
+        let side = |low: bool, high: bool| if low { 0.0 } else if high { 1.0 } else { 0.5 };
+        [
+            side(anchor.ends_with("left"), anchor.ends_with("right")),
+            side(anchor.starts_with("top"), anchor.starts_with("bottom")),
+        ]
+    }
 }
 
 /// La moitié du layout qui dépend de la FORME de la source, résolue pour un clip.
@@ -140,13 +168,29 @@ pub struct SceneRect {
     pub height: f32,
 }
 
+fn blur_amount<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Blur {
+        Switch(bool),
+        Amount(f32),
+    }
+    Ok(match Blur::deserialize(d)? {
+        Blur::Switch(on) => if on { 0.5 } else { 0.0 },
+        Blur::Amount(a) => a.clamp(0.0, 1.0),
+    })
+}
+
 /// Effets de cadre (padding, blur, ombre, coins, motion blur).
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneEffects {
     /// 0..1 inset supplémentaire de l'écran.
     pub padding: f32,
-    pub blur: bool,
+    /// 0..1 force du flou du fond, 0 = net (`background_blur_steps`). Un booléen se lit encore :
+    /// `true` était l'unique force de l'ancien interrupteur, 0,5 aujourd'hui.
+    #[serde(deserialize_with = "blur_amount")]
+    pub blur: f32,
     /// 0..1 force de l'ombre.
     pub shadow: f32,
     /// Slider Roundness, en FRACTION du petit côté du cadre de sortie.
@@ -247,7 +291,7 @@ impl SceneFrame {
 }
 
 /// Fond derrière l'écran (parsé depuis `settings.wallpaper`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum SceneBackground {
     Color { color: String },
@@ -255,21 +299,31 @@ pub enum SceneBackground {
         #[serde(rename = "angleDeg")]
         angle_deg: f32,
         stops: Vec<String>,
+        /// Position 0..1 de chaque stop le long du dégradé, telle que CSS la résout. Absente d'une
+        /// scène plus ancienne : les stops se répartissent alors à égale distance, comme en CSS.
+        #[serde(default)]
+        offsets: Vec<f32>,
         /// Absent pour un fond immobile : l'app n'émet la clé que si un mouvement est choisi,
         /// donc la scène d'un projet sans animation ne bouge pas d'un octet.
         #[serde(default)]
-        motion: GradientMotion,
+        motion: WallpaperMotion,
     },
-    Image { path: String },
+    Image {
+        path: String,
+        /// Comme pour le dégradé : absent pour un fond immobile.
+        #[serde(default)]
+        motion: WallpaperMotion,
+    },
 }
 
-/// Mouvement lent d'un fond dégradé (`settings.wallpaperMotion`), lu par le mode 5 dans `fx.w`.
+/// Mouvement du fond d'écran (`settings.wallpaperMotion`), lu dans `fx.w` par le mode 5 (dégradé)
+/// et le mode 6 (image). Une couleur unie n'en porte pas : rien n'y bougerait.
 ///
 /// Une valeur inconnue (projet ouvert par une version plus ancienne que celle qui l'a écrit)
 /// retombe sur `None` au lieu de faire échouer le parse de toute la scène.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum GradientMotion {
+pub enum WallpaperMotion {
     Drift,
     Aurora,
     Waves,
@@ -439,9 +493,9 @@ pub struct SceneZoomRegion {
     #[serde(default)]
     pub focus_mode: Option<String>,
     /// La caméra 3D du zoom : un angle fixe ("iso" | "left" | "right"), la caméra réelle qui
-    /// tourne autour de l'écran avec le pointeur ("follow-cursor", cf. `camera.rs`), ou null
-    /// (écran droit). Une valeur
-    /// inconnue rend l'écran droit.
+    /// tourne autour de l'écran ("orbit", cf. `camera.rs` : avec le pointeur en focus auto,
+    /// posée par le point de focus en manuel), ou null (écran droit). Une valeur inconnue rend
+    /// l'écran droit.
     pub rotation: Option<String>,
     /// La région entière tombe sur une portion qu'un trim retire. Ses temps sont donc HORS de
     /// la fenêtre source de `clip_index`, qui n'est là que pour l'adresser (le segment que la
@@ -458,11 +512,6 @@ pub struct SceneZoomRegion {
     /// Masque le curseur pendant cette région de zoom.
     #[serde(default)]
     pub hide_cursor: bool,
-    /// Chaque clic enfonce le plan incliné (`regions::click_impact`). Sans effet hors préset
-    /// 3D : c'est le préset qui installe le plan que le clic fait basculer.
-    /// `#[serde(default)]` : l'app omet la clé quand elle est fausse.
-    #[serde(default)]
-    pub click_impact: bool,
 }
 
 /// Une zone de vitesse portée par le temps source d'un clip.
@@ -503,11 +552,17 @@ pub struct SceneCursor {
     pub smoothing: f32,
     pub motion_blur: f32,
     pub click_bounce: f32,
-    /// Curseur MODÉLISÉ en 3D (mode 15) : le sprite de chaque état du thème par défaut, extrudé,
-    /// à la place du sprite plat. Les autres thèmes restent plats. `#[serde(default)]` : absent
-    /// des projets et des JSON écrits avant le réglage, qui gardent donc le curseur plat.
+    /// Curseur MODÉLISÉ en 3D (mode 15) : le curseur sculpté d'un état qui en a un
+    /// (`SceneCursorSprite::sculpt`), sinon son sprite extrudé. `#[serde(default)]` : absent des
+    /// projets et des JSON écrits avant le réglage, qui gardent donc le curseur plat.
     #[serde(default)]
     pub model3d: bool,
+    /// Chaque clic donne un impact à l'écran, quelle que soit la caméra : sous un angle fixe le
+    /// plan bascule du côté cliqué (`regions::click_impact`), sous la caméra réelle l'œil recule,
+    /// sur un écran droit l'écran recule (`frame_geometry::plan_frame`).
+    /// `#[serde(default)]` : l'app omet la clé quand elle est fausse.
+    #[serde(default)]
+    pub click_impact: bool,
     pub clip_to_bounds: bool,
     /// id du thème (jeu de sprites) — informatif ici : le natif consomme `cursor_sprites`.
     pub theme: String,
@@ -536,6 +591,10 @@ pub struct SceneCursorSprite {
     /// que le curseur était agrandi — le bug que ce champ corrige.
     pub hotspot_x: f32,
     pub hotspot_y: f32,
+    /// Le curseur sculpté de cet état en 3D, `"<thème>/<état>"` (`sculpt::sculpted_shape`) : les
+    /// shaders le modèlent au lieu d'extruder le sprite, qui reste l'art en 2D.
+    #[serde(default)]
+    pub sculpt: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -591,6 +650,20 @@ pub struct SceneAudioTrack {
     pub fade_in_sec: f64,
     #[serde(default)]
     pub fade_out_sec: f64,
+    /// A voiceover is voice: it is loudness-normalised like the recording's own audio.
+    /// A music bed is not. `#[serde(default)]` reads an older payload as music, which is
+    /// what every imported file was before voiceovers were recorded in the app.
+    #[serde(default)]
+    pub kind: SceneAudioTrackKind,
+}
+
+/// `AxcutAudioTrack["kind"]` on the app side.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SceneAudioTrackKind {
+    #[default]
+    Music,
+    Voiceover,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -763,11 +836,19 @@ mod tests {
         assert_eq!(scene.layout.preset, "picture-in-picture");
         assert!(scene.layout.webcam_mirror);
         assert!((scene.effects.roundness_frac - 0.0222).abs() < 1e-6);
+        // L'ancien interrupteur `true` se lit comme la force qu'il dessinait.
+        assert_eq!(scene.effects.blur, 0.5);
+        let amount: SceneEffects = serde_json::from_str(
+            r#"{"padding":0,"blur":0.3,"shadow":0,"roundnessFrac":0,"motionBlur":0}"#,
+        )
+        .unwrap();
+        assert_eq!(amount.blur, 0.3);
         match scene.background {
-            SceneBackground::Gradient { angle_deg, ref stops, motion } => {
+            SceneBackground::Gradient { angle_deg, ref stops, ref offsets, motion } => {
                 assert_eq!(angle_deg, 135.0);
                 assert_eq!(stops.len(), 2);
-                assert_eq!(motion, GradientMotion::None);
+                assert!(offsets.is_empty(), "une scène sans offsets reste lisible");
+                assert_eq!(motion, WallpaperMotion::None);
             }
             _ => panic!("expected gradient"),
         }
@@ -843,17 +924,23 @@ mod tests {
     }
 
     #[test]
-    fn gradient_motion_parses_and_tolerates_an_unknown_value() {
+    fn wallpaper_motion_parses_and_tolerates_an_unknown_value() {
         let motion_of = |json: &str| match serde_json::from_str::<SceneBackground>(json).expect("parse") {
-            SceneBackground::Gradient { motion, .. } => motion,
-            _ => panic!("expected gradient"),
+            SceneBackground::Gradient { motion, .. }
+            | SceneBackground::Image { motion, .. } => motion,
+            _ => panic!("expected gradient or image"),
         };
-        let g = |m: &str| format!(r##"{{"kind":"gradient","angleDeg":90,"stops":["#000","#fff"]{m}}}"##);
-        assert_eq!(motion_of(&g("")), GradientMotion::None);
-        assert_eq!(motion_of(&g(r#","motion":"drift""#)), GradientMotion::Drift);
-        assert_eq!(motion_of(&g(r#","motion":"aurora""#)), GradientMotion::Aurora);
-        assert_eq!(motion_of(&g(r#","motion":"waves""#)), GradientMotion::Waves);
-        assert_eq!(motion_of(&g(r#","motion":"plasma""#)), GradientMotion::None);
+        let g: fn(&str) -> String =
+            |m| format!(r##"{{"kind":"gradient","angleDeg":90,"stops":["#000","#fff"]{m}}}"##);
+        let i: fn(&str) -> String =
+            |m| format!(r#"{{"kind":"image","path":"/wallpapers/wallpaper1.jpg"{m}}}"#);
+        for bg in [g, i] {
+            assert_eq!(motion_of(&bg("")), WallpaperMotion::None);
+            assert_eq!(motion_of(&bg(r#","motion":"drift""#)), WallpaperMotion::Drift);
+            assert_eq!(motion_of(&bg(r#","motion":"aurora""#)), WallpaperMotion::Aurora);
+            assert_eq!(motion_of(&bg(r#","motion":"waves""#)), WallpaperMotion::Waves);
+            assert_eq!(motion_of(&bg(r#","motion":"plasma""#)), WallpaperMotion::None);
+        }
     }
 
     #[test]

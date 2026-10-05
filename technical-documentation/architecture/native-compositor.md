@@ -1,7 +1,7 @@
 # Native compositor
 
-`crates/compositor/` is the Rust + Direct3D 11 crate behind both the live preview and the MP4
-export. It exposes its compositor and pipeline to Electron through a small
+`crates/compositor/` is the Rust crate behind both the live preview and the export: Direct3D 11
+on Windows, Metal on macOS, wgpu on Linux. It exposes its compositor and pipeline to Electron through a small
 napi-rs addon (`compositor-view-napi/`) loaded by
 [`compositorViewService`](../../electron/native-bridge/services/compositorViewService.ts).
 The whole GPU-resident path lives here — `demux → decode → composite → encode → mux`,
@@ -37,7 +37,7 @@ and without that flag the runtime corruption is silent.
 | [`crates/compositor/src/text_anim.rs`](../../crates/compositor/src/text_anim.rs) | text-annotation appearance animations (port of the TS animation curves, in fractions of the output short side) |
 | [`crates/compositor/src/config.rs`](../../crates/compositor/src/config.rs) | cumulative bench configs C0..C8 (each adds one layer: composite, rounded corners, shadow, background blur, zoom, layout animation, cursor, motion blur) |
 | [`crates/compositor/src/live.rs`](../../crates/compositor/src/live.rs) | off-screen view: `Player` + `Compositor::compose_frame` → RGBA8 staging texture, pulled by the napi addon |
-| [`crates/compositor/src/shaders.hlsl`](../../crates/compositor/src/shaders.hlsl) | all GPU effects (modes 0/1/5/8/9/10/12 — see pipeline below), compiled at runtime via Fxc |
+| [`crates/compositor/src/shaders.hlsl`](../../crates/compositor/src/shaders.hlsl) | all GPU effects (modes 0/1/5/8/9/10/12 — see pipeline below), compiled at build time via Fxc (`build.rs`) and embedded as bytecode |
 
 Six of those modules exist twice, once per platform, and `lib.rs` cfg-re-exports the pair
 under one name — so `crate::d3d`, `crate::compositor`, `crate::pipeline` and `crate::text`
@@ -97,6 +97,15 @@ what `shaders.hlsl` actually implements:
    [`compositor.rs:1950`](../../crates/compositor/src/compositor_windows.rs)). Motion blur
    uses the previous frame's UV delta as a per-pixel velocity vector and samples
    along it (the "blur by velocity" optimisation — early-outs on still frames).
+   In the block layouts (Side by side, Top / bottom) the screen's slot is a fixed
+   container that masks it (`ScreenMask` in
+   [`frame_geometry.rs`](../../crates/compositor/src/frame_geometry.rs)): the zoom
+   and the 3D tilt act on the footage and are cropped to the slot. Under a window
+   or device frame, the frame is that container, drawn at rest around the slot and
+   never zoomed or tilted, and `computeCompositeLayout` makes room for it beside the
+   camera. Everywhere else the frame zooms and tilts with the screen. In every layout
+   the padding is measured from the frame's outer edge, so at rest the whole frame
+   stays on the canvas and is what gets centred.
 4. **Cursor.** A sprite picked from `cursor.cursorSprites` by the OS cursor state
    recorded in the `.cursor.json` track (`arrow`, `text`, `pointer`, the resize
    handles…), anchored so the sprite's hotspot — a 0..1 fraction of its own image,
@@ -123,8 +132,10 @@ what `shaders.hlsl` actually implements:
    mirror, mask shape (rectangle / circle / square / rounded), and reactive
    scale applied
    ([`compositor.rs:2127`](../../crates/compositor/src/compositor_windows.rs), `mode = 0`).
-   Full Camera lerps the destination to `[0, 0, 1, 1]` and dissolves the mask
-   shape — same rule as `computeCameraFullscreenRect` on the TS side.
+   Full Camera lerps the destination to `[0, 0, 1, 1]`, same rule as
+   `computeCameraFullscreenRect` on the TS side, and dissolves the mask shape
+   on its own, later curve (`camera_fullscreen_shape_at`): the corners hold
+   while the camera grows and square off once it reaches the frame edges.
 7. **Annotations.** Highest layer. One full-frame `CopySubresourceRegion` of
    the composed scene is taken at the top of `draw_annotations` so that
    multiple blur annotations on the same frame read from a consistent snapshot
@@ -414,8 +425,10 @@ licence. D3D11VA + AMF survive the LGPL-shared build (verified:
   before the renderer commits. Neither belongs in this PR's diff.
 - **Software VP9 encoding is not supported.** A software VP9 encoder was
   implemented, measured too slow without a hardware VP9 path on the
-  target GPU, and removed. The export pipeline now offers H.264 (AMF) and
-  H.265; VP9 is not a runtime option.
+  target GPU, and removed. The pipeline still encodes H.264 (AMF) and
+  H.265, but the dialog only ever asks for H.264 — see
+  [export-pipeline.md](export-pipeline.md#output-formats-and-codecs). VP9 is
+  not a runtime option.
 - **Live preview is video-only** — `live.rs` does not decode or play audio.
   Editing playback is silent against the exported file; users hear sound
   only when the export runs. Documented in

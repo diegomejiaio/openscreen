@@ -31,6 +31,7 @@ import {
 	type AxcutDocument,
 	documentSchema,
 } from "@/lib/ai-edition/schema";
+import { useMcpDocumentHost } from "@/lib/ai-edition/store/mcpDocumentHost";
 import { saveWithDeadline, useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
@@ -39,13 +40,16 @@ import {
 	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
+import { future as redoStack, past as undoStack } from "@/lib/ai-edition/store/undoStack";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { isGeneratedAssetId } from "@/lib/ai-edition/timeline/clip-parts";
+import { mergeCloseCuts } from "@/lib/ai-edition/timeline/cut-breath";
 import { newRegionDurationSec } from "@/lib/ai-edition/timeline/newRegionDuration";
 import {
 	dropTrimPillsByIds,
+	trimAppliesToClip,
 	ventilateTimelineSpanToTrims,
 } from "@/lib/ai-edition/timeline/trim-mapping";
 import { firstTimelineBusyView } from "@/lib/ai-edition/transcription/status";
@@ -188,6 +192,7 @@ export async function runLoadedMetadataWrite(
 
 export function NewEditorShell() {
 	const te = useScopedT("editor");
+	useMcpDocumentHost();
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
 	const dirty = useProjectStore((s) => s.dirty);
@@ -592,7 +597,7 @@ export function NewEditorShell() {
 		// événement, indépendamment). Deux endroits qui décident chacun de leur côté si
 		// la lecture doit s'arrêter = exactement le genre de duplication qui casse selon
 		// le chemin UX emprunté. On applique ici le même critère "y a-t-il un clip
-		// suivant ?" déjà utilisé par handleNextClip juste au-dessus — seul point de
+		// suivant ?" que VirtualPreview — seul point de
 		// vérité pour "y a-t-il encore de la timeline à jouer".
 		const onEnded = () => {
 			const playhead = useProjectStore.getState().currentTimeSec;
@@ -626,31 +631,6 @@ export function NewEditorShell() {
 			videoElement.pause();
 		}
 	}, [videoElement]);
-
-	const handlePrevClip = useCallback(() => {
-		if (clips.length === 0) return;
-		// ponytail: navigate in virtual timeline space, not source-media time.
-		const playhead = useProjectStore.getState().currentTimeSec;
-		let prevStart = 0;
-		for (let i = clips.length - 1; i >= 0; i--) {
-			const c = clips[i];
-			if (c.timelineEndSec <= playhead - 0.1) {
-				prevStart = c.timelineStartSec;
-				break;
-			}
-		}
-		handleSeek(prevStart);
-		handleTimeChange(prevStart);
-	}, [clips, handleSeek, handleTimeChange]);
-
-	const handleNextClip = useCallback(() => {
-		if (clips.length === 0) return;
-		const playhead = useProjectStore.getState().currentTimeSec;
-		const next = clips.find((c) => c.timelineStartSec > playhead + 0.1);
-		if (!next) return;
-		handleSeek(next.timelineStartSec);
-		handleTimeChange(next.timelineStartSec);
-	}, [clips, handleSeek, handleTimeChange]);
 
 	// "Transcribe now" from the transcript pane. The run itself belongs to the
 	// transcription store (it owns the queue, the toasts and the failure
@@ -728,15 +708,24 @@ export function NewEditorShell() {
 					toast.error(te("errors.trimNoFilm"));
 					return;
 				}
-				const rows = ranges.map((range) => ({
-					id: createId("trim"),
-					assetId: range.assetId,
-					clipId: range.clipId,
-					startSec: range.sourceStartSec,
-					endSec: range.sourceEndSec,
-					reason,
-					origin: "user" as const,
-				}));
+				const rows = ranges.map((range) => {
+					// No one-frame flash between this cut and one already on the same clip.
+					const merged = mergeCloseCuts(
+						{ startSec: range.sourceStartSec, endSec: range.sourceEndSec },
+						doc.timeline.trimRanges.filter((t) =>
+							trimAppliesToClip(t, { id: range.clipId, assetId: range.assetId }),
+						),
+						doc.assets.find((a) => a.id === range.assetId)?.video?.fps,
+					);
+					return {
+						id: createId("trim"),
+						assetId: range.assetId,
+						clipId: range.clipId,
+						...merged,
+						reason,
+						origin: "user" as const,
+					};
+				});
 				await saveDocument(
 					{
 						...doc,
@@ -1540,6 +1529,10 @@ export function NewEditorShell() {
 				projectTitle={project?.title ?? null}
 				dirty={dirty}
 				canExport={hasAsset}
+				// The stacks are plain arrays, not state; every push or pop comes with a document
+				// write, which re-renders this shell, so reading them here is never stale.
+				canUndo={undoStack.length > 0}
+				canRedo={redoStack.length > 0}
 				chatOpen={chatOpen}
 				actions={{
 					openProject: () => setOpenProjectOpen(true),
@@ -1552,6 +1545,8 @@ export function NewEditorShell() {
 					openProviderSettings: () => openDialog("providers"),
 					showAbout: handleShowAbout,
 					checkForUpdates: handleCheckForUpdates,
+					undo: runUndo,
+					redo: runRedo,
 				}}
 			/>
 
@@ -1593,14 +1588,16 @@ export function NewEditorShell() {
 									// design lets the translucent panel float over the video, but the
 									// preview is now a plain in-DOM <canvas> (no OS window/airspace
 									// issue) — still reserve the inspector's real footprint (right:20 +
-									// rail:50 + gap:10 + panel:300 ≈ 380, +a small gap) so it doesn't
-									// draw its own translucent panel flush against the canvas edge.
-									padding: `16px ${inspectorOpen ? 400 : 74}px 16px 16px`,
+									// rail:50 + gap:10 + panel ≈ 80 + panel, +a small gap) so it doesn't
+									// draw its own translucent panel flush against the canvas edge. The
+									// panel's width is `--inspector-w` (see .stage), so the room follows it.
+									padding: `16px ${inspectorOpen ? "calc(var(--inspector-w, 300px) + 100px)" : "74px"} 16px 16px`,
 									boxSizing: "border-box",
 								}}
 							>
 								<Preview
 									hasProject={hasProject}
+									onRecord={() => setMode("rec")}
 									hasAsset={hasAsset}
 									videoSources={videoSources}
 									// While the timeline is empty the preview mounts this asset rather
@@ -1630,15 +1627,10 @@ export function NewEditorShell() {
 										tl.selection?.kind === "annotation" ? tl.selection.id : null
 									}
 									onSelectAnnotation={(id) => tl.selectRegion("annotation", id)}
-									onAnnotationPositionChange={(id, position) => {
-										// Live seulement : appelé à chaque mouvement de souris pour que le
-										// compositeur natif suive le geste. L'écriture disque se fait une fois,
-										// au relâchement, via `onAnnotationCommit`.
-										tl.updateAnnotationLive(id, { position });
-									}}
-									onAnnotationSizeChange={(id, size) => {
-										tl.updateAnnotationLive(id, { size });
-									}}
+									// Live seulement : appelé à chaque mouvement de souris pour que le
+									// compositeur natif suive le geste. L'écriture disque se fait une fois,
+									// au relâchement, via `onAnnotationCommit`.
+									onAnnotationChange={tl.updateAnnotationLive}
 									onAnnotationBlurDataChange={(id, blurData) =>
 										tl.updateAnnotationLive(id, { blurData })
 									}
@@ -1684,7 +1676,7 @@ export function NewEditorShell() {
 						gridRow: 3,
 						minHeight: 0,
 						background: "var(--surface)",
-						borderTop: "1px solid var(--border)",
+						borderTop: "1px solid var(--shell-rule)",
 					}}
 				>
 					{mode !== "media" ? (
@@ -1704,8 +1696,6 @@ export function NewEditorShell() {
 						videoSources={videoSources}
 						playing={playing}
 						onTogglePlay={togglePlay}
-						onPrevClip={handlePrevClip}
-						onNextClip={handleNextClip}
 						onAddVoiceover={openVoiceoverFlow}
 						onEditClip={setEditClipTarget}
 					/>

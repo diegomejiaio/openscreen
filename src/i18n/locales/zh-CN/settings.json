@@ -5,13 +5,14 @@
 		"motionDrift": "漂移",
 		"motionAurora": "极光",
 		"motionWaves": "波浪",
-		"motionGradientOnly": "动画仅适用于渐变背景。请选择一个渐变来启用动画。",
 		"gradientLabel": "渐变 {{index}}",
 		"uploadCustom": "上传自定义",
 		"unsupportedImage": "不支持的图片格式。请使用 JPG 或 PNG 文件。",
 		"title": "背景",
 		"imageLabel": "背景 {{index}}",
 		"custom": "自定义",
+		"customColor": "自定义颜色",
+		"customGradient": "单色渐变",
 		"help": "选择录制内容背后显示的元素：内置壁纸图片、纯色、渐变，或来自磁盘的自定义图片。",
 		"gradient": "渐变",
 		"colorLabel": "颜色 {{color}}",
@@ -50,9 +51,9 @@
 		"errorReading": "读取文件时出错。"
 	},
 	"annotation": {
-		"supportedFormats": "支持的格式：JPG、PNG、GIF、WebP",
 		"blurShapeRectangle": "矩形",
 		"size": "大小",
+		"customSize": "自定义大小",
 		"tipShiftTabCycle": "使用 Shift+Tab 反向循环切换。",
 		"clearBackground": "清除背景",
 		"colorPalette": "颜色调色板",
@@ -106,17 +107,20 @@
 		"blurBg": "模糊背景",
 		"help": "录制画面的边框样式：背景模糊、投影、运动模糊、圆角半径以及视频四周的内边距。",
 		"fitClipOne": "{{count}} 个片段",
+		"formatAuto": "自动",
+		"formatAutoMixed": "片段不一致",
+		"formatFill": "录制内容",
+		"formatFillFit": "完整",
+		"formatFillFollow": "跟随光标",
 		"formatOriginal": "原始",
 		"fitClipMany": "{{count}} 个片段",
 		"frame": "画框",
 		"motion": "运动",
 		"padding": "内边距",
 		"format": "格式",
-		"fitClip": "适配",
 		"motionBlur": "运动模糊",
 		"depthOfField": "景深",
-		"depthOfFieldHint": "3D 缩放",
-		"depthOfFieldNoTilt": "此项目没有 3D 缩放",
+		"depthOfFieldTip": "模糊倾斜屏幕的远端",
 		"roundness": "圆角",
 		"frameStyle": "样式",
 		"windowNone": "无",
@@ -127,9 +131,11 @@
 		"frameTheme": "主题",
 		"frameThemeLight": "浅色",
 		"frameThemeDark": "深色",
-		"frameThemeHelp": "银色机身配浅色边框，或石墨色配深色边框。适用于所有边框。",
-		"windowHelp": "在录制内容周围绘制窗口，或以 3D 建模的设备。",
-		"roundnessFrameHelp": "范围随画框而定：100% 是该画框仍然好看的最大圆角。"
+		"roundnessFrameHelp": "范围取决于画框。100% 是仍然好看的最大圆角。",
+		"shadowNone": "无",
+		"shadowLight": "轻",
+		"shadowMedium": "中",
+		"shadowStrong": "强"
 	},
 	"stylePresets": {
 		"button": "预设",
@@ -146,6 +152,9 @@
 		"revealLinux": "在文件夹中显示",
 		"rename": "重命名",
 		"update": "从当前项目更新",
+		"useForNewProjects": "用于新项目",
+		"stopForNewProjects": "不再用于新项目",
+		"newProjectsBadge": "新项目",
 		"delete": "删除",
 		"confirmDelete": "删除“{{name}}”？",
 		"applied": "已应用“{{name}}”",
@@ -167,7 +176,7 @@
 		"help": "时间轴上所有片段的合并转录。对某个词或选区按退格 / Delete 会将其从画面中剪掉（红色）。双击某个词可修改文字。将鼠标悬停在带标记的词上可撤销。",
 		"editWord": "编辑“{{word}}”",
 		"laneFeedsCaptions": "字幕从这条轨道烧录。",
-		"insertedWord": "你添加的词 — 背后没有声音",
+		"insertedWord": "由你添加。没有对应的音频。",
 		"whisperHint": "转录使用本地 Whisper — 在您的电脑上运行，数据不会离开本设备。",
 		"insertAria": "新词",
 		"editorAria": "{{filename}} 的转录",
@@ -180,7 +189,7 @@
 		"laneVoiceover": "配音",
 		"silence": "[静音 {{duration}} 秒]",
 		"clipLabel": "片段 {{index}}",
-		"correctedWord": "已更正 — 转录原文为“{{original}}”",
+		"correctedWord": "已修正。转录原文为“{{original}}”。",
 		"noClipTranscript": "该片段没有转录 — 请打开素材卡片并重新生成。",
 		"editingHintDev": "双击单词即可修正，Backspace 将其从影片中剪掉，在两个单词之间输入即可添加新词。",
 		"noAudio": "此媒体没有音频轨道",
@@ -200,15 +209,12 @@
 		"legacyAnnotations": "此项目仍包含旧字幕功能生成的字幕批注（{{count}} 条）。它们会绘制在字幕图层之上。",
 		"backgroundOpacity": "不透明度",
 		"backgroundColor": "背景颜色",
-		"alignCenter": "居中",
 		"translationIsNonDestructive": "翻译保存在转录旁边，绝不写入其中——原文及其时间轴保持不变。",
 		"distanceFromRight": "距右侧",
 		"language": "语言",
 		"text": "文本",
-		"anchorHintBottom": "较长的字幕向上延伸——底边保持不动。",
 		"distanceFromTop": "距顶部",
 		"translateFailed": "翻译失败。",
-		"alignLeft": "左对齐",
 		"distanceFromBottom": "距底部",
 		"derivedFromTranscript": "{{count}} 行字幕，实时由转录生成。",
 		"translate": "翻译",
@@ -217,14 +223,10 @@
 		"hiddenHint": "字幕来自此媒体的转录。开启后可在预览和导出中看到。",
 		"noTranscript": "字幕来自媒体的转录。请先转录此视频以启用字幕。",
 		"distanceFromLeft": "距左侧",
-		"anchorBottom": "底部",
 		"transcribe": "转录视频",
 		"bold": "粗体",
-		"alignRight": "右对齐",
-		"anchorTop": "顶部",
 		"minWords": "每行最少词数",
 		"translateHint": "使用已配置的 AI 提供方翻译转录",
-		"anchorHintTop": "较长的字幕向下延伸——顶边保持不动。",
 		"displayLanguage": "显示",
 		"removeLegacyAnnotations": "移除旧的字幕批注",
 		"background": "背景",
@@ -234,7 +236,15 @@
 		"font": "字体",
 		"translating": "翻译中…",
 		"show": "显示字幕",
-		"textColor": "文字颜色"
+		"textColor": "文字颜色",
+		"style": "样式",
+		"styles": {
+			"classic": "经典",
+			"bold": "粗体",
+			"minimal": "简约",
+			"light": "浅色"
+		},
+		"customize": "自定义"
 	},
 	"panes": {
 		"help": "帮助"
@@ -265,20 +275,30 @@
 		"fadeIn": "淡入",
 		"remove": "删除轨道",
 		"loop": "循环",
-		"slipHint": "按住 Alt 拖动可在其中滑动音频",
-		"help": "此音频轨道的音量、淡入淡出和循环。在预览和导出中都会混合到录制内容之上。在时间轴上拖动可移动或调整大小，按住 Alt 拖动则可在其中滑动音频。",
+		"slipHint": "按住 {{modifier}} 并拖动，可在轨道内滑动音频",
+		"help": "此音频轨道的音量、淡入淡出和循环。在预览和导出中都会混合到录制内容之上。有人说话时，音乐轨道会自动降低音量。在时间轴上拖动可移动或调整大小，按住 Alt 拖动则可在其中滑动音频。",
 		"add": "添加音频轨道",
 		"mute": "静音"
 	},
 	"layout": {
-		"help": "摄像头与屏幕的合成方式：画中画、垂直堆叠、双画面、遮罩形状、大小和镜像。",
+		"help": "摄像头与屏幕的合成方式：画中画、垂直堆叠、双画面、形状、圆角、大小、位置和镜像。",
 		"mirrorWebcam": "镜像摄像头",
 		"webcamFraming": "摄像头构图",
+		"webcamFramingDrag": "拖动取景框可移动，拖动一角可缩放。",
 		"shapes": {
-			"rectangle": "矩形",
-			"rounded": "圆角",
-			"circle": "圆形",
-			"square": "正方形"
+			"square": "正方形",
+			"original": "原始"
+		},
+		"webcamPosition": "位置",
+		"anchors": {
+			"topLeft": "左上",
+			"top": "上方",
+			"topRight": "右上",
+			"left": "左侧",
+			"right": "右侧",
+			"bottomLeft": "左下",
+			"bottom": "下方",
+			"bottomRight": "右下"
 		},
 		"selectPreset": "选择预设",
 		"bgModes": {
@@ -287,18 +307,15 @@
 			"blur": "模糊",
 			"transparent": "抠图"
 		},
-		"reactiveWebcamDescription": "放大视频时摄像头会平滑缩小，以免遮挡内容。",
 		"webcamBlurIntensity": "模糊强度",
 		"preset": "预设",
-		"webcamCropZoom": "裁剪缩放",
 		"webcamSize": "摄像头大小",
 		"dualFrame": "双画框",
-		"webcamCropY": "垂直移动",
 		"verticalStack": "垂直堆叠",
 		"pictureInPicture": "画中画",
 		"webcamShape": "摄像头形状",
-		"webcamCropX": "水平移动",
 		"reactiveWebcam": "缩放时缩小",
+		"reactiveWebcamTip": "视频放大时，摄像头会缩小",
 		"webcamBackground": "摄像头背景",
 		"helpNoWebcam": "此项目没有摄像头，因此布局控件已禁用，预设显示为“无摄像头”。你保存的布局会保留，以便添加摄像头后使用。",
 		"title": "摄像头布局",
@@ -317,7 +334,14 @@
 	},
 	"facets": {
 		"transcript": "转录文本",
-		"captions": "字幕"
+		"captions": "字幕",
+		"tips": {
+			"effects": "画面合成：背景、画框、阴影和内边距",
+			"layout": "摄像头布局：摄像头的位置、形状和大小",
+			"audio": "音频：整个视频的输出电平",
+			"cursor": "光标：样式、大小和效果",
+			"transcript": "转录文本：编辑文字即可剪辑视频"
+		}
 	},
 	"crop": {
 		"title": "裁剪",
@@ -341,39 +365,20 @@
 			"lockedDisclaimer": "由时间线中的全局自动对焦开关控制。关闭后可为每个缩放单独设置对焦模式。",
 			"auto": "自动",
 			"manual": "手动",
-			"autoDescription": "摄像头跟随录制时的光标位置",
 			"title": "对焦模式"
 		},
 		"camera": {
 			"title": "3D 镜头",
 			"off": "关闭",
-			"fixed": "固定角度",
-			"moving": "运动镜头",
 			"preset": {
-				"iso": "斜上方俯视",
 				"left": "画面向左转",
 				"right": "画面向右转",
-				"followCursor": "随光标环绕"
-			},
-			"description": {
-				"off": "画面保持平整。",
-				"iso": "保持单一姿态：向左转，并从上方俯视。",
-				"left": "保持单一姿态：画面朝向左侧，右边缘向前。",
-				"right": "保持单一姿态：画面朝向右侧，左边缘向前。",
-				"followCursor": "屏幕保持不动，镜头绕着屏幕转到光标所在的一侧，并随光标升降。"
-			},
-			"needsCursor": "光标已隐藏：此镜头没有可跟随的对象，保持初始角度。"
-		},
-		"clickImpact": {
-			"title": "点击按压",
-			"description": "每次点击都会按压倾斜的画面：被点击的一侧下沉，然后弹回。",
-			"needsRotation": "请先选择 3D 镜头：只有倾斜的画面才能被按压。",
-			"needsCursor": "光标已隐藏：画面只对可见的点击做出反应。",
-			"descriptionCamera": "每次点击，镜头都会稍稍后退，然后回位。"
+				"orbit": "3D 环绕"
+			}
 		},
 		"level": "缩放级别",
-		"previewHold": "按住预览放大效果",
 		"customScale": "自定义缩放",
+		"customScaleRange": "缩放范围为 {{min}}× 到 {{max}}×",
 		"selectRegion": "选择要调整的缩放区域",
 		"cursor": {
 			"title": "光标",
@@ -383,7 +388,7 @@
 	},
 	"audio": {
 		"outputGain": "输出电平",
-		"help": "调整音频输出电平。它在预览和导出中的效果完全一致。",
+		"help": "人声会自动统一到标准响度。在此基础上调整输出电平；它在预览和导出中的效果完全一致。",
 		"reset": "重置音频",
 		"title": "音频"
 	},
@@ -404,18 +409,33 @@
 		"smoothing": "平滑",
 		"clickBounce": "点击弹跳",
 		"model3d": "3D 光标",
-		"model3dHint": "默认样式：所有光标形状都变为 3D。其他样式保持平面。",
-		"model3dNeedsCursor": "开启“显示光标”后才能使用 3D 光标。",
+		"model3dTip": "将默认光标绘制为带阴影的 3D 对象",
+		"clickImpact": "点击按压",
+		"clickImpactTip": "每次点击时屏幕会轻微移动",
 		"help": "基于录制遥测数据的光标渲染：主题、大小、平滑、运动模糊和点击回弹。",
-		"clipToBoundsDescription": "将光标保持在视频画面内。关闭后光标可以超出边缘——在放大或平移时很有用。",
 		"size": "大小",
 		"title": "光标",
 		"show": "显示光标",
 		"themeDefault": "默认",
-		"clipToBounds": "裁剪到画布",
+		"types": "光标类型",
+		"typeArrow": "箭头",
+		"typePointer": "手形",
+		"typeText": "文本",
+		"typeGrab": "抓取",
+		"typeResize": "调整大小",
+		"typeBusy": "忙碌",
+		"typeCrosshair": "十字准线",
+		"typeNotAllowed": "不可用",
+		"typeHelp": "帮助",
+		"typeUpArrow": "候选",
+		"typeAsArrow": "{{type}}：显示为箭头",
 		"motionBlur": "运动模糊",
 		"theme": "光标样式",
-		"autoHide": "闲置时隐藏"
+		"autoHide": "闲置时隐藏",
+		"autoHideTip": "光标停止移动后会逐渐消失",
+		"bounceNone": "无",
+		"bounceLight": "轻",
+		"bounceStrong": "强"
 	},
 	"export": {
 		"gifButton": "导出 GIF",
@@ -424,5 +444,11 @@
 	},
 	"trim": {
 		"deleteRegion": "删除剪辑区域"
+	},
+	"textPlate": {
+		"none": "无",
+		"dark": "深色",
+		"light": "浅色",
+		"custom": "自定义"
 	}
 }

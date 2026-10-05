@@ -7,7 +7,7 @@
 <p align="center"><strong>A free, open-source desktop app for recording your screen and turning the result into polished product demos and walkthroughs.</strong></p>
 
 <p align="center">
-  <img src="public/demo.gif" alt="Editing a recording in OpenScreen: wallpaper and video effects, an AI-assisted cut driven from the chat, then export" width="100%" />
+  <img src="docs/assets/demo.gif" alt="Editing a recording in OpenScreen: one click restyles the whole video, deleting a sentence in the transcript cuts it from the video, and the editor's agent adds a zoom on every click" width="100%" />
 </p>
 
 <p align="center">
@@ -35,9 +35,9 @@ A raw capture goes in and comes out ready to post — on X, Reddit, YouTube, a d
 ## Core Features
 - Record a specific window, or your whole screen.
 - Record microphone and system audio.
-- Webcam overlay with picture-in-picture, drag-to-position, mirroring, and shape options.
+- Webcam overlay with picture-in-picture, eight snap positions, adjustable roundness, mirroring, and shape options.
 - Auto or manual zooms with adjustable depth, duration, easing, and pixel-precise position; auto-zoom follows your cursor as you work.
-- Custom cursor size, smoothing, and click effects, with cursor themes and post-recording path smoothing.
+- Custom cursor size, smoothing, and click effects, with post-recording path smoothing.
 - Automatic captions for voiceovers, transcribed on-device with no upload (works offline), with an editable transcript you can cut from and optional subtitle translation.
 - AI editing assistant: describe the edit you want in chat and it applies to the timeline — cuts, zooms, speed ramps, annotations, camera framing. Bring your own key (Claude, OpenAI, Gemini, Mistral, OpenRouter, MiniMax, or any OpenAI-compatible endpoint); nothing is enabled by default.
 - Wallpapers, solid colors, gradients, or your own background image.
@@ -176,7 +176,7 @@ You may need to grant screen recording permissions depending on your desktop env
 Everything in the editor and export is the same on macOS, Windows, and Linux: zooms, backgrounds, motion blur, crop/trim/speed, blur regions, annotations, auto-captions, AI editing, projects, export, and all languages. All three now record through a native capture pipeline; the remaining differences are narrower than they used to be:
 
 - **Native recording**: macOS (ScreenCaptureKit), Windows (Windows Graphics Capture), and Linux (PipeWire via the ScreenCast portal) all record through a native pipeline for higher quality and clean window-level capture. On Linux the browser pipeline stays as an automatic fallback if the helper isn't available.
-- **Custom cursors**: on macOS and Windows the real cursor is captured with shape, type, and clicks. Linux captures position and cursor shape through the portal, so cursor themes and the editable cursor overlay work there too. Click effects work on Linux as well, but not through the portal — Wayland exposes no portal for mouse buttons, so the capture helper reads the left button from evdev, which needs your user in the `input` group. Without that, recording is unaffected and every cursor sample is simply a move.
+- **Custom cursors**: on macOS and Windows the real cursor is captured with shape, type, and clicks. Linux captures position and cursor shape through the portal, so the editable cursor overlay works there too. Click effects work on Linux as well, but not through the portal — Wayland exposes no portal for mouse buttons, so the capture helper reads the left button from evdev, which needs your user in the `input` group. Without that, recording is unaffected and every cursor sample is simply a move.
 - **Webcam**: every platform saves the webcam as a separate file next to the screen recording. Windows captures it natively in the recording helper; macOS and Linux record it in the app. It works as a picture-in-picture overlay on all three.
 - **System audio** support varies by OS:
   - **macOS**: works on every supported version. On macOS 14.2+ you'll be prompted to grant audio capture permission.

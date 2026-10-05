@@ -4,6 +4,7 @@
 		"save": "Salvar",
 		"delete": "Deletar",
 		"close": "Fechar",
+		"resetToDefault": "Restaurar o valor padrão",
 		"share": "Compartilhar",
 		"done": "Concluir",
 		"open": "Abrir",
@@ -45,7 +46,10 @@
 		"hide": "Ocultar OpenScreen",
 		"hideOthers": "Ocultar Outros",
 		"unhide": "Mostrar Todos",
-		"saveDiagnostics": "Salvar Diagnósticos"
+		"saveDiagnostics": "Salvar Diagnósticos",
+		"starOnGithub": "Dar uma estrela no GitHub",
+		"permissions": "Permissões…",
+		"closeNotification": "Fechar a notificação"
 	},
 	"updates": {
 		"available": "O OpenScreen {{latestVersion}} está disponível. Você está usando a versão {{currentVersion}}.",

@@ -1,8 +1,9 @@
 import { ArrowDown, Film, Plus, RotateCw, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
-import type { AxcutAsset, TranscriptLanguageCode } from "@/lib/ai-edition/schema";
+import type { AxcutAsset, AxcutTranscript, TranscriptLanguageCode } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
@@ -17,6 +18,8 @@ import {
 	type AssetTranscriptionStatus,
 	type AssetTranscriptionView,
 	isSilentFailure,
+	transcriptHasSpeech,
+	transcriptionFailureHintKey,
 } from "@/lib/ai-edition/transcription/status";
 import { formatBytes } from "@/utils/formatBytes";
 import {
@@ -36,6 +39,13 @@ const THUMB_GRADIENTS = [
 
 function basename(path: string): string {
 	return path.split(/[\\/]/).pop() ?? path;
+}
+
+export function detectedLanguageForTranscript(transcript: AxcutTranscript | null): string | null {
+	if (!transcript || transcript.language === "auto" || !transcriptHasSpeech(transcript)) {
+		return null;
+	}
+	return transcript.language;
 }
 
 export async function addSelectedAssetToTimeline(
@@ -90,11 +100,15 @@ export function MediaStage({
 	const transcript = selected
 		? (document?.transcripts?.find((t) => t.assetId === selected.id) ?? null)
 		: null;
+	const detectedLanguage = detectedLanguageForTranscript(transcript);
 	const selectedTranscription: AssetTranscriptionView = selected
 		? (transcriptions[selected.id] ?? { assetId: selected.id, status: "idle" })
 		: { assetId: "", status: "idle" };
 	const selectedBusy =
 		selectedTranscription.status === "running" || selectedTranscription.status === "queued";
+	const failureHintKey = selectedTranscription.failure
+		? transcriptionFailureHintKey(selectedTranscription.failure)
+		: null;
 
 	const handleImport = async () => {
 		if (!projectId) {
@@ -324,7 +338,7 @@ export function MediaStage({
 												: selectedTranscription.status === "ready"
 													? "var(--success)"
 													: "var(--accent)",
-										fontSize: 11.5,
+										fontSize: 12,
 										fontWeight: 600,
 									}}
 								>
@@ -337,7 +351,7 @@ export function MediaStage({
 								    reaching the document and being displayed nowhere. It belongs next to
 								    "Regenerate as" below in any case: that selector is the control
 								    you set BECAUSE of what was detected. */}
-								{transcript?.language && transcript.language !== "auto" ? (
+								{detectedLanguage ? (
 									<span
 										style={{
 											display: "inline-flex",
@@ -347,12 +361,12 @@ export function MediaStage({
 											borderRadius: 9999,
 											background: "var(--success-soft)",
 											color: "var(--success)",
-											fontSize: 11.5,
+											fontSize: 12,
 											fontWeight: 600,
 										}}
 									>
 										{t("mediaStage.detectedLanguage", {
-											language: languageLabel(transcript.language, locale),
+											language: languageLabel(detectedLanguage, locale),
 										})}
 									</span>
 								) : null}
@@ -365,21 +379,19 @@ export function MediaStage({
 								<p
 									style={{
 										margin: "-8px 0 16px",
-										fontSize: 11.5,
+										fontSize: 12,
 										lineHeight: 1.5,
 										color: "var(--muted)",
 									}}
 								>
-									{selectedTranscription.failure.kind === "error"
-										? selectedTranscription.failure.message
-										: t("mediaStage.noAudioTrackHint")}
+									{failureHintKey ? t(failureHintKey) : selectedTranscription.failure.message}
 								</p>
 							) : null}
 
 							<div style={{ marginBottom: 12 }}>
 								<div
 									style={{
-										fontSize: 11.5,
+										fontSize: 12.5,
 										fontWeight: 600,
 										color: "var(--fg-2)",
 										marginBottom: 6,
@@ -411,28 +423,36 @@ export function MediaStage({
 											</option>
 										))}
 									</select>
-									<button
-										type="button"
-										title={t("mediaStage.regenerate")}
-										aria-label={t("mediaStage.regenerate")}
-										disabled={selectedBusy}
-										onClick={() => void requestTranscription(selected.id, lang)}
-										style={{
-											width: 36,
-											height: 36,
-											flexShrink: 0,
-											display: "grid",
-											placeItems: "center",
-											borderRadius: 9,
-											color: "var(--fg-2)",
-											background: "var(--surface-2)",
-											border: "1px solid var(--border)",
-											cursor: selectedBusy ? "not-allowed" : "pointer",
-											opacity: selectedBusy ? 0.6 : 1,
-										}}
-									>
-										<RotateCw size={14} className={selectedBusy ? "animate-spin" : undefined} />
-									</button>
+									{/* A bare refresh icon beside a language list: the tip says what it redoes. */}
+									<Tooltip content={t("mediaStage.regenerateTip")}>
+										<button
+											type="button"
+											aria-label={t("mediaStage.regenerate")}
+											// `aria-disabled`, not `disabled`: a natively disabled button cannot take focus or
+											// open its tooltip. It does nothing while a transcription runs.
+											aria-disabled={selectedBusy || undefined}
+											onClick={
+												selectedBusy
+													? undefined
+													: () => void requestTranscription(selected.id, lang)
+											}
+											style={{
+												width: 36,
+												height: 36,
+												flexShrink: 0,
+												display: "grid",
+												placeItems: "center",
+												borderRadius: 9,
+												color: "var(--fg-2)",
+												background: "var(--surface-2)",
+												border: "1px solid var(--border)",
+												cursor: selectedBusy ? "not-allowed" : "pointer",
+												opacity: selectedBusy ? 0.6 : 1,
+											}}
+										>
+											<RotateCw size={14} className={selectedBusy ? "animate-spin" : undefined} />
+										</button>
+									</Tooltip>
 								</div>
 							</div>
 

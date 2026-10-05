@@ -9,9 +9,12 @@ keywords:
   - alternativa open source ao screen studio
 ---
 
+import DemoLoop from "@site/src/components/DemoLoop";
+import DemoLoopPair from "@site/src/components/DemoLoop/Pair";
+
 # Uma alternativa grátis e de código aberto ao Screen Studio
 
-O OpenScreen é uma alternativa gratuita ao Screen Studio, com licença MIT, para Windows, macOS e Linux. Assim como o Screen Studio, ele dá zoom para onde o cursor vai, restiliza o cursor depois da gravação, adiciona fundos e legendas no dispositivo, e exporta em MP4 ou GIF. Diferente do Screen Studio, que roda só no macOS e precisa de um plano pago para exportar, ele não custa nada e não exige conta. O Screen Studio ainda é a melhor escolha se você compartilha gravações como links hospedados com comentários, ou grava um iPhone ou iPad.
+O OpenScreen é uma alternativa gratuita ao Screen Studio, com licença MIT, para Windows, macOS e Linux. Assim como o Screen Studio, ele dá zoom onde você clica, restiliza o cursor depois da gravação, adiciona fundos e legendas no dispositivo, e exporta em MP4 ou GIF. Diferente do Screen Studio, que roda só no macOS e precisa de um plano pago para exportar, ele não custa nada e não exige conta. O Screen Studio ainda é a melhor escolha se você compartilha gravações como links hospedados com comentários, ou grava um iPhone ou iPad.
 
 Esta página é publicada pelo projeto OpenScreen. Os dados sobre o Screen Studio vêm de screen.studio e foram verificados em setembro de 2026. As fontes estão listadas no final.
 
@@ -24,12 +27,12 @@ Esta página é publicada pelo projeto OpenScreen. Os dados sobre o Screen Studi
 | Código-fonte | Código aberto, licença MIT | Proprietário |
 | Plataformas | Windows 10 (1903 ou posterior) e 11, x64. macOS 13 ou posterior, Apple Silicon e Intel. Linux, x64 | Somente macOS, Ventura 13.1 ou posterior (em setembro de 2026) |
 | O que grava | Uma tela ou uma janela. Corte a imagem depois no editor | Uma tela, uma janela ou uma área selecionada |
-| Zooms automáticos | Sim, posicionados a partir do cursor gravado | Sim |
+| Zooms automáticos | Sim, posicionados nos cliques gravados | Sim |
 | Legendas | Whisper no dispositivo, um modelo de cerca de 264 MB, baixado uma vez. Embutidas no vídeo | Whisper no dispositivo (Base, Small ou Medium), ou Apple Speech Recognition no macOS 26 ou posterior. A transcrição pode ser exportada como arquivo |
 | Tradução de legendas | 15 idiomas, por um provedor de IA que você conecta | Nenhuma etapa de tradução no guia de legendas dele |
 | Linha do tempo com vários clipes | Sim | "Gravações com vários clipes" listada como planejada no roadmap dele |
 | Anotações de texto, seta e imagem | Sim | "Anotações" listada como pausada no roadmap dele |
-| Exportação | MP4 (H.264 ou H.265) ou GIF, até 60 fps, sem marca d'água | MP4 ou GIF, com configurações de taxa de quadros, tamanho de saída e qualidade. Nenhuma configuração de codec documentada |
+| Exportação | MP4 (H.264) ou GIF, até 60 fps, sem marca d'água | MP4 ou GIF, com configurações de taxa de quadros, tamanho de saída e qualidade |
 | Links de compartilhamento hospedados | Não | Sim, até 30 minutos por gravação (em setembro de 2026), com comentários marcados por tempo |
 | Gravação de iPhone e iPad | Não | Sim, via USB, com molduras de dispositivo |
 | Interface de linha de comando | Sim | Nenhuma no guia dele |
@@ -38,7 +41,7 @@ Esta página é publicada pelo projeto OpenScreen. Os dados sobre o Screen Studi
 
 Os dois apps cobrem o seguinte. Nada disso é exclusivo de um ou outro.
 
-- **Zooms automáticos.** Os dois dão zoom na ação. No OpenScreen, **Melhoria automática → Zooms automáticos** posiciona os zooms a partir do movimento gravado do cursor, sem chamada de rede e sem modelo. Zooms manuais em seis profundidades ficam ao lado deles. Mais em [zoom automático](/features/auto-zoom/).
+- **Zooms automáticos.** Os dois dão zoom na ação. No OpenScreen, **Melhoria automática → Zooms automáticos** posiciona os zooms nos cliques gravados, sem chamada de rede e sem modelo. Zooms manuais em seis profundidades ficam ao lado deles. Mais em [zoom automático](/features/auto-zoom/).
 - **Um cursor que você pode mudar depois.** Os dois permitem redimensionar, suavizar ou ocultar o cursor depois da gravação e adicionar efeitos de clique. Por padrão, o OpenScreen grava o ponteiro separado do vídeo para isso.
 - **Fundos e enquadramento.** Os dois adicionam um fundo, espaçamento e sombra, e geram vídeo horizontal ou vertical. O OpenScreen oferece papéis de parede, cores sólidas, gradientes ou sua própria imagem, e proporções incluindo 16:9, 9:16 e 1:1.
 - **Webcam, microfone e áudio do sistema** na mesma gravação.
@@ -48,6 +51,11 @@ Os dois apps cobrem o seguinte. Nada disso é exclusivo de um ou outro.
 - **Ocultar conteúdo sensível.** O Screen Studio borra dados sensíveis com máscaras. O OpenScreen tem regiões de desfoque, gaussiano ou mosaico.
 - **Notas enquanto grava.** Os dois têm notas do apresentador. No Windows e no macOS, a janela de notas do OpenScreen também tem um modo teleprompter.
 - **Processamento local.** O Screen Studio diz que nunca envia dados sobre suas gravações para os servidores dele. O OpenScreen não tem conta, não tem servidor próprio e não tem análise de uso. As [Perguntas frequentes](/docs/faq/#does-openscreen-work-offline) listam as poucas conexões que ele ainda faz.
+
+<DemoLoopPair>
+  <DemoLoop name="background-picker" />
+  <DemoLoop name="sensitive-data-mask" />
+</DemoLoopPair>
 
 ## Onde o OpenScreen se diferencia {#where-openscreen-differs}
 
@@ -63,9 +71,13 @@ Os dois apps cobrem o seguinte. Nada disso é exclusivo de um ou outro.
 - **Anotações.** Texto com seis animações, setas em oito direções, imagens e regiões de desfoque. O roadmap do Screen Studio lista "Anotações", descritas como descrições visuais ou textuais de cliques, como pausadas. Veja [Edição e linha do tempo](/docs/editing-timeline/).
 - **Fundo da webcam.** Remova, borre ou substitua o fundo da câmera sem tela verde, na versão estável. O Screen Studio lista a remoção de fundo da câmera como recurso beta.
 
+<DemoLoopPair>
+  <DemoLoop name="every-layout" />
+  <DemoLoop name="camera-blur" />
+</DemoLoopPair>
+
 ### Exportação e automação {#export-and-automation}
 
-- **Escolha de codec.** A exportação em MP4 é em H.264 ou H.265. O guia de exportação do Screen Studio não documenta uma configuração de codec. Veja [Exportação](/docs/export/).
 - **Uma interface de linha de comando.** Scripts, CI e agentes de código podem controlar o OpenScreen pela [linha de comando](/docs/cli/). O guia do Screen Studio não tem uma entrada de linha de comando.
 - **Edição por chat opcional, com sua própria chave.** Conecte Claude, OpenAI, Gemini, Mistral, OpenRouter, MiniMax ou qualquer endpoint compatível com OpenAI, e descreva cortes, zooms, mudanças de velocidade ou anotações em linguagem natural. Cada mudança vira uma edição comum, que pode ser desfeita. Fica desligado até você conectar um provedor, e o mesmo provedor traduz legendas para 15 idiomas. Veja [Edição com IA](/docs/ai-editing/).
 
@@ -78,8 +90,8 @@ Os dois apps cobrem o seguinte. Nada disso é exclusivo de um ou outro.
 ## Primeiros passos {#getting-started}
 
 1. Baixe o OpenScreen na [página de download](/download/). No Windows, a Microsoft Store é o caminho recomendado.
-2. Siga a [Instalação](/docs/installation/). No macOS, conceda as permissões de Gravação de Tela e Acessibilidade antes da primeira gravação.
-3. Faça uma primeira gravação com o [início rápido](/docs/quick-start/), depois rode **Melhoria automática → Zooms automáticos** nela.
+2. Siga a [Instalação](/docs/installation/). No macOS, conceda as permissões na janela que se abre na primeira execução.
+3. Faça uma primeira gravação com o [início rápido](/docs/quick-start/). Ela abre no editor com os zooms automáticos já posicionados.
 
 Comparando outras ferramentas também? Veja [OpenScreen vs Cap](/compare/openscreen-vs-cap/), [OpenScreen vs OBS Studio](/compare/openscreen-vs-obs/), a [alternativa ao Camtasia](/alternatives/camtasia/) e a [alternativa ao Loom](/alternatives/loom/), ou volte para a [página inicial do OpenScreen](/).
 

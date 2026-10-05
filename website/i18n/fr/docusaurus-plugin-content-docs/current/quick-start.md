@@ -22,7 +22,7 @@ Au lancement, OpenScreen affiche une petite pastille flottante (le HUD) ancrée 
 
 ## 2. Choisir ce qu'il faut enregistrer {#2-pick-what-to-record}
 
-Cliquez sur le sélecteur de source (icône d'écran) pour ouvrir le choix de la source. Il liste vos **Écrans** et vos **Fenêtres** dans deux onglets : choisissez une vignette et cliquez sur **Partager**.
+Cliquez sur le sélecteur de source (icône d'écran) pour ouvrir le choix de la source. Il liste vos **Écrans** et vos **Fenêtres** dans deux onglets : choisissez une vignette et cliquez sur **Partager**. Sous macOS 15.2 et ultérieur, vous choisissez plutôt l'écran ou la fenêtre dans le sélecteur du système d'Apple.
 
 Sous Linux, le HUD n'a pas de sélecteur de source. Il affiche *Le système vous demandera quoi partager* : quand vous lancez l'enregistrement, la boîte de dialogue de partage de votre bureau demande l'écran ou la fenêtre, avant le compte à rebours et de nouveau à chaque prise.
 
@@ -49,7 +49,7 @@ Cliquez sur **Ouvrir le Studio** (ou attendez qu'il s'ouvre automatiquement apr�
 ## 6. Couper et exporter {#6-trim-and-export}
 
 - Placez la tête de lecture là où vous voulez couper et appuyez sur `T` (ou sur le bouton ciseaux) : une région de coupe de deux secondes est ajoutée à cet endroit. Faites glisser ses bords pour ajuster ce qui est retiré.
-- Cliquez sur **Exporter** dans la barre supérieure, choisissez **MP4** ou **GIF**, sélectionnez une qualité, puis cliquez sur **Exporter**.
+- Cliquez sur **Exporter** dans la barre supérieure, vérifiez le format et la qualité, puis cliquez sur **Exporter**.
 - Une fois l'export terminé, cliquez sur **Afficher dans le dossier** pour retrouver votre fichier.
 
 Voilà l'essentiel. Pour tous les outils de montage (zooms, changements de vitesse, annotations, style du curseur, disposition de la webcam), consultez [Montage et timeline](./editing-timeline.md). Pour assembler plusieurs prises en une seule vidéo, consultez [Médiathèque et clips](./media-library.md).

@@ -4,6 +4,7 @@
 		"save": "Сохранить",
 		"delete": "Удалить",
 		"close": "Закрыть",
+		"resetToDefault": "Вернуть значение по умолчанию",
 		"share": "Поделиться",
 		"done": "Готово",
 		"open": "Открыть",
@@ -45,7 +46,10 @@
 		"hide": "Скрыть OpenScreen",
 		"hideOthers": "Скрыть остальные",
 		"unhide": "Показать все",
-		"saveDiagnostics": "Сохранить диагностику"
+		"saveDiagnostics": "Сохранить диагностику",
+		"starOnGithub": "Поставить звезду на GitHub",
+		"permissions": "Разрешения…",
+		"closeNotification": "Закрыть уведомление"
 	},
 	"updates": {
 		"available": "Доступен OpenScreen {{latestVersion}}. Установлена версия {{currentVersion}}.",

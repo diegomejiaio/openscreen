@@ -18,9 +18,15 @@ import type {
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
 import { axcutSchemaVersion } from "@/lib/ai-edition/schema";
+import { CURSOR_KIND_IDS, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { DEVICE_FRAMES } from "@/lib/projectDefaults";
 import { getFocusBoundsForScale } from "@/lib/zoomMath/focusUtils";
-import { buildSceneDescription, wallpaperAcceptsMotion } from "./sceneDescription";
+import {
+	annotationFootageRect,
+	buildSceneDescription,
+	wallpaperAcceptsMotion,
+	zoomScaleLimit,
+} from "./sceneDescription";
 
 // --- Fixture helpers --------------------------------------------------------
 // Keep fixtures minimal & deterministic — every field the serializer consults is filled in;
@@ -113,6 +119,7 @@ describe("buildSceneDescription.background", () => {
 			kind: "gradient",
 			angleDeg: 135,
 			stops: ["#eaebed", "#bcc0c6"],
+			offsets: [0, 1],
 		});
 	});
 
@@ -122,6 +129,7 @@ describe("buildSceneDescription.background", () => {
 			kind: "gradient",
 			angleDeg: 180,
 			stops: ["#a1b2c3", "#d4e5f6"],
+			offsets: [0, 1],
 		});
 	});
 
@@ -138,6 +146,7 @@ describe("buildSceneDescription.background", () => {
 			kind: "gradient",
 			angleDeg: 90,
 			stops: ["rgba(1,2,3,0.5)", "#fff"],
+			offsets: [0, 1],
 		});
 	});
 
@@ -149,6 +158,7 @@ describe("buildSceneDescription.background", () => {
 			kind: "gradient",
 			angleDeg: 135,
 			stops: ["#a1b2c3", "#d4e5f6"],
+			offsets: [0, 1],
 		});
 	});
 
@@ -159,6 +169,24 @@ describe("buildSceneDescription.background", () => {
 			kind: "gradient",
 			angleDeg: 180,
 			stops: [],
+			offsets: [],
+		});
+	});
+
+	// The gradient editor wrote 3-stop gradients and older presets up to 7: the compositor
+	// draws each stop at its offset, so the offsets travel with the colours.
+	it("sends every stop with its offset", () => {
+		const doc = makeDoc({
+			legacyEditor: {
+				wallpaper:
+					"linear-gradient(135deg, rgb(255, 0, 0) 0%, rgb(0, 255, 0) 50%, rgb(0, 0, 255) 100%)",
+			},
+		});
+		expect(buildSceneDescription(doc).background).toEqual({
+			kind: "gradient",
+			angleDeg: 135,
+			stops: ["rgb(255, 0, 0)", "rgb(0, 255, 0)", "rgb(0, 0, 255)"],
+			offsets: [0, 0.5, 1],
 		});
 	});
 
@@ -188,6 +216,7 @@ describe("buildSceneDescription.background motion", () => {
 			kind: "gradient",
 			angleDeg: 135,
 			stops: ["#eaebed", "#bcc0c6"],
+			offsets: [0, 1],
 			motion: "aurora",
 		});
 	});
@@ -200,7 +229,7 @@ describe("buildSceneDescription.background motion", () => {
 		}
 	});
 
-	it("never moves a colour, an image or the webcam's own gradient", () => {
+	it("attaches the chosen motion to an image, and never to the webcam's own background", () => {
 		const doc = makeDoc({
 			legacyEditor: {
 				wallpaper: "/wallpapers/wallpaper1.jpg",
@@ -210,17 +239,28 @@ describe("buildSceneDescription.background motion", () => {
 			},
 		});
 		const scene = buildSceneDescription(doc);
-		expect(scene.background).toEqual({ kind: "image", path: "/wallpapers/wallpaper1.jpg" });
+		expect(scene.background).toEqual({
+			kind: "image",
+			path: "/wallpapers/wallpaper1.jpg",
+			motion: "waves",
+		});
 		expect(scene.webcamEffect?.background).not.toHaveProperty("motion");
+	});
+
+	it("never moves a colour, or a string the compositor cannot load as an image", () => {
 		const colour = makeDoc({ legacyEditor: { wallpaper: "#123456", wallpaperMotion: "drift" } });
 		expect(buildSceneDescription(colour).background).toEqual({ kind: "color", color: "#123456" });
+		const radial = "radial-gradient(#fff, #000)";
+		const doc = makeDoc({ legacyEditor: { wallpaper: radial, wallpaperMotion: "drift" } });
+		expect(buildSceneDescription(doc).background).toEqual({ kind: "image", path: radial });
 	});
 
 	it("enables the control exactly for the wallpapers the compositor animates", () => {
 		expect(wallpaperAcceptsMotion(gradient)).toBe(true);
+		expect(wallpaperAcceptsMotion("/wallpapers/wallpaper1.jpg")).toBe(true);
+		expect(wallpaperAcceptsMotion("data:image/png;base64,AAAA")).toBe(true);
 		expect(wallpaperAcceptsMotion("#123456")).toBe(false);
-		expect(wallpaperAcceptsMotion("/wallpapers/wallpaper1.jpg")).toBe(false);
-		// Drawn by the web preview only; the compositor paints it as an image path.
+		// Drawn by the web preview only; the compositor gets it as an image path it cannot load.
 		expect(wallpaperAcceptsMotion("radial-gradient(#fff, #000)")).toBe(false);
 	});
 });
@@ -279,7 +319,7 @@ describe("buildSceneDescription.webcamEffect", () => {
 		expect(buildSceneDescription(doc).webcamEffect).toEqual({
 			mode: "blur",
 			blurIntensity: 0.85,
-			background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" },
+			background: { kind: "image", path: "/wallpapers/wallpaper11.jpg" },
 		});
 	});
 
@@ -612,6 +652,92 @@ describe("buildSceneDescription.zoomRegions", () => {
 		}
 	});
 
+	it("bounds each clip's zoom so its recording is never blown up past 2× at 1080p", () => {
+		// Crop and zoom multiply: at 50 % padding a 1080p take already sits at 0.8, a 2160p
+		// take at 0.4 and half a 1080p take at 1.6 of the default 1080p export.
+		const at = (width: number, height: number, crop?: AxcutClip["cropRegion"]) => {
+			const doc = makeDoc({
+				assets: [
+					makeAsset({
+						id: "a",
+						originalPath: "/a.mp4",
+						durationSec: 5,
+						video: { codec: "h264", width, height, fps: 30 },
+					}),
+				],
+				clips: [
+					makeClip({
+						id: "c1",
+						assetId: "a",
+						sourceStartSec: 0,
+						sourceEndSec: 5,
+						timelineStartSec: 0,
+						timelineEndSec: 5,
+						cropRegion: crop,
+					}),
+				],
+				zoomRanges: [
+					makeZoom({ id: "z", startMs: 0, endMs: 1000, depth: 6, focus: { cx: 0.5, cy: 0.5 } }),
+				],
+				legacyEditor: { padding: 50, aspectRatio: "16:9" },
+			});
+			return {
+				scale: buildSceneDescription(doc).zoomRegions[0].scale,
+				limit: zoomScaleLimit(doc, "z"),
+			};
+		};
+		expect(at(1920, 1080)).toEqual({ scale: 2.5, limit: 2.5 });
+		expect(at(3840, 2160)).toEqual({ scale: 5, limit: 5 });
+		expect(at(1920, 1080, { x: 0.25, y: 0.25, width: 0.5, height: 0.5 })).toEqual({
+			scale: 1.25,
+			limit: 1.25,
+		});
+	});
+
+	it("limits a zoom straddling two clips by the tighter of the two", () => {
+		const video = (width: number, height: number) => ({ codec: "h264", width, height, fps: 30 });
+		const doc = makeDoc({
+			assets: [
+				makeAsset({
+					id: "uhd",
+					originalPath: "/uhd.mp4",
+					durationSec: 5,
+					video: video(3840, 2160),
+				}),
+				makeAsset({ id: "hd", originalPath: "/hd.mp4", durationSec: 5, video: video(1920, 1080) }),
+			],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "uhd",
+					sourceStartSec: 0,
+					sourceEndSec: 5,
+					timelineStartSec: 0,
+					timelineEndSec: 5,
+				}),
+				makeClip({
+					id: "c2",
+					assetId: "hd",
+					sourceStartSec: 0,
+					sourceEndSec: 5,
+					timelineStartSec: 5,
+					timelineEndSec: 10,
+				}),
+			],
+			// Starts on the 2160p clip (limit 5×) and ends on the 1080p one (limit 2.5×).
+			zoomRanges: [
+				makeZoom({ id: "z", startMs: 3000, endMs: 7000, depth: 6, focus: { cx: 0.5, cy: 0.5 } }),
+			],
+			legacyEditor: { padding: 50, aspectRatio: "16:9" },
+		});
+		const pieces = buildSceneDescription(doc).zoomRegions;
+		expect(pieces.map((z) => [z.clipIndex, z.scale])).toEqual([
+			[0, 5],
+			[1, 2.5],
+		]);
+		expect(zoomScaleLimit(doc, "z")).toBe(2.5);
+	});
+
 	it("customScale overrides the depth-derived value", () => {
 		const z = makeZoom({
 			id: "z",
@@ -633,35 +759,15 @@ describe("buildSceneDescription.zoomRegions", () => {
 			endMs: 5000,
 			depth: 4,
 			focus: { cx: 0.25, cy: 0.75 },
-			rotationPreset: "iso",
+			rotationPreset: "left",
 			hideCursor: true,
 		});
 		const doc = makeDoc({ zoomRanges: [z] });
 		const { zoomRegions } = buildSceneDescription(doc);
 		expect(zoomRegions[0].focusX).toBe(0.25);
 		expect(zoomRegions[0].focusY).toBe(0.75);
-		expect(zoomRegions[0].rotation).toBe("iso");
+		expect(zoomRegions[0].rotation).toBe("left");
 		expect(zoomRegions[0].hideCursor).toBe(true);
-	});
-
-	it("emits clickImpact only when it is on", () => {
-		const base = {
-			startMs: 0,
-			endMs: 1000,
-			depth: 3 as const,
-			focus: { cx: 0.5, cy: 0.5 },
-			rotationPreset: "iso" as const,
-		};
-		const doc = makeDoc({
-			zoomRanges: [
-				makeZoom({ ...base, id: "on", clickImpact: true }),
-				makeZoom({ ...base, id: "off" }),
-			],
-		});
-		const { zoomRegions } = buildSceneDescription(doc);
-		expect(zoomRegions[0].clickImpact).toBe(true);
-		// Omitted, not `false`: scene payloads without the option stay byte-identical.
-		expect("clickImpact" in zoomRegions[1]).toBe(false);
 	});
 
 	it("converts ms→sec for start/end", () => {
@@ -1068,26 +1174,88 @@ describe("buildSceneDescription.audio", () => {
 
 // --- settings mapping ------------------------------------------------------
 
+describe("buildSceneDescription format fill", () => {
+	const doc = (editor: Record<string, unknown>) =>
+		makeDoc({
+			assets: [
+				makeAsset({
+					id: "a",
+					originalPath: "/a.mp4",
+					durationSec: 5,
+					video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+				}),
+			],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 5,
+					timelineStartSec: 0,
+					timelineEndSec: 5,
+				}),
+			],
+			legacyEditor: { aspectRatio: "9:16", padding: 50, ...editor },
+		});
+
+	it("gives a 16:9 take the whole padded 9:16 area, covered and following the cursor", () => {
+		const { layout } = buildSceneDescription(doc({ formatFollowCursor: true }));
+		const zone = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+		for (const rect of [layout.screenRect, layout.layoutByClip?.[0]?.screenRect]) {
+			expect(rect?.x).toBeCloseTo(zone.x, 3);
+			expect(rect?.y).toBeCloseTo(zone.y, 3);
+			expect(rect?.width).toBeCloseTo(zone.width, 3);
+			expect(rect?.height).toBeCloseTo(zone.height, 3);
+		}
+		expect(layout.screenCover).toBe(true);
+		expect(layout.layoutByClip?.[0]?.screenCover).toBe(true);
+		expect(layout.screenFollow).toBe(true);
+	});
+
+	it("keeps the recording whole, and the payload unchanged, when not asked for", () => {
+		for (const editor of [{}, { formatFollowCursor: false }]) {
+			const { layout } = buildSceneDescription(doc(editor));
+			// The 16:9 band inside the 9:16 frame: 864×486 of 1080×1920.
+			expect(layout.screenRect?.height).toBeCloseTo(486 / 1920, 3);
+			expect(layout.screenCover).toBe(false);
+			expect("screenFollow" in layout).toBe(false);
+		}
+	});
+});
+
 describe("buildSceneDescription.settings mapping", () => {
 	it("divides padding by 100", () => {
 		const doc = makeDoc({ legacyEditor: { padding: 50 } });
 		expect(buildSceneDescription(doc).effects.padding).toBe(0.5);
 	});
 
-	it("roundnessFrac is the slider divided by the frame's short side, not raw pixels", () => {
+	it("roundnessFrac is the slider divided by the 1080 reference, not raw pixels", () => {
 		// The contract carries no pixel counts: the compositor rasterises the preview
 		// smaller than the export, so a pixel means two different things across the
 		// boundary. Absolute values crossing it is what drew the PiP circle as a blob.
 		const doc = makeDoc({ legacyEditor: { borderRadius: 12 } });
 		const scene = buildSceneDescription(doc);
-		const shortSide = Math.min(scene.output.width, scene.output.height);
-		expect(scene.effects.roundnessFrac).toBeCloseTo(12 / shortSide, 10);
+		expect(scene.effects.roundnessFrac).toBeCloseTo(12 / 1080, 10);
 	});
 
-	it("round-trips the authored pixel value at output size, whatever the resolution", () => {
-		// The slider keeps meaning "N pixels of the finished video" — the fraction only
-		// exists so the native side can rebuild it against whatever it is rasterising
-		// into. Multiplying back by the output's short side must return exactly N.
+	it("squares the corners at zero padding, from a roundness it does not erase", () => {
+		// No background to round against. The document keeps the value, so the corners come
+		// back as they were once the padding does.
+		const at = (padding: number, frame = "none") =>
+			buildSceneDescription(makeDoc({ legacyEditor: { padding, borderRadius: 12, frame } })).effects
+				.roundnessFrac;
+		expect(at(0)).toBe(0);
+		expect(at(1)).toBeCloseTo(12 / 1080, 10);
+		// Under a frame the frame meets the edges at 0%, and the footage keeps its corners.
+		for (const frame of ["window", "laptop", "phone", "monitor"]) {
+			expect(at(0, frame)).toBeCloseTo(12 / 1080, 10);
+		}
+	});
+
+	it("gives a 4K take the same roundness as a 1080p one", () => {
+		// The fraction used to be taken off the output's short side, which follows the
+		// source: a 2160p take got half the corner of a 1080p one. The native side scales
+		// the fixed reference by the screen, so the same fraction is the same look.
 		const at = (w: number, h: number) => {
 			const doc = makeDoc({
 				assets: [
@@ -1108,29 +1276,45 @@ describe("buildSceneDescription.settings mapping", () => {
 				],
 				legacyEditor: { borderRadius: 24 },
 			});
-			const scene = buildSceneDescription(doc);
-			return scene.effects.roundnessFrac * Math.min(scene.output.width, scene.output.height);
+			return buildSceneDescription(doc).effects.roundnessFrac;
 		};
-		expect(at(1920, 1080)).toBeCloseTo(24, 6);
-		expect(at(3840, 2160)).toBeCloseTo(24, 6);
+		expect(at(3840, 2160)).toBe(at(1920, 1080));
+		expect(at(1920, 1080) * 1080).toBeCloseTo(24, 6);
 	});
 
-	it("webcamSize is webcamSizeToFraction(webcamSizePreset) — clamp(preset,10,50)/100", () => {
+	it("webcamSize is webcamSizeToFraction(webcamSizePreset) — clamp(preset,15,50)/100", () => {
 		const doc = makeDoc({ legacyEditor: { webcamSizePreset: 33.4 } });
 		expect(buildSceneDescription(doc).layout.webcamSize).toBeCloseTo(0.334, 5);
 	});
 
-	it("webcamSize clamps below 10 and above 50", () => {
+	it("webcamSize clamps below 15 and above 60", () => {
 		const low = makeDoc({ legacyEditor: { webcamSizePreset: 2 } });
 		const high = makeDoc({ legacyEditor: { webcamSizePreset: 90 } });
-		expect(buildSceneDescription(low).layout.webcamSize).toBeCloseTo(0.1, 5);
-		expect(buildSceneDescription(high).layout.webcamSize).toBeCloseTo(0.5, 5);
+		expect(buildSceneDescription(low).layout.webcamSize).toBeCloseTo(0.15, 5);
+		expect(buildSceneDescription(high).layout.webcamSize).toBeCloseTo(0.6, 5);
+	});
+
+	it("carries the camera's anchor, the point its zoom-time shrink keeps fixed", () => {
+		expect(buildSceneDescription(makeDoc({})).layout.webcamAnchor).toBe("bottom-right");
+		const top = makeDoc({ legacyEditor: { webcamAnchor: "top" } });
+		expect(buildSceneDescription(top).layout.webcamAnchor).toBe("top");
+		// An older project stored a free position: it reads as the anchor nearest to it.
+		const legacy = makeDoc({ legacyEditor: { webcamPosition: { cx: 0.1, cy: 0.9 } } });
+		expect(buildSceneDescription(legacy).layout.webcamAnchor).toBe("bottom-left");
 	});
 
 	it("keeps the flat cursor for an older project and carries the 3D cursor switch", () => {
 		expect(buildSceneDescription(makeDoc({ legacyEditor: {} })).cursor.model3d).toBe(false);
 		const on = makeDoc({ legacyEditor: { cursorModel3d: true } });
 		expect(buildSceneDescription(on).cursor.model3d).toBe(true);
+	});
+
+	it("carries the click impact switch, omitted when off", () => {
+		const on = makeDoc({ legacyEditor: { cursorClickImpact: true } });
+		expect(buildSceneDescription(on).cursor.clickImpact).toBe(true);
+		// Omitted, not `false`: scene payloads without the option stay byte-identical.
+		const off = buildSceneDescription(makeDoc({ legacyEditor: {} })).cursor;
+		expect("clickImpact" in off).toBe(false);
 	});
 
 	it("carries depth of field: on by default, off when the project turns it off", () => {
@@ -1142,19 +1326,32 @@ describe("buildSceneDescription.settings mapping", () => {
 	it("maps the cursor sub-settings", () => {
 		const doc = makeDoc({
 			legacyEditor: {
-				cursorSize: 4,
+				cursorSize: 2.5,
 				cursorSmoothing: 0.9,
 				cursorMotionBlur: 0.5,
 				cursorClickBounce: 1.5,
 				cursorClipToBounds: true,
+				cursorAsArrow: ["text", "pointer"],
 			},
 		});
 		const cursor = buildSceneDescription(doc).cursor;
-		expect(cursor.size).toBe(4);
+		expect(cursor.size).toBe(2.5);
 		expect(cursor.smoothing).toBe(0.9);
 		expect(cursor.motionBlur).toBe(0.5);
 		expect(cursor.clickBounce).toBe(1.5);
-		expect(cursor.clipToBounds).toBe(true);
+		// The option is gone: a project that had it on now overflows like every other one.
+		expect(cursor.clipToBounds).toBe(false);
+		expect(cursor.asArrow).toEqual(["pointer", "text"]);
+	});
+
+	// The single switch that came before the kinds: on drew every one of them as the arrow. With
+	// neither, only the hand keeps its own sprite.
+	it("reads the old always-arrow switch as every cursor kind", () => {
+		const on = makeDoc({ legacyEditor: { cursorAlwaysArrow: true } });
+		expect(buildSceneDescription(on).cursor.asArrow).toEqual(CURSOR_KIND_IDS);
+		expect(buildSceneDescription(makeDoc({})).cursor.asArrow).toEqual(
+			CURSOR_KIND_IDS.filter((kind) => kind !== "pointer"),
+		);
 	});
 
 	it("maps show / theme / shape / mirror through to layout+cursor", () => {
@@ -1168,11 +1365,14 @@ describe("buildSceneDescription.settings mapping", () => {
 			},
 		});
 		const scene = buildSceneDescription(doc);
-		expect(scene.layout.webcamShape).toBe("circle");
+		// An old circle is a square camera, fully round.
+		expect(scene.layout.webcamShape).toBe("square");
 		expect(scene.layout.webcamMirror).toBe(true);
 		expect(scene.cursor.show).toBe(false);
 		expect(scene.cursor.autoHide).toBe(true);
-		expect(scene.cursor.theme).toBe("macos-dark");
+		// A theme the app does not ship reaches the compositor as the default, the only
+		// theme it builds the modelled cursor for.
+		expect(scene.cursor.theme).toBe(DEFAULT_CURSOR_THEME_ID);
 	});
 
 	it("populates layout.webcamRect with computeCompositeLayout's webcamRect, in fractions", () => {
@@ -1201,7 +1401,7 @@ describe("buildSceneDescription.settings mapping", () => {
 					timelineEndSec: 1,
 				}),
 			],
-			legacyEditor: { webcamSizePreset: 25 },
+			legacyEditor: { webcamSizePreset: 25, webcamMaskShape: "rectangle" },
 		});
 		const scene = buildSceneDescription(doc);
 		const rect = scene.layout.webcamRect;
@@ -1264,7 +1464,7 @@ describe("buildSceneDescription.settings mapping", () => {
 					timelineEndSec: 1,
 				}),
 			],
-			legacyEditor: { webcamSizePreset: 25 },
+			legacyEditor: { webcamSizePreset: 25, webcamMaskShape: "rectangle" },
 		});
 		const scene = buildSceneDescription(doc);
 		const rect = scene.layout.webcamRect;
@@ -1399,11 +1599,15 @@ describe("buildSceneDescription.settings mapping", () => {
 		);
 	});
 
-	it("still honours the shape picker under picture-in-picture", () => {
+	it("still honours the shape and roundness under picture-in-picture", () => {
 		const scene = buildSceneDescription(
-			docWithCamera({ webcamLayoutPreset: "picture-in-picture", webcamMaskShape: "circle" }),
+			docWithCamera({
+				webcamLayoutPreset: "picture-in-picture",
+				webcamMaskShape: "square",
+				webcamRoundness: 1,
+			}),
 		);
-		expect(scene.layout.webcamShape).toBe("circle");
+		expect(scene.layout.webcamShape).toBe("square");
 		// A circle is a rounded rect whose radius is HALF its (square) box — that exact
 		// fraction is what makes the native rounded-box SDF draw a disc rather than a
 		// blob, at any render size.
@@ -1450,6 +1654,8 @@ describe("buildSceneDescription.output", () => {
 					timelineEndSec: 2,
 				}),
 			],
+			// Size is the point here; a fixed 16:9 keeps Auto's padding out of the numbers.
+			legacyEditor: { aspectRatio: "16:9" },
 		});
 		const { output } = buildSceneDescription(doc);
 		expect(output).toEqual({ width: 3840, height: 2160, fps: null });
@@ -1469,6 +1675,8 @@ describe("buildSceneDescription.output", () => {
 					timelineEndSec: 1,
 				}),
 			],
+			// Size is the point here; a fixed 16:9 keeps Auto's padding out of the numbers.
+			legacyEditor: { aspectRatio: "16:9" },
 		});
 		const { output } = buildSceneDescription(doc);
 		expect(output).toEqual({ width: 1920, height: 1080, fps: null });
@@ -1493,6 +1701,8 @@ describe("buildSceneDescription.output", () => {
 					timelineEndSec: 1,
 				}),
 			],
+			// Size is the point here; a fixed 16:9 keeps Auto's padding out of the numbers.
+			legacyEditor: { aspectRatio: "16:9" },
 		});
 		const { output } = buildSceneDescription(doc);
 		expect(output).toEqual({ width: 2560, height: 1440, fps: null });
@@ -1528,6 +1738,43 @@ describe("buildSceneDescription.output", () => {
 		// derived from the 9:16 ratio — portrait, not the source's native 16:9.
 		expect(output.width).toBe(1080);
 		expect(output.height).toBe(1920);
+	});
+});
+
+describe("buildSceneDescription with the Auto format", () => {
+	// End to end through the scene the compositor draws: Auto shapes `output` around the
+	// recording, and the screen rect sits in it with one margin on all four sides.
+	it("frames the recording with an even border", () => {
+		const asset = makeAsset({
+			id: "a",
+			originalPath: "/a.mp4",
+			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+		});
+		const clip = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 1,
+			timelineStartSec: 0,
+			timelineEndSec: 1,
+		});
+		const scene = buildSceneDescription(
+			makeDoc({
+				assets: [asset],
+				clips: [clip],
+				legacyEditor: { aspectRatio: "auto", padding: 50 },
+			}),
+		);
+		const { width, height } = scene.output;
+		expect({ width, height }).toEqual({ width: 1920, height: 1184 });
+		const r = scene.layout.screenRect;
+		if (!r) throw new Error("screenRect absent");
+		const left = r.x * width;
+		const top = r.y * height;
+		const right = width - (r.x + r.width) * width;
+		const bottom = height - (r.y + r.height) * height;
+		for (const side of [left, right, bottom]) expect(Math.abs(side - top)).toBeLessThanOrEqual(1.5);
+		expect(top).toBeCloseTo(0.1 * 1184, -1);
 	});
 });
 
@@ -1685,7 +1932,8 @@ describe("buildSceneDescription.layout.layoutByClip", () => {
 					timelineEndSec: 8,
 				}),
 			],
-			legacyEditor: { webcamLayoutPreset: preset },
+			// A fixed frame: under Auto the frame is shaped around the camera clip's block.
+			legacyEditor: { webcamLayoutPreset: preset, aspectRatio: "16:9" },
 		});
 	};
 
@@ -1785,6 +2033,28 @@ describe("buildSceneDescription.annotations", () => {
 		});
 	});
 
+	it("draws a font that does not ship in the default, and keeps one that does", () => {
+		// The compositor only has the embedded families: an annotation saved with any other
+		// name would draw whatever the machine falls back to.
+		const annotation = (id: string, fontFamily: string) => ({
+			id,
+			startMs: 0,
+			endMs: 1000,
+			type: "text" as const,
+			content: "Hello",
+			position: { x: 10, y: 10 },
+			size: { width: 40, height: 10 },
+			style: { ...style, fontFamily },
+			zIndex: 0,
+		});
+		const scene = buildSceneDescription(
+			docWithAnnotations([annotation("old", "Permanent Marker"), annotation("new", "Lora")]),
+		);
+		const family = (id: string) => scene.annotations.find((a) => a.id === id)?.text?.fontFamily;
+		expect(family("old")).toBe("Inter");
+		expect(family("new")).toBe("Lora");
+	});
+
 	it("carries the text payload, reading the field the inspector actually writes", () => {
 		const scene = buildSceneDescription(
 			docWithAnnotations([
@@ -1815,6 +2085,32 @@ describe("buildSceneDescription.annotations", () => {
 			textAlign: "left",
 			animation: "fade",
 		});
+	});
+
+	it("bottom-anchors caption annotations and leaves every other annotation centred", () => {
+		// `openscreen captions` writes these into the editor's caption box; pinned by the bottom
+		// edge, a caption that wraps grows upward from the inset instead of off the frame.
+		const text = (id: string, extra: object) => ({
+			id,
+			startMs: 0,
+			endMs: 1000,
+			type: "text" as const,
+			content: id,
+			position: { x: 0, y: 0 },
+			size: { width: 10, height: 10 },
+			style,
+			zIndex: 0,
+			...extra,
+		});
+		const scene = buildSceneDescription(
+			docWithAnnotations([
+				text("caption", { annotationSource: "auto-caption" }),
+				text("plain", {}),
+			]),
+		);
+		const byId = Object.fromEntries(scene.annotations.map((a) => [a.id, a.text]));
+		expect(byId.caption?.verticalAlign).toBe("bottom");
+		expect(byId.plain).not.toHaveProperty("verticalAlign");
 	});
 
 	it("falls back to textContent when content is empty", () => {
@@ -2068,7 +2364,12 @@ describe("buildSceneDescription.captions", () => {
 			const base = docWithCaptions(true);
 			const scene = buildSceneDescription({
 				...base,
-				legacyEditor: { ...(base.legacyEditor as Record<string, unknown>), padding },
+				// A fixed frame: under Auto the frame itself reshapes with the padding.
+				legacyEditor: {
+					...(base.legacyEditor as Record<string, unknown>),
+					padding,
+					aspectRatio: "16:9",
+				},
 			} as AxcutDocument);
 			const caption = scene.annotations[0];
 			return {
@@ -2089,7 +2390,108 @@ describe("buildSceneDescription.captions", () => {
 		expect(rects[2].fontSizeRel).toBe(rects[0].fontSizeRel);
 	});
 
-	it("leaves the space key off a real annotation entirely", () => {
+	it("holds an annotation placed on the frame still while padding shrinks the footage", () => {
+		// The annotation twin of the caption test above: a text on the frame goes wherever the
+		// user put it, and the padding slider sizes the footage, not it.
+		const text = (padding: number) => {
+			const base = docWithCaptions(false);
+			const scene = buildSceneDescription({
+				...base,
+				annotations: [
+					{
+						id: "ann1",
+						startMs: 0,
+						endMs: 1000,
+						type: "text",
+						content: "hi",
+						space: "frame",
+						position: { x: 2, y: 3 },
+						size: { width: 12, height: 6 },
+						style: {
+							color: "#fff",
+							backgroundColor: "transparent",
+							fontSize: 48,
+							fontFamily: "Inter",
+							fontWeight: "bold",
+							fontStyle: "normal",
+							textDecoration: "none",
+							textAlign: "center",
+							textAnimation: "none",
+						},
+						zIndex: 1,
+					},
+				],
+				legacyEditor: {
+					...(base.legacyEditor as Record<string, unknown>),
+					padding,
+					aspectRatio: "16:9",
+				},
+			} as AxcutDocument);
+			const annotation = scene.annotations.find((a) => a.id.startsWith("ann1"));
+			if (!annotation) throw new Error("annotation absente");
+			return {
+				screenWidth: scene.layout.screenRect?.width,
+				space: annotation.space,
+				rect: [annotation.x, annotation.y, annotation.w, annotation.h],
+				fontSizeRel: annotation.text?.fontSizeRel,
+			};
+		};
+		const [flush, padded] = [text(0), text(100)];
+		expect(padded.screenWidth).not.toBe(flush.screenWidth);
+		expect(flush.space).toBe("frame");
+		// Over the padding, where the footage is not: 2 % from the frame's left edge.
+		expect(padded.rect).toEqual([0.02, 0.03, 0.12, 0.06]);
+		expect(padded).toEqual({ ...flush, screenWidth: padded.screenWidth });
+	});
+
+	it("names the footage an annotation sits on, in fractions of the frame", () => {
+		const base = docWithCaptions(false);
+		const doc = {
+			...base,
+			annotations: [
+				{
+					id: "ann1",
+					startMs: 0,
+					endMs: 1000,
+					type: "blur",
+					content: "",
+					position: { x: 10, y: 10 },
+					size: { width: 20, height: 10 },
+					style: {
+						color: "#fff",
+						backgroundColor: "transparent",
+						fontSize: 32,
+						fontFamily: "Inter",
+						fontWeight: "normal",
+						fontStyle: "normal",
+						textDecoration: "none",
+						textAlign: "center",
+					},
+					zIndex: 1,
+				},
+			],
+			legacyEditor: {
+				...(base.legacyEditor as Record<string, unknown>),
+				padding: 50,
+				aspectRatio: "16:9",
+			},
+		} as AxcutDocument;
+		const rect = annotationFootageRect(doc, "ann1");
+		expect(rect).toEqual(buildSceneDescription(doc).layout.screenRect);
+		// Padded in: the footage is smaller than the frame and centred in it.
+		expect(rect?.width).toBeLessThan(1);
+		expect(rect?.x).toBeCloseTo((1 - (rect?.width ?? 0)) / 2, 6);
+		expect(annotationFootageRect(doc, "nope")).toBeNull();
+		// Anchored to a clip that is no longer on the timeline: no footage of its own, and no
+		// other clip's layout borrowed in its place.
+		const orphan = {
+			...doc,
+			annotations: [{ ...doc.annotations[0], clipId: "gone", sourceStartSec: 0, sourceEndSec: 1 }],
+		} as AxcutDocument;
+		expect(annotationFootageRect(orphan, "ann1")).toBeNull();
+	});
+
+	it("leaves the space key off an annotation still on the footage", () => {
 		// Not `space: undefined` — an explicit key would change the annotation payload that
 		// shipped binaries already parse. `in` is the only check that tells them apart.
 		const doc = makeDoc({
@@ -2182,7 +2584,24 @@ describe("buildSceneDescription.audioTracks", () => {
 				trimEndSec: 12,
 				fadeInSec: 0,
 				fadeOutSec: 0,
+				kind: "music",
 			},
+		]);
+	});
+
+	it("tells the mixer which tracks are voice, so a voiceover is levelled and a bed is not", () => {
+		// `mix_external_tracks` brings a voiceover to the loudness target like the recording's
+		// own audio and leaves music at the level the user set; the kind is how it knows.
+		const doc = makeDoc({
+			assets: [audioAsset],
+			audioTracks: [
+				track,
+				{ ...track, id: "vo1", kind: "voiceover" as const, startMs: 20_000, endMs: 25_000 },
+			],
+		});
+		expect(buildSceneDescription(doc).audioTracks.map((entry) => entry.kind)).toEqual([
+			"music",
+			"voiceover",
 		]);
 	});
 
@@ -2290,6 +2709,7 @@ describe("buildSceneDescription.audioTracks", () => {
 				trimEndSec: 8,
 				fadeInSec: 0,
 				fadeOutSec: 0,
+				kind: "music",
 			},
 		]);
 	});

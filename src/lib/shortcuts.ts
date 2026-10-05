@@ -184,6 +184,25 @@ export function formatBinding(binding: ShortcutBinding, isMac: boolean): string 
 	return parts.join(" + ");
 }
 
+/**
+ * The label a fixed row shows. Rows bound to the primary modifier are built from their bindings,
+ * so macOS gets ⌘ like the configurable rows; the rest keep their hand-written `display`.
+ */
+export function formatFixedShortcut(shortcut: FixedShortcut, isMac: boolean): string {
+	if (!shortcut.bindings.some((binding) => binding.ctrl)) return shortcut.display;
+	return shortcut.bindings.map((binding) => formatBinding(binding, isMac)).join(" / ");
+}
+
+/**
+ * The chip a tooltip shows for a fixed shortcut: its first binding only. Redo has two
+ * (Ctrl + Shift + Z, Ctrl + Y), and a tooltip names one, so the label a dialog row shows
+ * (`formatFixedShortcut`) would be too long for it. `undefined` when the row has no binding.
+ */
+export function formatFirstFixedBinding(i18nKey: string, isMac: boolean): string | undefined {
+	const first = FIXED_SHORTCUTS.find((shortcut) => shortcut.i18nKey === i18nKey)?.bindings[0];
+	return first ? formatBinding(first, isMac) : undefined;
+}
+
 export function mergeWithDefaults(partial: Partial<ShortcutsConfig>): ShortcutsConfig {
 	const merged = { ...DEFAULT_SHORTCUTS };
 	for (const action of SHORTCUT_ACTIONS) {

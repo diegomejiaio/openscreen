@@ -6,8 +6,14 @@ import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 
+import {
+	alignWordsOnEmissions,
+	type EmissionsJson,
+	emissionRegions,
+	parseEmissions,
+} from "./ctcAlign";
 import { resolveBinaryPath } from "./gpuDetector";
-import { snapWordBoundariesToAudio } from "./snapWordBoundaries";
+import { anchorWordsOnSpeech } from "./snapWordBoundaries";
 import type {
 	SttBackend,
 	SttPhraseSegment,
@@ -59,6 +65,8 @@ const REQUEST_TIMEOUT_MS = 280_000;
 export interface WhisperServerStartOptions {
 	/** Absolute path to the GGML model file (e.g. ggml-small-q8_0.bin). */
 	modelPath: string;
+	/** Absolute path to the Silero VAD GGML model file (e.g. ggml-silero-v6.2.0.bin). */
+	vadModelPath?: string | null;
 	/** Externally-resolved binary path (skips gpuDetector on startup); null = auto. */
 	binaryPath?: string | null;
 	/** Externally-resolved backend (logs only); null = auto. */
@@ -74,11 +82,20 @@ export interface WhisperServerStatus {
 	lastError: string | null;
 }
 
+export interface TranscribeOptions {
+	samples: Float32Array;
+	language?: string;
+	/** The aligner model for a language, or null for none (see `transcribe`). */
+	alignerFor?: (language: string) => Promise<string | null>;
+}
+
 /** Per-word entry inside a whisper-stt-server `/inference` JSON segment. */
 interface WhisperJsonWord {
 	word?: string;
 	start?: number;
 	end?: number;
+	/** End of the word's first token: always inside the word (see snapWordBoundaries.ts). */
+	anchor?: number;
 	probability?: number;
 }
 
@@ -110,6 +127,8 @@ interface WhisperJsonResponse {
 	detected_language?: string;
 	backend?: string;
 	timing?: WhisperJsonTiming;
+	/** Silero VAD's speech intervals; absent when the helper runs without the VAD model. */
+	speech?: Array<{ start?: number | string; end?: number | string }>;
 }
 
 export class WhisperServerManager {
@@ -228,7 +247,10 @@ export class WhisperServerManager {
 			throw new Error("whisper-stt-server manager is shutting down");
 		}
 		if (this.process && this.port) {
-			return { port: this.port, backend: this.backend ?? options.backend ?? "whispercpp-cpu" };
+			return {
+				port: this.port,
+				backend: this.backend ?? options.backend ?? "whispercpp-cpu",
+			};
 		}
 
 		const resolved = options.binaryPath
@@ -271,6 +293,9 @@ export class WhisperServerManager {
 				"--threads",
 				String(Math.max(1, os.cpus().length)),
 			];
+			if (options.vadModelPath && existsSync(options.vadModelPath)) {
+				args.push("--vad-model", options.vadModelPath);
+			}
 			if (forceCpu) args.push("--cpu");
 			const child = spawn(binaryPath, args, { stdio: ["ignore", "pipe", "pipe"] });
 			const activeBackend: SttBackend = forceCpu ? "whispercpp-cpu" : resolved.backend;
@@ -429,6 +454,33 @@ export class WhisperServerManager {
 		}
 	}
 
+	/**
+	 * The CTC aligner's letter scores for `regions` of the same upload
+	 * (`/emissions`, see ctcAlign.ts). Throws on any failure, including a helper
+	 * built before the endpoint existed (404): the caller keeps whisper's times.
+	 */
+	private async runEmissions(opts: {
+		wavPath: string;
+		modelPath: string;
+		regions: Array<[number, number]>;
+	}): Promise<EmissionsJson> {
+		const form = new FormData();
+		const fileBuffer = await readFile(opts.wavPath);
+		form.set("file", new Blob([fileBuffer], { type: "audio/wav" }), path.basename(opts.wavPath));
+		form.set("model", opts.modelPath);
+		form.set("regions", JSON.stringify(opts.regions));
+		const res = await fetch(`${this.baseUrl()}/emissions`, {
+			method: "POST",
+			body: form,
+			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+		});
+		if (!res.ok) {
+			const text = await res.text().catch(() => "");
+			throw new Error(`whisper-stt-server /emissions HTTP ${res.status}: ${text.slice(0, 512)}`);
+		}
+		return (await res.json()) as EmissionsJson;
+	}
+
 	private async runMultipartInfer(opts: {
 		wavPath: string;
 		language?: string;
@@ -529,8 +581,16 @@ export class WhisperServerManager {
 		return { elapsedSec, audioSec, rtf };
 	}
 
-	/** Run one transcription; serializes concurrent callers. */
-	async transcribe(opts: { samples: Float32Array; language?: string }): Promise<{
+	/**
+	 * Run one transcription; serializes concurrent callers.
+	 *
+	 * `alignerFor` resolves the CTC aligner model for the language whisper
+	 * detected, or null when there is none or it is not ready yet (it must not
+	 * wait on the network: no download runs inside a chunk, see SttManager). With one,
+	 * the words are re-timed on it before their phrase edges go on the speech
+	 * (ctcAlign.ts); any failure there keeps whisper's own times.
+	 */
+	async transcribe(opts: TranscribeOptions): Promise<{
 		segments: SttPhraseSegment[];
 		wordSegments: SttWordSegment[];
 		detectedLanguage: string;
@@ -543,7 +603,7 @@ export class WhisperServerManager {
 		return task;
 	}
 
-	private async transcribeImpl(opts: { samples: Float32Array; language?: string }): Promise<{
+	private async transcribeImpl(opts: TranscribeOptions): Promise<{
 		segments: SttPhraseSegment[];
 		wordSegments: SttWordSegment[];
 		detectedLanguage: string;
@@ -562,26 +622,66 @@ export class WhisperServerManager {
 					return { text, startSec, endSec: Math.max(endSec, startSec + 0.05) };
 				})
 				.filter((s) => s.text.length > 0);
-			// whisper.cpp's DTW boundaries run ~80–150 ms behind the audio, which the
-			// transcript editor turns into imprecise trims (see snapWordBoundaries.ts).
-			// Re-anchor them on the same samples whisper was given.
-			const wordSegments: SttWordSegment[] = snapWordBoundariesToAudio(
-				raw
-					.flatMap((seg) =>
-						(seg.words ?? []).map((w) => {
-							const word = (w.word ?? "").trim();
-							const startSec = this.toSec(w.start, 0);
-							const endSec = this.toSec(w.end, startSec + 0.05);
-							const confidence = typeof w.probability === "number" ? w.probability : undefined;
-							return { word, startSec, endSec: Math.max(startSec + 0.02, endSec), confidence };
-						}),
-					)
-					.filter((w) => w.word.length > 0),
-				opts.samples,
-			);
+			const speech = json.speech?.map((s) => ({
+				startSec: this.toSec(s.start, 0),
+				endSec: this.toSec(s.end, 0),
+			}));
 			const detectedLanguage = json.detected_language ?? json.language ?? "auto";
+			let words = raw
+				.flatMap((seg) =>
+					(seg.words ?? []).map((w) => {
+						const word = (w.word ?? "").trim();
+						const startSec = this.toSec(w.start, 0);
+						const endSec = this.toSec(w.end, startSec + 0.05);
+						const anchorSec = this.toSec(w.anchor, startSec);
+						const confidence = typeof w.probability === "number" ? w.probability : undefined;
+						return {
+							word,
+							startSec,
+							endSec: Math.max(startSec + 0.02, endSec),
+							anchorSec,
+							confidence,
+						};
+					}),
+				)
+				.filter((w) => w.word.length > 0);
+			let alignSec = 0;
 			const backend = this.toBackend(json.backend);
+			// GPU only. On the CPU the aligner's forward pass costs +29% (English) to
+			// +58% (French) of a transcription, against +9% to +14% on Vulkan, and
+			// character-level DTW alone is already within 16 ms median there
+			// (tools/stt-eval/word-timing, issue #948). Not asking also means a
+			// CPU-only machine never downloads the model.
+			if (speech?.length && words.length && opts.alignerFor && backend !== "whispercpp-cpu") {
+				try {
+					const modelPath = await opts.alignerFor(detectedLanguage);
+					if (modelPath) {
+						const reply = await this.runEmissions({
+							wavPath,
+							modelPath,
+							regions: emissionRegions(speech, opts.samples.length / 16_000),
+						});
+						const emissions = parseEmissions(reply);
+						if (!emissions) throw new Error("unreadable /emissions reply");
+						words = alignWordsOnEmissions(words, speech, emissions);
+						alignSec = this.toSec(reply.elapsed_s, 0);
+					}
+				} catch (error) {
+					console.warn(
+						`[stt] word aligner failed, keeping whisper's word times: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
+			// Phrase edges go on the helper's speech intervals, aligner or not: the
+			// VAD is the better judge of where speech starts after a pause (see
+			// snapWordBoundaries.ts).
+			const wordSegments: SttWordSegment[] = anchorWordsOnSpeech(words, speech);
 			const timing = this.toTiming(json.timing);
+			// The aligner is part of what this chunk cost.
+			if (timing && alignSec > 0) {
+				timing.elapsedSec += alignSec;
+				timing.rtf = timing.elapsedSec / timing.audioSec;
+			}
 			return { segments, wordSegments, detectedLanguage, backend, timing };
 		} finally {
 			await cleanupWav(wavPath);

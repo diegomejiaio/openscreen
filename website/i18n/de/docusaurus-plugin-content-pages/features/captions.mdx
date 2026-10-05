@@ -9,11 +9,16 @@ keywords:
   - automatische untertitel bildschirmaufnahme
 ---
 
+import DemoLoop from "@site/src/components/DemoLoop";
+import DemoLoopPair from "@site/src/components/DemoLoop/Pair";
+
 # Ein Bildschirmrekorder mit Untertiteln vom eigenen Rechner
 
 OpenScreen ist ein kostenloser, unter der MIT-Lizenz stehender Bildschirmrekorder mit Untertiteln für Windows, macOS und Linux. Er transkribiert deine Aufnahme auf deinem eigenen Computer mit Whisper, nach einem einmaligen Modell-Download von etwa 264 MB, und brennt gestaltete Untertitel in das exportierte Video ein. Brauchst du separate SRT- oder VTT-Untertiteldateien für eine Kursplattform oder eine Barrierefreiheitsvorgabe, ist Cap oder Camtasia die bessere Wahl.
 
 Diese Seite wird vom OpenScreen-Projekt veröffentlicht. Die Angaben zu Cap, Camtasia und Screen Studio stammen von cap.so, techsmith.com und screen.studio und wurden im September 2026 geprüft. Die Quellen stehen am Ende.
+
+<DemoLoop name="automatic-subtitles" />
 
 ## Auf einen Blick {#at-a-glance}
 
@@ -52,11 +57,18 @@ Untertitel sind eine Live-Ansicht des Transkripts, keine Kopie davon. Schneidest
 
 Vorschau und Export nutzen dasselbe Layout, sodass die Untertitel, die du siehst, dieselben sind, die in das Video eingebrannt werden. **Show captions** schaltet sie für einen Export ohne Untertitel ab. Vollständige Referenz in [Untertitel & Transkript](/docs/captions/).
 
+<DemoLoop name="caption-styles" />
+
 ### Schneiden durch Löschen von Wörtern {#cutting-by-deleting-words}
 
 Das Panel **Transcript** zeigt die Wörter jedes Clips auf der Zeitleiste. Wähle ein Wort oder eine Passage aus und drücke Entf: Diese Stelle wird aus Wiedergabe und Export geschnitten, wie eine Kürzung auf der Zeitleiste. Geschnittene Wörter erscheinen durchgestrichen, und du kannst sie wiederherstellen. Stille wird im Text markiert und kann auf dieselbe Weise geschnitten oder wiederhergestellt werden.
 
 Whisper meldet Wortzeiten etwas zu spät. OpenScreen zieht jede Wortgrenze zurück auf das Audio, sodass ein Schnitt dort beginnt, wo das gesprochene Wort beginnt, statt eine Silbe später. Siehe [Transkriptbearbeitung](/docs/captions/#transcript-editing).
+
+<DemoLoopPair>
+  <DemoLoop name="edit-by-transcript" />
+  <DemoLoop name="tighten-pauses" />
+</DemoLoopPair>
 
 ### Übersetzung mit eigenem Schlüssel {#translation-with-your-own-key}
 

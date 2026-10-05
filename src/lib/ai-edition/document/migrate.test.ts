@@ -16,7 +16,7 @@ function makeV2Project(overrides: Partial<EditorProjectData> = {}): EditorProjec
 			wallpaper: "/wallpapers/wallpaper1.jpg",
 			wallpaperMotion: "none",
 			shadowIntensity: 0,
-			showBlur: false,
+			backgroundBlur: 0,
 			motionBlurAmount: 0,
 			depthOfField: true,
 			borderRadius: 0,
@@ -51,7 +51,7 @@ describe("migrateProjectDataToAxcutDocument", () => {
 	it("produces a current-schema document with one asset and one clip from a v2 single-recording project", () => {
 		const doc = migrateProjectDataToAxcutDocument(makeV2Project());
 
-		expect(doc.schemaVersion).toBe(7);
+		expect(doc.schemaVersion).toBe(8);
 		expect(doc.assets).toHaveLength(1);
 		const asset = doc.assets[0];
 		expect(asset.kind).toBe("video");
@@ -110,11 +110,10 @@ describe("migrateProjectDataToAxcutDocument", () => {
 							depth: 4,
 							focus: { cx: 1.5, cy: -0.5 },
 							focusMode: "manual",
-							rotationPreset: "iso",
+							rotationPreset: "iso" as never,
 							customScale: 2.5,
 							source: "manual",
 							hideCursor: true,
-							clickImpact: true,
 						},
 					],
 				},
@@ -128,9 +127,30 @@ describe("migrateProjectDataToAxcutDocument", () => {
 		expect(z.startMs).toBe(0);
 		expect(z.endMs).toBe(2000);
 		expect(z.customScale).toBe(2.5);
-		expect(z.rotationPreset).toBe("iso");
+		// `iso`, retired, reads as Left: the angle that kept its look.
+		expect(z.rotationPreset).toBe("left");
 		expect(z.hideCursor).toBe(true);
-		expect(z.clickImpact).toBe(true);
+	});
+
+	// Up to v1.13.0 the click impact was a zoom option; it is the cursor setting now.
+	it("turns a zoom's click impact into the cursor setting", () => {
+		const zoom = {
+			id: "z_1",
+			startMs: 0,
+			endMs: 2000,
+			depth: 3 as const,
+			focus: { cx: 0.5, cy: 0.5 },
+		};
+		const doc = migrateProjectDataToAxcutDocument(
+			makeV2Project({
+				editor: {
+					...makeV2Project().editor,
+					zoomRegions: [{ ...zoom, clickImpact: true } as never],
+				},
+			}),
+		);
+		expect(getEditorSettings(doc).cursor.clickImpact).toBe(true);
+		expect("clickImpact" in doc.zoomRanges[0]).toBe(false);
 	});
 
 	it("converts annotationRegions to seconds with type and content preserved", () => {
@@ -170,6 +190,76 @@ describe("migrateProjectDataToAxcutDocument", () => {
 		expect(a.startMs).toBe(1000);
 		expect(a.endMs).toBe(3000);
 		expect(a.annotationSource).toBe("auto-caption");
+	});
+
+	it("carries a non-identity editor.cropRegion onto the migrated clip", () => {
+		const v2 = makeV2Project();
+		v2.editor.cropRegion = { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+		const doc = migrateProjectDataToAxcutDocument(v2);
+		expect(doc.timeline.clips).toHaveLength(1);
+		expect(doc.timeline.clips[0]?.cropRegion).toEqual({
+			x: 0.25,
+			y: 0.25,
+			width: 0.5,
+			height: 0.5,
+		});
+	});
+
+	it("leaves the migrated clip without a cropRegion for the identity crop", () => {
+		const doc = migrateProjectDataToAxcutDocument(makeV2Project());
+		expect(doc.timeline.clips[0]?.cropRegion).toBeUndefined();
+	});
+
+	it("leaves the migrated clip without a cropRegion when editor.cropRegion is missing", () => {
+		const v2 = makeV2Project();
+		delete (v2.editor as Partial<typeof v2.editor>).cropRegion;
+		const doc = migrateProjectDataToAxcutDocument(v2);
+		expect(doc.timeline.clips[0]?.cropRegion).toBeUndefined();
+	});
+
+	it.each([
+		["NaN", { x: Number.NaN, y: 0, width: 0.5, height: 0.5 }],
+		["Infinity", { x: 0, y: 0, width: Number.POSITIVE_INFINITY, height: 0.5 }],
+		["-Infinity", { x: 0, y: Number.NEGATIVE_INFINITY, width: 0.5, height: 0.5 }],
+	])("ignores a cropRegion with a %s component", (_label, cropRegion) => {
+		const v2 = makeV2Project();
+		v2.editor.cropRegion = cropRegion;
+		const doc = migrateProjectDataToAxcutDocument(v2);
+		expect(doc.timeline.clips[0]?.cropRegion).toBeUndefined();
+	});
+
+	it("clamps an out-of-range cropRegion into the unit square", () => {
+		const v2 = makeV2Project();
+		v2.editor.cropRegion = { x: -0.2, y: 0.5, width: 0.6, height: 0.8 };
+		const doc = migrateProjectDataToAxcutDocument(v2);
+		expect(doc.timeline.clips[0]?.cropRegion).toEqual({ x: 0, y: 0.5, width: 0.6, height: 0.5 });
+	});
+
+	it("drops a cropRegion that clamps back to the identity", () => {
+		const v2 = makeV2Project();
+		v2.editor.cropRegion = { x: -1, y: -1, width: 3, height: 3 };
+		const doc = migrateProjectDataToAxcutDocument(v2);
+		expect(doc.timeline.clips[0]?.cropRegion).toBeUndefined();
+	});
+
+	it.each([
+		["zero width", { x: 0.2, y: 0.2, width: 0, height: 0.5 }],
+		["negative height", { x: 0.2, y: 0.2, width: 0.5, height: -0.1 }],
+		["x at the right edge", { x: 1.5, y: 0.2, width: 0.5, height: 0.5 }],
+	])("ignores a cropRegion with %s", (_label, cropRegion) => {
+		const v2 = makeV2Project();
+		v2.editor.cropRegion = cropRegion;
+		const doc = migrateProjectDataToAxcutDocument(v2);
+		expect(doc.timeline.clips[0]?.cropRegion).toBeUndefined();
+	});
+
+	it("carries cursor tuning keys from a v2 editor into getEditorSettings", () => {
+		const v2 = makeV2Project();
+		v2.editor.cursorSize = 2.5;
+		v2.editor.cursorClickBounce = 0;
+		const settings = getEditorSettings(migrateProjectDataToAxcutDocument(v2));
+		expect(settings.cursor.size).toBe(2.5);
+		expect(settings.cursor.clickBounce).toBe(0);
 	});
 
 	it("stores the v2 editor shape under legacyEditor for round-trip", () => {
@@ -264,6 +354,16 @@ describe("migrateAxcutDocumentToProjectData", () => {
 		expect(back.editor.webcamMaskShape).toBe("circle");
 	});
 
+	it("reads a legacyEditor blur switch as the amount it drew", () => {
+		const doc = migrateProjectDataToAxcutDocument(makeV2Project());
+		const { backgroundBlur: _amount, ...legacy } = doc.legacyEditor as Record<string, unknown>;
+		const back = migrateAxcutDocumentToProjectData({
+			...doc,
+			legacyEditor: { ...legacy, showBlur: true },
+		});
+		expect(back.editor.backgroundBlur).toBe(0.5);
+	});
+
 	it("defaults wallpaperMotion to none when legacyEditor lacks it", () => {
 		const doc = migrateProjectDataToAxcutDocument(makeV2Project());
 		const { wallpaperMotion: _omitted, ...legacy } = doc.legacyEditor as Record<string, unknown>;
@@ -302,7 +402,6 @@ describe("migrateAxcutDocumentToProjectData", () => {
 						depth: 4,
 						focus: { cx: 0.5, cy: 0.5 },
 						hideCursor: true,
-						clickImpact: true,
 					},
 					{ id: "z_2", startMs: 3000, endMs: 4000, depth: 2, focus: { cx: 0.5, cy: 0.5 } },
 				],
@@ -335,9 +434,6 @@ describe("migrateAxcutDocumentToProjectData", () => {
 		expect(back.editor.zoomRegions[0].startMs).toBe(0);
 		expect(back.editor.zoomRegions[0].endMs).toBe(2000);
 		expect(back.editor.zoomRegions[0].hideCursor).toBe(true);
-		expect(back.editor.zoomRegions[0].clickImpact).toBe(true);
-		expect("clickImpact" in back.editor.zoomRegions[1]).toBe(false);
-		expect("clickImpact" in doc.zoomRanges[1]).toBe(false);
 		expect(back.editor.annotationRegions[0].startMs).toBe(1000);
 		expect(back.editor.annotationRegions[0].endMs).toBe(3000);
 	});
@@ -428,7 +524,7 @@ describe("migrateRawDocumentToCurrent", () => {
 		};
 	}
 
-	it("upgrades a v3 document to v7 (cameraTrack relocated onto the primary asset)", () => {
+	it("upgrades a v3 document to v8 (cameraTrack relocated onto the primary asset)", () => {
 		// Models the full load path: every disk-read site runs the helper, then
 		// the schema parse fills in defaults (cameraTrack: null on non-target
 		// assets). The helper alone is just the upgrader chain; the schema is
@@ -446,13 +542,13 @@ describe("migrateRawDocumentToCurrent", () => {
 				}),
 			),
 		);
-		expect(migrated.schemaVersion).toBe(7);
+		expect(migrated.schemaVersion).toBe(8);
 		expect((migrated as Record<string, unknown>).cameraTrack).toBeUndefined();
 		expect(migrated.assets[0].cameraTrack).toBeNull();
 		expect(migrated.assets[1].cameraTrack?.sourcePath).toBe("/cam.mp4");
 	});
 
-	it("upgrades a v4 document to v7 (anchors modifiers onto clips)", () => {
+	it("upgrades a v4 document to v8 (anchors modifiers onto clips)", () => {
 		const migrated = migrateRawDocumentToCurrent(
 			makeV4Doc({
 				zoomRanges: [
@@ -460,7 +556,7 @@ describe("migrateRawDocumentToCurrent", () => {
 				],
 			}),
 		) as Record<string, unknown>;
-		expect(migrated.schemaVersion).toBe(7);
+		expect(migrated.schemaVersion).toBe(8);
 		const zooms = migrated.zoomRanges as Array<Record<string, unknown>>;
 		expect(zooms).toHaveLength(1);
 		expect(zooms[0]).toMatchObject({ id: "z1", clipId: "c1", depth: 3 });
@@ -468,12 +564,12 @@ describe("migrateRawDocumentToCurrent", () => {
 
 	it("is a no-op for an already-current document (returns an equal value)", () => {
 		const v5 = makeV4Doc(); // makeV4Doc's body is the v5-compatible shape
-		const once = migrateRawDocumentToCurrent({ ...v5, schemaVersion: 7 });
+		const once = migrateRawDocumentToCurrent({ ...v5, schemaVersion: 8 });
 		// ponytail: the upgrader chain checks schemaVersion and returns the input
 		// unchanged, so the round-trip allocation is bounded to a property
 		// comparison per upgrader — the same per-parse overhead the old
 		// `z.preprocess` carried.
-		expect(once).toEqual({ ...v5, schemaVersion: 7 });
+		expect(once).toEqual({ ...v5, schemaVersion: 8 });
 	});
 
 	it("passes non-document input through unchanged (the schema is the gate, not this helper)", () => {
@@ -526,7 +622,7 @@ describe("dropping trims anchored to audio", () => {
 
 	function docWith(trimRanges: unknown[], assets?: unknown[]) {
 		return {
-			schemaVersion: 7,
+			schemaVersion: 8,
 			project: { id: "p", title: "t", createdAt, updatedAt: createdAt },
 			assets: assets ?? [
 				{ id: "vid", kind: "video", label: "v", originalPath: "/v.mp4", cameraTrack: null },
@@ -626,5 +722,86 @@ describe("dropping trims anchored to audio", () => {
 		expect(() =>
 			documentSchema.parse(migrateRawDocumentToCurrent(docWith([ghost, legacy]))),
 		).not.toThrow();
+	});
+});
+
+// ─── Transcripts written end-before-start ────────────────────────────────────
+// The transcription core before a9fdd97ff clamped an end to the audio length but not its
+// start, so a hallucination past the end of the audio was stored inverted. One such word
+// failed the schema and hid the whole project from the list.
+
+describe("repairing inverted transcript timings", () => {
+	const createdAt = "2024-01-01T00:00:00.000Z";
+	const inverted = { startSec: 13.5, endSec: 6.7626875 };
+
+	function docWith(start: number, end: number) {
+		const transcript = {
+			assetId: "vid",
+			language: "auto",
+			segments: [
+				{
+					id: "seg_1",
+					kind: "speech",
+					startSec: start,
+					endSec: end,
+					text: "very",
+					wordIds: ["word_1"],
+				},
+				{
+					id: "seg_2",
+					kind: "speech",
+					startSec: start,
+					endSec: end,
+					text: "good",
+					wordIds: ["word_2"],
+				},
+			],
+			words: [
+				{ id: "word_1", segmentId: "seg_1", startSec: start, endSec: end, text: "very" },
+				{ id: "word_2", segmentId: "seg_2", startSec: start, endSec: end, text: "good" },
+			],
+		};
+		return {
+			schemaVersion: 8,
+			project: { id: "p", title: "t", createdAt, updatedAt: createdAt },
+			assets: [{ id: "vid", kind: "video", label: "v", originalPath: "/v.mp4", cameraTrack: null }],
+			transcript,
+			transcripts: [transcript],
+			timeline: {
+				clips: [],
+				gaps: [],
+				trimRanges: [],
+				muteRanges: [],
+				speedRanges: [],
+				captionRanges: [],
+			},
+			annotations: [],
+			zoomRanges: [],
+			audioTracks: [],
+			legacyEditor: null,
+		};
+	}
+
+	it("raises the end to the start, keeps every word, and parses again", () => {
+		const broken = docWith(inverted.startSec, inverted.endSec);
+		expect(() => documentSchema.parse(broken)).toThrow("endSec must be greater than or equal");
+		const doc = documentSchema.parse(migrateRawDocumentToCurrent(broken));
+		for (const transcript of [doc.transcript, ...doc.transcripts]) {
+			expect(transcript?.words.map((w) => [w.id, w.text, w.startSec, w.endSec])).toEqual([
+				["word_1", "very", 13.5, 13.5],
+				["word_2", "good", 13.5, 13.5],
+			]);
+			expect(transcript?.segments.map((s) => [s.wordIds, s.endSec])).toEqual([
+				[["word_1"], 13.5],
+				[["word_2"], 13.5],
+			]);
+		}
+	});
+
+	it("is idempotent, and returns the document untouched when nothing is inverted", () => {
+		const clean = docWith(1, 2);
+		expect(migrateRawDocumentToCurrent(clean)).toBe(clean);
+		const repaired = migrateRawDocumentToCurrent(docWith(inverted.startSec, inverted.endSec));
+		expect(migrateRawDocumentToCurrent(repaired)).toBe(repaired);
 	});
 });

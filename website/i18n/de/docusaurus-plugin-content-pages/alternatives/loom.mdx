@@ -28,9 +28,9 @@ Diese Seite wird vom OpenScreen-Projekt veröffentlicht. Die Angaben zu Loom sta
 | Upload-Geschwindigkeit | Kein Faktor. Aufnahme und Export laufen auf deinem Rechner | Der Fehlerbehebungs-Guide verlangt mindestens 5 Mbit/s Upload für eine erfolgreiche Aufnahme |
 | Transkription | Lokales Whisper, ein Modell von etwa 264 MB, einmalig heruntergeladen. Sprache erkannt oder aus 100 gewählt | Auf Looms Seite, mit selbst gehostetem Whisper und Anbietern wie Speechmatics. 50+ Sprachen in jedem Plan (Stand September 2026) |
 | Untertitel | In das Video eingebrannt | Zuschaltbare Untertitel im Loom-Player. Fehlen in einer heruntergeladenen MP4 |
-| Automatische Zooms | Ja, platziert anhand des aufgezeichneten Cursors | Kein automatischer Zoom im Bearbeitungs-Guide |
+| Automatische Zooms | Ja, platziert auf aufgezeichneten Klicks | Kein automatischer Zoom im Bearbeitungs-Guide |
 | Bearbeitung | Zeitleiste mit mehreren Clips, Schnitte, Geschwindigkeit, Zooms, Annotationen und Bearbeitung über das Transkript, alles kostenlos | Trimmen und Zusammenfügen in Business. Bearbeitung über das Transkript und Overlays in Business + AI (Stand September 2026) |
-| Export | MP4 (H.264 oder H.265) in 720p, 1080p oder Originalgröße, oder GIF. Kein Wasserzeichen | MP4-Download in kostenpflichtigen Plänen. Aufnahme bis zu 4K ab Business (Stand September 2026) |
+| Export | MP4 (H.264) in 720p, 1080p oder Originalgröße, oder GIF. Kein Wasserzeichen | MP4-Download in kostenpflichtigen Plänen. Aufnahme bis zu 4K ab Business (Stand September 2026) |
 
 ## Was beide Apps können {#what-both-apps-do}
 
@@ -53,14 +53,14 @@ Bei der Aufnahme überschneiden sich beide stärker als beim Teilen. Nichts davo
 
 ### Lokal von Haus aus {#local-by-default}
 
-- **Die Datei gehört dir von Anfang an.** Die Aufnahme landet auf deiner Festplatte, und der Export schreibt eine MP4 in H.264 oder H.265, in 720p, 1080p oder Originalgröße, bis zu 60 fps, oder ein GIF, ohne Wasserzeichen. Loom speichert Videos in seiner Cloud. Die heruntergeladene MP4 behält deine Kürzungen, lässt aber zuschaltbare Untertitel, Kapitel, Calls to Action sowie die Entfernung von Füllwörtern und Stille weg. Siehe [Export](/docs/export/).
+- **Die Datei gehört dir von Anfang an.** Die Aufnahme landet auf deiner Festplatte, und der Export schreibt eine MP4 in H.264, in 720p, 1080p oder Originalgröße, bis zu 60 fps, oder ein GIF, ohne Wasserzeichen. Loom speichert Videos in seiner Cloud. Die heruntergeladene MP4 behält deine Kürzungen, lässt aber zuschaltbare Untertitel, Kapitel, Calls to Action sowie die Entfernung von Füllwörtern und Stille weg. Siehe [Export](/docs/export/).
 - **Deine Upload-Geschwindigkeit spielt keine Rolle.** Looms Fehlerbehebungs-Guide verlangt mindestens 5 Mbit/s Upload-Geschwindigkeit für eine erfolgreiche Aufnahme. OpenScreen hat kein Konto, keinen eigenen Server und keine Analytics. Die [FAQ](/docs/faq/#does-openscreen-work-offline) listet die wenigen Verbindungen, die es dennoch aufbaut.
 - **Transkription auf dem eigenen Rechner.** Whisper läuft lokal mit einem Modell von etwa 264 MB, einmalig heruntergeladen, und funktioniert danach offline. Es erkennt die Sprache, oder du wählst eine von 100. Untertitel werden in das Video eingebrannt. Mehr zu [Untertiteln](/features/captions/).
 - **KI nur, wenn du sie anbindest.** Chat-Bearbeitung ist optional und funktioniert mit deinem eigenen Schlüssel für Claude, OpenAI, Gemini, Mistral, OpenRouter, MiniMax oder einen beliebigen OpenAI-kompatiblen Endpunkt. Sie ist aus, bis du einen Anbieter verbindest, und jede Änderung landet als gewöhnliche, rückgängig machbare Bearbeitung. Looms KI-Funktionen senden Transkripte als Text an OpenAI, und Google Gemini erhält Video und Audio, um seine Aktionspläne für KI-Agenten zu erstellen. Siehe [KI-Bearbeitung](/docs/ai-editing/).
 
 ### Feinschliff für Demos {#demo-polish}
 
-- **Automatische Zooms.** **Auto-enhance → Automatic zooms** platziert Zooms anhand der aufgezeichneten Cursorbewegung, ohne Netzwerkaufruf und ohne Modell. Der Cursor wird als Daten aufgezeichnet, sodass du ihn nach der Aufnahme in der Größe ändern, glätten und mit einem Klick-Bounce versehen kannst. Looms Bearbeitungs-Guide dokumentiert keinen automatischen Zoom. Mehr zu [Auto-Zoom](/features/auto-zoom/).
+- **Automatische Zooms.** **Auto-enhance → Automatic zooms** platziert Zooms auf den aufgezeichneten Klicks, ohne Netzwerkaufruf und ohne Modell. Der Cursor wird als Daten aufgezeichnet, sodass du ihn nach der Aufnahme in der Größe ändern, glätten und mit einem Klick-Bounce versehen kannst. Looms Bearbeitungs-Guide dokumentiert keinen automatischen Zoom. Mehr zu [Auto-Zoom](/features/auto-zoom/).
 - **Kein Bearbeitungswerkzeug hinter einem Plan.** Loom teilt die Bearbeitung nach Plan auf. In OpenScreen hat eine einzige Installation die Zeitleiste mit mehreren Clips samt Zuschnitt pro Clip, Geschwindigkeitsänderungen von 0,1× bis 100×, Text mit sechs Animationen, Pfeile in acht Richtungen, Bilder, Unschärfebereiche, Voice-over- und Musikspuren, Hintergründe mit Innenabstand und Schatten sowie Ausgabe in 16:9, 9:16, 1:1 und weiteren Seitenverhältnissen. Siehe [Bearbeitung & Zeitleiste](/docs/editing-timeline/).
 - **Eine Kommandozeile.** Skripte und Coding-Agenten können OpenScreen über die [Kommandozeile](/docs/cli/) steuern.
 
@@ -76,7 +76,7 @@ Looms Plandetails in diesem Abschnitt sind Stand September 2026.
 ## Erste Schritte {#getting-started}
 
 1. Lade OpenScreen von der [Download-Seite](/download/) herunter. Unter Linux wähle das AppImage, `.deb`, `.rpm` oder `.pacman`, oder nutze das Nix-Flake.
-2. Folge der [Installation](/docs/installation/). Unter macOS erteile die Berechtigungen **Bildschirmaufnahme** und **Bedienungshilfen**, bevor du die erste Aufnahme startest. Unter Linux braucht die Aufnahme PipeWire und `xdg-desktop-portal`, und [Mausklicks unter Wayland](/docs/installation/#mouse-clicks-on-wayland) brauchen deinen Nutzer in der Gruppe `input`.
+2. Folge der [Installation](/docs/installation/). Unter macOS erteile die Berechtigungen im Fenster, das sich beim ersten Start öffnet. Unter Linux braucht die Aufnahme PipeWire und `xdg-desktop-portal`, und [Mausklicks unter Wayland](/docs/installation/#mouse-clicks-on-wayland) brauchen deinen Nutzer in der Gruppe `input`.
 3. Mach eine erste Aufnahme mit dem [Schnellstart](/docs/quick-start/), exportiere sie dann als MP4 und teile die Datei, wo dein Team schon arbeitet.
 
 Vergleichst du auch andere Tools? Siehe die [Screen-Studio-Alternative](/alternatives/screen-studio/), [OpenScreen vs Cap](/compare/openscreen-vs-cap/), [OpenScreen vs OBS Studio](/compare/openscreen-vs-obs/) und die [Camtasia-Alternative](/alternatives/camtasia/), oder geh zurück zur [OpenScreen-Startseite](/).

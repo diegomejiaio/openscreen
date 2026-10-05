@@ -5,13 +5,14 @@
 		"motionDrift": "Kayma",
 		"motionAurora": "Kutup ışığı",
 		"motionWaves": "Dalgalar",
-		"motionGradientOnly": "Animasyon yalnızca gradyan arka planlara uygulanır. Canlandırmak için bir gradyan seçin.",
 		"gradientLabel": "Gradyan {{index}}",
 		"uploadCustom": "Özel Yükle",
 		"unsupportedImage": "Desteklenmeyen görsel. JPG veya PNG dosyası kullanın.",
 		"title": "Arka Plan",
 		"imageLabel": "Arka plan {{index}}",
 		"custom": "Özel",
+		"customColor": "Özel renk",
+		"customGradient": "Tek renkten gradyan",
 		"help": "Kaydın arkasında ne görüneceğini seçin: yerleşik bir duvar kâğıdı, düz renk, gradyan veya diskinizdeki özel bir görsel.",
 		"gradient": "Gradyan",
 		"colorLabel": "Renk {{color}}",
@@ -50,9 +51,9 @@
 		"errorReading": "Dosya okunurken bir hata oluştu."
 	},
 	"annotation": {
-		"supportedFormats": "Desteklenen biçimler: JPG, PNG, GIF, WebP",
 		"blurShapeRectangle": "Dikdörtgen",
 		"size": "Boyut",
+		"customSize": "Özel boyut",
 		"tipShiftTabCycle": "Geriye doğru geçiş yapmak için Shift+Tab kullanın.",
 		"clearBackground": "Arka Planı Temizle",
 		"colorPalette": "Renk paleti",
@@ -106,17 +107,20 @@
 		"blurBg": "Arka Planı Bulanıklaştır",
 		"help": "Kayıt çerçevesinin biçimi: arka plan bulanıklığı, gölge, hareket bulanıklığı, köşe yuvarlaklığı ve videonun çevresindeki boşluk.",
 		"fitClipOne": "{{count}} klip",
+		"formatAuto": "Otomatik",
+		"formatAutoMixed": "Klipler farklı",
+		"formatFill": "Kayıt",
+		"formatFillFit": "Tamamı",
+		"formatFillFollow": "İmleci takip et",
 		"formatOriginal": "Orijinal",
 		"fitClipMany": "{{count}} klip",
 		"frame": "Çerçeve",
 		"motion": "Hareket",
 		"padding": "Dolgu",
 		"format": "Biçim",
-		"fitClip": "Sığdır",
 		"motionBlur": "Hareket Bulanıklığı",
 		"depthOfField": "Alan derinliği",
-		"depthOfFieldHint": "3D yakınlaştırmalar",
-		"depthOfFieldNoTilt": "Bu projede 3D yakınlaştırma yok",
+		"depthOfFieldTip": "Eğik ekranın uzak tarafını bulanıklaştırır",
 		"roundness": "Yuvarlaklık",
 		"frameStyle": "Stil",
 		"windowNone": "Yok",
@@ -127,9 +131,11 @@
 		"frameTheme": "Tema",
 		"frameThemeLight": "Açık",
 		"frameThemeDark": "Koyu",
-		"frameThemeHelp": "Gümüş gövde ve açık çerçeve ya da grafit ve koyu. Tüm çerçeveler için geçerlidir.",
-		"windowHelp": "Kaydın çevresine bir pencere ya da 3B modellenmiş bir cihaz çizer.",
-		"roundnessFrameHelp": "Aralık çerçeveye uyum sağlar: %100, ona yakışan en belirgin yuvarlaklıktır."
+		"roundnessFrameHelp": "Aralık çerçeveye bağlıdır. %100, hâlâ iyi görünen en belirgin yuvarlaklıktır.",
+		"shadowNone": "Yok",
+		"shadowLight": "Hafif",
+		"shadowMedium": "Orta",
+		"shadowStrong": "Güçlü"
 	},
 	"stylePresets": {
 		"button": "Ön ayarlar",
@@ -146,6 +152,9 @@
 		"revealLinux": "Klasörde göster",
 		"rename": "Yeniden adlandır",
 		"update": "Mevcut projeden güncelle",
+		"useForNewProjects": "Yeni projelerde kullan",
+		"stopForNewProjects": "Yeni projelerde kullanmayı bırak",
+		"newProjectsBadge": "Yeni projeler",
 		"delete": "Sil",
 		"confirmDelete": "“{{name}}” silinsin mi?",
 		"applied": "“{{name}}” uygulandı",
@@ -167,7 +176,7 @@
 		"help": "Zaman çizelgesindeki tüm kliplerin birleşik dökümü. Bir kelimede veya seçimde Backspace / Delete tuşu onu videodan keser (kırmızı). Bir kelimeye çift tıklayarak metnini düzeltebilirsiniz. İşaretli bir kelimenin üzerine gelerek geri alabilirsiniz.",
 		"editWord": "\"{{word}}\" kelimesini düzenle",
 		"laneFeedsCaptions": "Altyazılar bu kanaldan gömülür.",
-		"insertedWord": "Sizin eklediğiniz — arkasında ses yok",
+		"insertedWord": "Sizin eklediğiniz kelime. Bunun sesi yok.",
 		"whisperHint": "Döküm yerel Whisper kullanır — bilgisayarınızda çalışır, hiçbir veri cihazdan çıkmaz.",
 		"insertAria": "Yeni kelime",
 		"editorAria": "{{filename}} dökümü",
@@ -180,7 +189,7 @@
 		"laneVoiceover": "Dış ses",
 		"silence": "[sessizlik {{duration}} sn]",
 		"clipLabel": "Klip {{index}}",
-		"correctedWord": "Düzeltildi — dökümde \"{{original}}\" yazıyordu",
+		"correctedWord": "Düzeltildi. Dökümde \"{{original}}\" yazıyordu.",
 		"noClipTranscript": "Bu klip için döküm yok — medya kartını açıp yeniden oluşturun.",
 		"editingHintDev": "Bir kelimeye çift tıklayarak düzeltin, Backspace onu videodan keser, iki kelimenin arasına yazarak yeni kelime ekleyin.",
 		"noAudio": "Bu medyada ses parçası yok",
@@ -200,15 +209,12 @@
 		"legacyAnnotations": "Bu proje hâlâ eski altyazı özelliğinden kalan altyazı açıklamaları içeriyor ({{count}}). Altyazı katmanının üstünde çizilirler.",
 		"backgroundOpacity": "Saydamlık",
 		"backgroundColor": "Arka plan rengi",
-		"alignCenter": "Orta",
 		"translationIsNonDestructive": "Çeviriler dökümün içine değil yanına kaydedilir — özgün metin ve zamanlamaları olduğu gibi kalır.",
 		"distanceFromRight": "Sağdan uzaklık",
 		"language": "Dil",
 		"text": "Metin",
-		"anchorHintBottom": "Uzun altyazılar yukarı doğru büyür — alt kenar yerinde kalır.",
 		"distanceFromTop": "Üstten uzaklık",
 		"translateFailed": "Çeviri başarısız oldu.",
-		"alignLeft": "Sol",
 		"distanceFromBottom": "Alttan uzaklık",
 		"derivedFromTranscript": "{{count}} altyazı satırı, dökümden canlı olarak türetildi.",
 		"translate": "Çevir",
@@ -217,14 +223,10 @@
 		"hiddenHint": "Altyazılar bu medyanın dökümünden gelir. Önizlemede ve dışa aktarımlarda görmek için açın.",
 		"noTranscript": "Altyazılar medyanın dökümünden okunur. Açmak için bu videonun dökümünü çıkarın.",
 		"distanceFromLeft": "Soldan uzaklık",
-		"anchorBottom": "Alt",
 		"transcribe": "Videonun dökümünü çıkar",
 		"bold": "Kalın",
-		"alignRight": "Sağ",
-		"anchorTop": "Üst",
 		"minWords": "Satır başına en az kelime",
 		"translateHint": "Dökümü yapılandırılmış yapay zekâ sağlayıcısıyla çevir",
-		"anchorHintTop": "Uzun altyazılar aşağı doğru büyür — üst kenar yerinde kalır.",
 		"displayLanguage": "Görüntüleme",
 		"removeLegacyAnnotations": "Eski altyazı açıklamalarını kaldır",
 		"background": "Arka plan",
@@ -234,7 +236,15 @@
 		"font": "Yazı tipi",
 		"translating": "Çevriliyor…",
 		"show": "Altyazıları göster",
-		"textColor": "Metin rengi"
+		"textColor": "Metin rengi",
+		"style": "Stil",
+		"styles": {
+			"classic": "Klasik",
+			"bold": "Kalın",
+			"minimal": "Minimal",
+			"light": "Açık"
+		},
+		"customize": "Özelleştir"
 	},
 	"panes": {
 		"help": "Yardım"
@@ -265,20 +275,30 @@
 		"fadeIn": "Açılma",
 		"remove": "Parçayı sil",
 		"loop": "Döngü",
-		"slipHint": "İçindeki sesi kaydırmak için Alt ile sürükleyin",
-		"help": "Bu ses kanalının seviyesi, geçişleri ve döngüsü. Önizlemede ve dışa aktarımda kaydın üzerine miksleniyor. Kanalı taşımak veya yeniden boyutlandırmak için zaman çizelgesinde sürükleyin; içindeki sesi kaydırmak için Alt tuşunu basılı tutarak sürükleyin.",
+		"slipHint": "{{modifier}} tuşunu basılı tutup sürükleyerek sesi parça içinde kaydırın",
+		"help": "Bu ses kanalının seviyesi, geçişleri ve döngüsü. Önizlemede ve dışa aktarımda kaydın üzerine miksleniyor. Müzik kanalı, biri konuşurken kendiliğinden kısılır. Kanalı taşımak veya yeniden boyutlandırmak için zaman çizelgesinde sürükleyin; içindeki sesi kaydırmak için Alt tuşunu basılı tutarak sürükleyin.",
 		"add": "Ses parçası ekle",
 		"mute": "Sessiz"
 	},
 	"layout": {
-		"help": "Web kamerasının ekranla birleştirilme biçimi: resim içinde resim, dikey yığın, çift çerçeve, maske şekli, boyut ve aynalama.",
+		"help": "Web kamerasının ekranla birleştirilme biçimi: resim içinde resim, dikey yığın, çift çerçeve, şekil, yuvarlaklık, boyut, konum ve aynalama.",
 		"mirrorWebcam": "Web kamerasını aynala",
 		"webcamFraming": "Webcam kadrajı",
+		"webcamFramingDrag": "Taşımak için çerçeveyi, yakınlaştırmak için bir köşesini sürükleyin.",
 		"shapes": {
-			"rectangle": "Dikdörtgen",
-			"rounded": "Yuvarlatılmış",
-			"circle": "Daire",
-			"square": "Kare"
+			"square": "Kare",
+			"original": "Orijinal"
+		},
+		"webcamPosition": "Konum",
+		"anchors": {
+			"topLeft": "Sol üst",
+			"top": "Üst",
+			"topRight": "Sağ üst",
+			"left": "Sol",
+			"right": "Sağ",
+			"bottomLeft": "Sol alt",
+			"bottom": "Alt",
+			"bottomRight": "Sağ alt"
 		},
 		"selectPreset": "Ön ayar seçin",
 		"bgModes": {
@@ -287,18 +307,15 @@
 			"blur": "Bulanık",
 			"transparent": "Kesme"
 		},
-		"reactiveWebcamDescription": "Video yakınlaştırıldığında kamera yumuşakça küçülür, böylece yoldan çekilir.",
 		"webcamBlurIntensity": "Bulanıklık Yoğunluğu",
 		"preset": "Ön Ayar",
-		"webcamCropZoom": "Kırpma yakınlaştırması",
 		"webcamSize": "Webcam Boyutu",
 		"dualFrame": "Çift Kare",
-		"webcamCropY": "Dikey kaydırma",
 		"verticalStack": "Dikey Yığın",
 		"pictureInPicture": "Resim İçinde Resim",
 		"webcamShape": "Kamera Şekli",
-		"webcamCropX": "Yatay kaydırma",
 		"reactiveWebcam": "Yakınlaştırınca küçült",
+		"reactiveWebcamTip": "Video yakınlaştırılınca kamera küçülür",
 		"webcamBackground": "Kamera Arka Planı",
 		"helpNoWebcam": "Bu projede kamera yok; bu yüzden yerleşim denetimleri kapalı ve ön ayar “Web kamerası yok” gösteriyor. Kaydettiğiniz yerleşim, bir kamera eklediğinizde kullanılmak üzere korunur.",
 		"title": "Kamera düzeni",
@@ -317,7 +334,14 @@
 	},
 	"facets": {
 		"transcript": "Metin Dökümü",
-		"captions": "Altyazılar"
+		"captions": "Altyazılar",
+		"tips": {
+			"effects": "Kompozisyon: arka plan, çerçeve, gölge ve dolgu",
+			"layout": "Kamera düzeni: kameranın konumu, şekli ve boyutu",
+			"audio": "Ses: tüm videonun çıkış seviyesi",
+			"cursor": "İmleç: stil, boyut ve efektler",
+			"transcript": "Metin Dökümü: videoyu kesmek için kelimeleri düzenleyin"
+		}
 	},
 	"crop": {
 		"title": "Kırpma",
@@ -341,39 +365,20 @@
 			"lockedDisclaimer": "Zaman çizelgesindeki genel Otomatik Odak anahtarı tarafından kontrol edilir. Odak modunu yakınlaştırma başına ayarlamak için kapatın.",
 			"auto": "Otomatik",
 			"manual": "Manuel",
-			"autoDescription": "Kamera kaydedilen imleç konumunu takip eder",
 			"title": "Odak Modu"
 		},
 		"camera": {
 			"title": "3D kamera",
 			"off": "Kapalı",
-			"fixed": "Sabit açı",
-			"moving": "Hareketli kamera",
 			"preset": {
-				"iso": "Yukarıdan çapraz",
 				"left": "Ekran sola dönük",
 				"right": "Ekran sağa dönük",
-				"followCursor": "İmleçle birlikte döner"
-			},
-			"description": {
-				"off": "Ekran düz kalır.",
-				"iso": "Tek bir pozda kalır: sola dönük ve yukarıdan görünür.",
-				"left": "Tek bir pozda kalır: ekran sola bakar, sağ kenarı öne çıkar.",
-				"right": "Tek bir pozda kalır: ekran sağa bakar, sol kenarı öne çıkar.",
-				"followCursor": "Ekran sabit kalır; kamera etrafında imlecin olduğu tarafa döner ve imleçle birlikte yükselip alçalır."
-			},
-			"needsCursor": "İmleç gizli: bu kameranın izleyecek bir şeyi yok ve başlangıç açısında kalır."
-		},
-		"clickImpact": {
-			"title": "Tıklama etkisi",
-			"description": "Her tıklama eğik ekranı bastırır: tıklanan taraf çöker, sonra geri döner.",
-			"needsRotation": "Önce bir 3D kamera seçin: yalnızca eğik bir ekran bastırılabilir.",
-			"needsCursor": "İmleç gizli: ekran yalnızca görünen tıklamalara tepki verir.",
-			"descriptionCamera": "Her tıklama kamerayı biraz geri iter, ardından kamera geri gelir."
+				"orbit": "3D Yörünge"
+			}
 		},
 		"level": "Yakınlaştırma Seviyesi",
-		"previewHold": "Yakınlaştırma efektini önizlemek için basılı tutun",
 		"customScale": "Özel Yakınlaştırma",
+		"customScaleRange": "Yakınlaştırma {{min}}× ile {{max}}× arasında olabilir",
 		"selectRegion": "Ayarlamak için bir yakınlaştırma bölgesi seçin",
 		"cursor": {
 			"title": "İmleç",
@@ -383,7 +388,7 @@
 	},
 	"audio": {
 		"outputGain": "Çıkış seviyesi",
-		"help": "Ses çıkış seviyesini ayarlayın. Önizlemede ve dışa aktarmada aynı şekilde uygulanır.",
+		"help": "Sesler otomatik olarak standart bir ses yüksekliğine getirilir. Çıkış seviyesini buradan ayarlayın; önizlemede ve dışa aktarmada aynı şekilde uygulanır.",
 		"reset": "Sesi sıfırla",
 		"title": "Ses"
 	},
@@ -404,18 +409,33 @@
 		"smoothing": "Yumuşatma",
 		"clickBounce": "Tıklama Sıçraması",
 		"model3d": "3B imleç",
-		"model3dHint": "Varsayılan stil: tüm imleç şekilleri 3B olur. Diğer stiller düz kalır.",
-		"model3dNeedsCursor": "3B imleci kullanmak için «İmleci Göster»i açın.",
+		"model3dTip": "Varsayılan imleci gölgeli 3B bir nesne olarak çizer",
+		"clickImpact": "Tıklama etkisi",
+		"clickImpactTip": "Ekran her tıklamada biraz hareket eder",
 		"help": "Kaydedilen telemetriden imleç çizimi: tema, boyut, yumuşatma, hareket bulanıklığı ve tıklama sıçraması.",
-		"clipToBoundsDescription": "İmleci video kare içinde tutar. İmlecin kenarları aşmasına izin vermek için kapatın — yakınlaştırma veya kaydırma yapılırken kullanışlıdır.",
 		"size": "Boyut",
 		"title": "İmleç",
 		"show": "İmleci Göster",
 		"themeDefault": "Varsayılan",
-		"clipToBounds": "Tuvale Kırp",
+		"types": "İmleç türleri",
+		"typeArrow": "Ok",
+		"typePointer": "El",
+		"typeText": "Metin",
+		"typeGrab": "Tutma",
+		"typeResize": "Yeniden boyutlandırma",
+		"typeBusy": "Meşgul",
+		"typeCrosshair": "Artı işareti",
+		"typeNotAllowed": "Kullanılamaz",
+		"typeHelp": "Yardım",
+		"typeUpArrow": "Alternatif seçim",
+		"typeAsArrow": "{{type}}: yerine ok gösterilir",
 		"motionBlur": "Hareket Bulanıklığı",
 		"theme": "İmleç Stili",
-		"autoHide": "Hareketsizken gizle"
+		"autoHide": "Hareketsizken gizle",
+		"autoHideTip": "İmleç durduğunda yavaşça kaybolur",
+		"bounceNone": "Yok",
+		"bounceLight": "Hafif",
+		"bounceStrong": "Belirgin"
 	},
 	"export": {
 		"gifButton": "GIF Olarak Dışa Aktar",
@@ -424,5 +444,11 @@
 	},
 	"trim": {
 		"deleteRegion": "Kırpma Bölgesini Sil"
+	},
+	"textPlate": {
+		"none": "Yok",
+		"dark": "Koyu",
+		"light": "Açık",
+		"custom": "Özel"
 	}
 }

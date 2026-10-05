@@ -66,6 +66,8 @@ struct RecordingRequest: Decodable {
 	let schemaVersion: Int?
 	let recordingId: Int?
 	let excludedWindowIds: [UInt32]?
+	/// Display captures only. Absent in requests from apps that predate the option.
+	let hideDesktopIcons: Bool?
 	let source: Source
 	let video: Video
 	let audio: Audio
@@ -103,6 +105,14 @@ enum HelperError: Error, CustomStringConvertible {
 	}
 }
 
+/// A source chosen in Apple's system picker, kept by `PickerSession` for the takes after it.
+struct PickedSource {
+	let filter: SCContentFilter
+	/// Global frame (points, top-left origin) of what was picked, for cursor mapping.
+	let frame: CGRect
+	let displayId: CGDirectDisplayID?
+}
+
 @available(macOS 13.0, *)
 final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	private struct CaptureTarget {
@@ -135,30 +145,67 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	/// the command loop exits the process as soon as `stop()` returns, which would cut
 	/// `finishWriter()` off before its terminal event.
 	private var shutdownTask: Task<Void, Never>?
+	/// Direct display captures only. See `startExclusionRefresh`.
+	private var exclusionRefreshTask: Task<Void, Never>?
 	private var isPaused = false
 	private var pauseStartedAt: CMTime?
 	private var totalPausedDuration = CMTime.zero
 	/// Sample queue only. See `VideoTimestampGate` for the failure it exists to prevent.
 	private var videoTimestampGate = VideoTimestampGate()
+	/// Sample queue only. Frames the writer input was not ready for, or refused, reported in
+	/// `recording-stopped` so a macOS drop rate can be measured at all (#937).
+	private var droppedVideoFrames = 0
 	private var nativeMicrophoneEnabled = false
 	private var outputWidth = 1920
 	private var outputHeight = 1080
 	private var captureFrame = CGRect.zero
 	private let microphoneOutputTypeRawValue = 2
 	private let hostClock = CMClockGetHostTimeClock()
+	private let picked: PickedSource?
+	/// A `SystemAudioTap` (macOS 14.2+), held untyped so this class keeps its macOS 13 floor.
+	private var systemAudioTap: AnyObject?
+	/// Sample queue only. Cleared before the writer is finalised: a tap stops on its own
+	/// queue, and a buffer it had in flight must not reach a finished writer input.
+	private var acceptsTappedAudio = true
+	private let tapControlQueue = DispatchQueue(label: "app.openscreen.sck-helper.system-audio-control")
 
-	init(request: RecordingRequest) {
+	/// `picked` is a choice already made in Apple's system picker (`PickerSession`). The take
+	/// then records exactly that filter: no source lookup, and no Screen Recording check,
+	/// because the user's pick IS the consent -- asking for the grant here would put back
+	/// the very prompt the picker path exists to remove.
+	init(request: RecordingRequest, picked: PickedSource? = nil) {
 		self.request = request
+		self.picked = picked
+	}
+
+	/// Whether this take's system audio comes from a Core Audio tap instead of ScreenCaptureKit.
+	///
+	/// Only for a source from Apple's picker: that capture holds no Screen Recording grant,
+	/// and ScreenCaptureKit hands a grantless capture its system audio as silence. Every other
+	/// source keeps ScreenCaptureKit's audio, which its grant already covers.
+	private var tapsSystemAudio: Bool {
+		guard picked != nil, request.audio.system.enabled else {
+			return false
+		}
+		if #available(macOS 14.2, *) {
+			return true
+		}
+		return false
 	}
 
 	func start() async throws {
-		try ensureRequestedPermissions()
+		try ensureRequestedPermissions(screen: picked == nil)
 
-		let content = try await SCShareableContent.excludingDesktopWindows(
-			false,
-			onScreenWindowsOnly: true
-		)
-		let target = try makeCaptureTarget(from: content)
+		let target: CaptureTarget
+		if let picked {
+			target = makeCaptureTarget(picked: picked)
+		} else {
+			let content = try await SCShareableContent.excludingDesktopWindows(
+				false,
+				onScreenWindowsOnly: true
+			)
+			target = try makeCaptureTarget(from: content)
+		}
 		outputWidth = target.width
 		outputHeight = target.height
 		captureFrame = target.captureFrame
@@ -166,7 +213,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		let stream = SCStream(filter: target.filter, configuration: configuration, delegate: self)
 
 		try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
-		if request.audio.system.enabled {
+		if request.audio.system.enabled && !tapsSystemAudio {
 			try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
 		}
 		if nativeMicrophoneEnabled {
@@ -178,6 +225,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			try stream.addStreamOutput(self, type: microphoneOutputType, sampleHandlerQueue: sampleQueue)
 		}
 		try setupWriter()
+		startSystemAudioTapIfNeeded()
 
 		self.stream = stream
 		emit([
@@ -185,6 +233,9 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			"schemaVersion": 1,
 		])
 		try await stream.startCapture()
+		if picked == nil, request.source.type == "display", let displayID = request.source.displayId {
+			startExclusionRefresh(displayID: displayID)
+		}
 	}
 
 	func stop() async {
@@ -202,6 +253,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	}
 
 	private func performStop() async {
+		exclusionRefreshTask?.cancel()
 		do {
 			try await stream?.stopCapture()
 		} catch {
@@ -211,8 +263,73 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 				"message": "\(error)",
 			])
 		}
+		stopSystemAudioTap()
 
 		await finishWriter()
+	}
+
+	private func startSystemAudioTapIfNeeded() {
+		guard tapsSystemAudio, #available(macOS 14.2, *) else {
+			return
+		}
+		let tap = SystemAudioTap { [weak self] sampleBuffer in
+			guard let self else {
+				return
+			}
+			self.sampleQueue.async {
+				self.ingestTappedSystemAudio(sampleBuffer)
+			}
+		}
+		systemAudioTap = tap
+		// Off the start path: the first time, starting a tap blocks until the user answers
+		// macOS' prompt, and the app gives a take only seconds to report it has started.
+		// Audio that arrives late lands where it belongs, with silence in front of it.
+		tapControlQueue.async {
+			do {
+				try tap.start()
+			} catch {
+				emit([
+					"event": "warning",
+					"code": "system-audio-unavailable",
+					"message": "System audio could not be captured: \(error)",
+				])
+			}
+		}
+	}
+
+	/// Queued behind the start rather than run beside it: a tap stopped while its start is
+	/// still inside AudioDeviceStart is torn down under its own feet. Not awaited, so a
+	/// prompt left unanswered cannot hold the recording's stop hostage; what the tap still
+	/// delivers is dropped by `acceptsTappedAudio`.
+	private func stopSystemAudioTap() {
+		sampleQueue.sync {
+			acceptsTappedAudio = false
+		}
+		guard let tap = systemAudioTap else {
+			return
+		}
+		systemAudioTap = nil
+		tapControlQueue.async {
+			if #available(macOS 14.2, *), let tap = tap as? SystemAudioTap {
+				tap.stop()
+			}
+		}
+	}
+
+	/// Sample queue. The tap's audio takes the same pause and retime path ScreenCaptureKit's
+	/// system audio took in `stream(_:didOutputSampleBuffer:of:)`.
+	private func ingestTappedSystemAudio(_ sampleBuffer: CMSampleBuffer) {
+		guard acceptsTappedAudio else {
+			return
+		}
+		let pauseState = currentPauseState()
+		if pauseState.paused {
+			return
+		}
+		guard let sampleBuffer = retimedSampleBuffer(sampleBuffer, subtracting: pauseState.offset) else {
+			return
+		}
+		audioMixer?.ingest(sampleBuffer, from: .system)
 	}
 
 	func pause() {
@@ -340,8 +457,11 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 					"captureBounds": captureBoundsPayload(),
 				])
 			} else if !appended {
+				droppedVideoFrames += 1
 				reportWriterFailure("video append")
 			}
+		} else {
+			droppedVideoFrames += 1
 		}
 	}
 
@@ -401,8 +521,8 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		])
 	}
 
-	private func ensureRequestedPermissions() throws {
-		if !CGPreflightScreenCaptureAccess() {
+	private func ensureRequestedPermissions(screen: Bool) throws {
+		if screen && !CGPreflightScreenCaptureAccess() {
 			let granted = CGRequestScreenCaptureAccess()
 			if !granted {
 				throw HelperError.permissionDenied("Screen recording permission is required for ScreenCaptureKit capture.")
@@ -437,6 +557,82 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		]
 	}
 
+	private func makeCaptureTarget(picked: PickedSource) -> CaptureTarget {
+		let size = captureSize(
+			for: picked.filter,
+			fallbackPointSize: picked.frame.size,
+			fallbackDisplayId: picked.displayId ?? CGMainDisplayID()
+		)
+		return CaptureTarget(
+			filter: picked.filter,
+			width: size.width,
+			height: size.height,
+			captureFrame: picked.frame
+		)
+	}
+
+	/// The app's own windows (HUD, notes) plus the system ones a demo never wants.
+	private func excludedWindowIDs(in content: SCShareableContent) -> [UInt32] {
+		let candidates = content.windows.map {
+			CaptureWindowCandidate(
+				windowID: $0.windowID,
+				bundleID: $0.owningApplication?.bundleIdentifier,
+				layer: $0.windowLayer
+			)
+		}
+		return resolveCaptureExcludedWindowIDs(
+			requestedWindowIDs: (request.excludedWindowIds ?? [])
+				+ systemCaptureExcludedWindowIDs(
+					candidates,
+					hideDesktopIcons: request.hideDesktopIcons ?? false
+				),
+			availableWindowIDs: content.windows.map(\.windowID)
+		)
+	}
+
+	private func displayFilter(
+		_ display: SCDisplay,
+		in content: SCShareableContent,
+		excluding windowIDs: [UInt32]
+	) -> SCContentFilter {
+		let excluded = Set(windowIDs)
+		return SCContentFilter(
+			display: display,
+			excludingWindows: content.windows.filter { excluded.contains($0.windowID) }
+		)
+	}
+
+	/// A filter excludes windows, not apps, and a notification banner is a window that did
+	/// not exist when the take started. So the exclusion is re-read while recording and the
+	/// filter swapped whenever it changes. ponytail: a 250 ms poll, so a banner can show for
+	/// up to a quarter second as it slides in; the picker path excludes Notification Center
+	/// by bundle id and has no such gap.
+	private func startExclusionRefresh(displayID: CGDirectDisplayID) {
+		exclusionRefreshTask = Task { [weak self] in
+			var current: [UInt32] = []
+			while !Task.isCancelled {
+				try? await Task.sleep(nanoseconds: 250_000_000)
+				guard let self, let stream = self.stream,
+					let content = try? await SCShareableContent.excludingDesktopWindows(
+						false,
+						onScreenWindowsOnly: true
+					),
+					let display = content.displays.first(where: { $0.displayID == displayID })
+				else {
+					continue
+				}
+				let next = self.excludedWindowIDs(in: content)
+				guard Set(next) != Set(current) else {
+					continue
+				}
+				current = next
+				try? await stream.updateContentFilter(
+					self.displayFilter(display, in: content, excluding: next)
+				)
+			}
+		}
+	}
+
 	private func makeCaptureTarget(from content: SCShareableContent) throws -> CaptureTarget {
 		switch request.source.type {
 		case "display":
@@ -447,20 +643,13 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 				throw HelperError.sourceNotFound("No ScreenCaptureKit display found for id \(displayId).")
 			}
 			let requestedWindowIDs = request.excludedWindowIds ?? []
-			let resolvedWindowIDs = resolveCaptureExcludedWindowIDs(
-				requestedWindowIDs: requestedWindowIDs,
-				availableWindowIDs: content.windows.map(\.windowID)
-			)
-			let resolvedWindowIDSet = Set(resolvedWindowIDs)
-			let excludedWindows = content.windows.filter {
-				resolvedWindowIDSet.contains($0.windowID)
-			}
-			let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
+			let resolvedWindowIDs = excludedWindowIDs(in: content)
+			let filter = displayFilter(display, in: content, excluding: resolvedWindowIDs)
 			emit([
 				"event": "capture-window-exclusion",
 				"requestedWindowIds": requestedWindowIDs,
 				"resolvedWindowIds": resolvedWindowIDs,
-				"excludedWindowCount": excludedWindows.count,
+				"excludedWindowCount": resolvedWindowIDs.count,
 			])
 			let size = captureSize(
 				for: filter,
@@ -518,11 +707,19 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, request.video.fps)))
 		configuration.queueDepth = 6
 		configuration.showsCursor = !request.video.hideSystemCursor
-		configuration.pixelFormat = kCVPixelFormatType_32BGRA
+		// Studio-range BT.709 YCbCr from ScreenCaptureKit itself, which the encoder takes as is
+		// and the compositor decodes (#943). BGRA left the matrix to VideoToolbox. Nothing here
+		// reads the pixels: a frame goes through `retimedSampleBuffer` (timing only) to
+		// `append`, and `isCompleteFrame` reads attachments. 1.5 bytes a pixel instead of 4,
+		// times `queueDepth`.
+		configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+		configuration.colorMatrix = captureYCbCrMatrix
+		// Unset, the buffers carry the display's colour space: P3 on most Macs.
+		configuration.colorSpaceName = CGColorSpace.sRGB
 		configuration.sampleRate = 48_000
 		configuration.channelCount = 2
 		configuration.excludesCurrentProcessAudio = true
-		configuration.capturesAudio = request.audio.system.enabled
+		configuration.capturesAudio = request.audio.system.enabled && !tapsSystemAudio
 
 		if request.audio.microphone.enabled {
 			guard supportsNativeMicrophoneCapture(streamConfig: configuration) else {
@@ -571,8 +768,12 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			AVVideoCodecKey: AVVideoCodecType.h264,
 			AVVideoWidthKey: outputWidth,
 			AVVideoHeightKey: outputHeight,
+			// BT.709 tags, the colour the stream is captured in (#943).
+			AVVideoColorPropertiesKey: videoColorProperties,
 			AVVideoCompressionPropertiesKey: [
-				AVVideoAverageBitRateKey: request.video.bitrate ?? 18_000_000,
+				// From the size this stream really got. The renderer sends none (#924).
+				AVVideoAverageBitRateKey: request.video.bitrate
+					?? defaultVideoBitrate(width: outputWidth, height: outputHeight, fps: request.video.fps),
 				AVVideoExpectedSourceFrameRateKey: request.video.fps,
 				// Without this the encoder defaults to B-frames, and a reordered
 				// stream needs a composition offset per sample. AVAssetWriter emits
@@ -601,6 +802,11 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 				// particular run happened to die. Reordering off is 3/3 clean across
 				// both rates, and a SIGKILL at 25s still leaves 27 readable `moof`.
 				AVVideoAllowFrameReorderingKey: false,
+				// A keyframe every second, by frame count and by time: a still screen
+				// delivers fewer frames than the fps, and the count alone would then
+				// stretch the GOP, which is the editor's scrub cost (#937).
+				AVVideoMaxKeyFrameIntervalKey: videoKeyFrameInterval(fps: request.video.fps),
+				AVVideoMaxKeyFrameIntervalDurationKey: 1,
 			],
 		]
 		let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
@@ -682,6 +888,25 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			return
 		}
 
+		// A take that ended before its first frame -- a start that failed after the writer
+		// was set up, or a stop right away -- never called `startWriting`. Finishing (or
+		// even marking inputs finished on) a writer in that state raises an Objective-C
+		// exception, which kills the process: here, in a picker session, that would take
+		// every later take and the user's pick down with it. There is nothing to finalise:
+		// drop whatever file the writer may have created and say the take produced none.
+		if writer.status == .unknown {
+			sampleQueue.sync {
+				audioTicker?.cancel()
+				audioTicker = nil
+			}
+			try? FileManager.default.removeItem(atPath: request.outputs.screenPath)
+			emitError(
+				code: "writer-failed",
+				message: "The recording stopped before its first frame was written."
+			)
+			return
+		}
+
 		// Capture has stopped, so nothing is in flight on the sample queue any more; hopping
 		// onto it once is what makes the mixer's final flush safe without a lock, and it is
 		// also where the ticker has to die, since that is the queue it fires on.
@@ -704,7 +929,9 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			}
 		}
 
-		let refusedVideoFrames = sampleQueue.sync { videoTimestampGate.rejectedCount }
+		let (refusedVideoFrames, droppedFrames) = sampleQueue.sync {
+			(videoTimestampGate.rejectedCount, droppedVideoFrames)
+		}
 		if refusedVideoFrames > 1 {
 			emit([
 				"event": "warning",
@@ -727,6 +954,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			emit([
 				"event": "recording-stopped",
 				"screenPath": request.outputs.screenPath,
+				"droppedVideoFrames": droppedFrames,
 			])
 		} else {
 			emitError(
@@ -931,9 +1159,71 @@ struct OpenScreenScreenCaptureKitHelper {
 		_ = CGMainDisplayID()
 	}
 
+	/// The flag that turns this helper into a one-shot answer to "may we record the
+	/// screen", printed as the usual single JSON line and nothing else.
+	private static let screenAccessStatusFlag = "--screen-access-status"
+
+	/// The flag that turns this helper into a long-lived session around Apple's system
+	/// picker. See `PickerSession`.
+	private static let pickerSessionFlag = "--picker-session"
+
+	/// The flag that raises macOS' "record system audio" prompt and exits once it is
+	/// answered. See `SystemAudioTap.requestAccess`.
+	private static let requestSystemAudioFlag = "--request-system-audio"
+
 	static func main() async {
 		do {
 			initializeCoreGraphicsWindowServerConnection()
+
+			// Answered from a process that exists for one read and then dies, because a FRESH
+			// PROCESS is the only place the answer can be trusted.
+			// `CGPreflightScreenCaptureAccess()` caches its result for the life of the calling
+			// process: once it has answered false it answers false forever, whatever the user
+			// does in System Settings afterwards. The app is long-lived, and Chromium's
+			// `getMediaAccessStatus("screen")` goes through that same function, so from the
+			// first miss until the next relaunch the app cannot observe its own permission
+			// being granted. That staleness -- not the missing prompt alone -- is what left
+			// the permission unreachable without a restart.
+			//
+			// Deliberately BEFORE the macOS 13 guard and the request decode below: the question
+			// is asked on every macOS the app supports, and answering it needs neither
+			// ScreenCaptureKit nor a recording request.
+			if CommandLine.arguments.count == 2, CommandLine.arguments[1] == screenAccessStatusFlag {
+				emit([
+					"event": "screen-access",
+					"granted": CGPreflightScreenCaptureAccess(),
+				])
+				exit(0)
+			}
+
+			if CommandLine.arguments.count == 2, CommandLine.arguments[1] == requestSystemAudioFlag {
+				guard #available(macOS 14.2, *) else {
+					emitError(
+						code: "system-audio-unsupported",
+						message: "Core Audio process taps need macOS 14.2 or later."
+					)
+					exit(2)
+				}
+				do {
+					try SystemAudioTap.requestAccess()
+					emit(["event": "system-audio-access-requested"])
+					exit(0)
+				} catch {
+					emitError(code: "system-audio-request-failed", message: "\(error)")
+					exit(1)
+				}
+			}
+
+			if CommandLine.arguments.count == 2, CommandLine.arguments[1] == pickerSessionFlag {
+				guard #available(macOS 15.2, *) else {
+					emitError(
+						code: "picker-session-unsupported",
+						message: "The system picker session needs macOS 15.2 or later."
+					)
+					exit(2)
+				}
+				PickerSession().run()
+			}
 
 			guard CommandLine.arguments.count == 2 else {
 				throw HelperError.invalidArguments

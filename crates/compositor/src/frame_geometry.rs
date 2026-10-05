@@ -27,21 +27,21 @@
 use crate::config::Cfg;
 use crate::scene::{Scene, SceneCrop};
 
-/// Constant buffer d'un calque : **128 octets**, un par draw.
+/// Constant buffer d'un calque : **176 octets**, un par draw.
 ///
 /// C'est le contrat partagé par les trois côtés — `cbuffer Layer` dans `shaders.hlsl`,
-/// `struct Layer` dans `shaders.metal`, et ce struct. Les trois doivent s'accorder champ
-/// pour champ ET octet pour octet : un décalage ne produit pas d'erreur, il produit un
-/// shader qui lit `color` là où on a écrit `fx`.
+/// `struct Layer` dans `shaders.metal` et `vk_shaders/layer.wgsl`, et ce struct. Ils doivent
+/// s'accorder champ pour champ ET octet pour octet : un décalage ne produit pas d'erreur, il
+/// produit un shader qui lit `color` là où on a écrit `fx`.
 ///
 /// `align(16)` vient de la version macOS ; sous `repr(C)` seul, les offsets sont déjà
-/// 0/16/32/40/44/48/64/80/96/112 des deux côtés — l'alignement Rust ne change que
+/// 0/16/32/40/44/48/64/80/96/112/128/144/160 des deux côtés — l'alignement Rust ne change que
 /// l'adresse du struct, pas son contenu, et Windows le `copy_nonoverlapping` dans un
 /// constant buffer mappé où l'alignement source est sans effet. Les deux formes étaient
 /// donc compatibles ; les unifier évite qu'elles cessent de l'être.
 ///
 /// (Le commentaire d'origine annonçait « 64 octets ». Il n'a jamais été juste : dix champs,
-/// trente-deux `f32`.)
+/// trente-deux `f32`. Les trois derniers, le flou de mouvement de l'écran incliné, en font 176.)
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Default)]
 pub struct LayerCB {
@@ -55,6 +55,24 @@ pub struct LayerCB {
     pub src_prev: [f32; 4],
     pub dst_prev: [f32; 4],
     pub mb: [f32; 4], // mb[0] = nombre de taps de motion blur
+    /// Mode 8 : le plan à la frame PRÉCÉDENTE, coins TL, TR (`trail_a`) puis BR, BL (`trail_b`)
+    /// en px locaux comme `fx`/`src_prev`, et `trail_mb` = `[taps, force, 0, 0]` de son flou de
+    /// mouvement, ceux du mode 0 (`mb.xy`). `trail_mb` nul ailleurs : aucun tap, rien n'est lu.
+    /// Mode 18 incliné : les mêmes coins d'avant, en fractions de la sortie (`screen_trail_cb`).
+    pub trail_a: [f32; 4],
+    pub trail_b: [f32; 4],
+    pub trail_mb: [f32; 4],
+}
+
+impl LayerCB {
+    /// Le calque est l'un des modèles 3D — le curseur modelé (mode 15), l'impact de son clic
+    /// (16), l'appareil et son ombre (17) — que seule la variante « modèles » du shader de calque
+    /// compile. Dans le même shader que les autres, leurs branches fixaient l'occupation de TOUS
+    /// les calques (168 VGPR sur RADV) ; les trois backends décident donc du shader d'un calque
+    /// par ce test, au moment de le dessiner (cf. le haut de `vk_shaders/layer.wgsl`).
+    pub fn needs_models(&self) -> bool {
+        self.mode > 14.5 && self.mode < 17.5
+    }
 }
 
 pub const OUT_W: u32 = 1920;
@@ -363,6 +381,23 @@ pub(crate) fn cover_uv_rect(uv: [f32; 4], tex: [f32; 2], box_ar: f32) -> [f32; 4
     let (cx, cy) = (uv[0] + w_uv * 0.5, uv[1] + h_uv * 0.5);
     [cx - new_w * 0.5, cy - new_h * 0.5, cx + new_w * 0.5, cy + new_h * 0.5]
 }
+/// `cover_uv_rect`, la fenêtre centrée sur `at` (UV) au lieu du centre de `uv`, et bornée à `uv` :
+/// le remplissage du format, qui suit le curseur lissé dans l'enregistrement. Même taille que la
+/// fenêtre centrée, donc même grossissement ; seule sa position change.
+pub(crate) fn follow_cover_uv_rect(
+    uv: [f32; 4],
+    tex: [f32; 2],
+    box_ar: f32,
+    at: [f32; 2],
+) -> [f32; 4] {
+    let c = cover_uv_rect(uv, tex, box_ar);
+    let (hw, hh) = (0.5 * (c[2] - c[0]), 0.5 * (c[3] - c[1]));
+    // `max` puis `min`, pas `clamp` : à la précision flottante près la fenêtre peut dépasser `uv`
+    // d'un epsilon, et `clamp` panique quand sa borne basse passe la haute.
+    let cx = at[0].max(uv[0] + hw).min(uv[2] - hw);
+    let cy = at[1].max(uv[1] + hh).min(uv[3] - hh);
+    [cx - hw, cy - hh, cx + hw, cy + hh]
+}
 pub const HALF_W: u32 = OUT_W / 2;
 pub const HALF_H: u32 = OUT_H / 2;
 pub const FIXTURE_FRAMES: u32 = 360;
@@ -380,6 +415,26 @@ pub const DOF_ON_CPU_BACKEND: bool = true;
 pub fn dof_pyramid_levels(w: u32, h: u32) -> u32 {
     const DOF_PYRAMID_LEVELS: u32 = 5;
     DOF_PYRAMID_LEVELS.min(32 - w.max(h).max(1).leading_zeros())
+}
+/// Flou du fond : force 0..1 → (niveaux de la pyramide dual-Kawase, écart par passe), `None`
+/// à 0. Le rayon d'un dual-Kawase croît comme `2^niveaux × écart` : on vise un rayon
+/// proportionnel à la force et on prend le moins de niveaux qui l'atteint sans écarter les taps
+/// au point de dédoubler l'image. 0,5 retombe exactement sur l'ancien interrupteur « Blur BG »
+/// (3 niveaux, écart 2,2). Les trois backends lisent ceci, ils floutent donc pareil.
+pub fn background_blur_steps(amount: f32) -> Option<(usize, f32)> {
+    const RADIUS_AT_FULL: f32 = 2.0 * 8.0 * 2.2;
+    if !(amount > 0.001) {
+        return None;
+    }
+    let radius = amount.min(1.0) * RADIUS_AT_FULL;
+    let levels: usize = if radius <= 4.0 {
+        1
+    } else if radius <= 12.0 {
+        2
+    } else {
+        3
+    };
+    Some((levels, radius / (1 << levels) as f32))
 }
 /// Longueurs de style exprimées en FRACTION du petit côté du cadre, et non en pixels.
 ///
@@ -476,13 +531,32 @@ pub(crate) fn concentric_radius(r: f32, bx: f32, by: f32) -> f32 {
 }
 
 /// Position du slider Roundness sur sa course, 0..1, lue dans la scène : `roundnessFrac` est la
-/// valeur du slider (px de sortie) sur le petit côté de la sortie (`sceneDescription.ts`).
-/// `ROUNDNESS_SLIDER_MAX_PX` est le miroir du maximum du slider (`paramUnits.ts`).
+/// valeur du slider (px) sur la référence FIXE de 1080 px (`sceneDescription.ts`), et non plus
+/// sur le petit côté de la sortie — qui suit la source, si bien qu'une prise 4K recevait des
+/// coins deux fois moins ronds qu'une prise 1080p. `ROUNDNESS_SLIDER_MAX_PX` est le miroir du
+/// maximum du slider (`paramUnits.ts`).
 pub(crate) const ROUNDNESS_SLIDER_MAX_PX: f32 = 64.0;
 
 pub(crate) fn roundness_slider_position(scene: &crate::scene::Scene) -> f32 {
-    let out_min = scene.output.width.min(scene.output.height).max(1) as f32;
-    (scene.effects.roundness_frac * out_min / ROUNDNESS_SLIDER_MAX_PX).clamp(0.0, 1.0)
+    (scene.effects.roundness_frac * SHADOW_TUNING_REF_PX / ROUNDNESS_SLIDER_MAX_PX).clamp(0.0, 1.0)
+}
+
+/// L'UNITÉ DE L'ÉCRAN, px : le petit côté du cadre qu'aurait cet écran dans une sortie à SON ratio.
+///
+/// `content_px` est l'enregistrement affiché au repos (crop compris, zoom exclu, en entier même
+/// quand un slot en `cover` en rogne une partie). Divisé par `padding_scale`, il vaut exactement le
+/// petit côté du cadre (`frame_min_px`) quand la sortie a le ratio de l'enregistrement — Auto, ou
+/// un format fixe qui lui correspond : le rendu y est inchangé. Quand le format diffère (un clip
+/// 16:9 dans une sortie 9:16), l'écran n'occupe plus qu'une bande du cadre et l'unité rétrécit
+/// avec lui : le curseur, l'ombre et les coins gardent leur proportion À L'ÉCRAN au lieu de
+/// grossir de 1,8× à côté de lui.
+///
+/// Ce n'est pas `frame_unit_px` : celle-ci est faite pour qu'un cadre d'appareil ait la même
+/// épaisseur autour de n'importe quel clip d'une sortie, donc elle vaut `frame_min_px ×
+/// padding_scale` pour tout clip contenu dans la zone paddée — y compris la bande 16:9 d'une
+/// sortie 9:16, où elle ne corrigerait rien.
+pub(crate) fn screen_unit_px(content_px: [f32; 2], padding_scale: f32) -> f32 {
+    content_px[0].min(content_px[1]) / padding_scale.max(1e-3)
 }
 
 /// Le rayon des coins du métrage au BOUT de la course de Roundness sous chaque cadre, en unités
@@ -707,6 +781,20 @@ pub(crate) fn device_kind_id(kind: crate::scene::SceneFrame) -> f32 {
     }
 }
 
+/// Le verre noir de la face avant, tel que le mode 17 le rend de face : l'albédo `DEV_GLASS_*`
+/// des shaders sous leur lampe (`MODEL_AMBIENT + MODEL_DIFFUSE · n·l`, n = +z au repos). Le verre
+/// posé sous le métrage d'un bloc (`FrameGeometry::window_frame_cb`) prolonge ainsi la lunette
+/// sans couture. Miroir des trois shaders : teintes et coefficients.
+pub(crate) fn device_glass_rgba(dark: bool) -> [f32; 4] {
+    const GLASS_LIGHT: [f32; 3] = [0.031, 0.034, 0.040];
+    const GLASS_GRAPHITE: [f32; 3] = [0.043, 0.047, 0.055];
+    const MODEL_AMBIENT: f32 = 0.36;
+    const MODEL_DIFFUSE: f32 = 0.75;
+    let lit = MODEL_AMBIENT + MODEL_DIFFUSE * MODEL_LIGHT[2];
+    let [r, g, b] = if dark { GLASS_GRAPHITE } else { GLASS_LIGHT };
+    [r * lit, g * lit, b * lit, 1.0]
+}
+
 /// Les huit coins d'une boîte alignée.
 fn box_corners(lo: [f32; 3], hi: [f32; 3]) -> [[f32; 3]; 8] {
     std::array::from_fn(|i| {
@@ -911,10 +999,10 @@ pub(crate) fn screen_corner_radius_px(r: f32, s_px: [f32; 2]) -> f32 {
 /// unité du cadre `u` (px) : le filet à gauche, à droite et en bas, la barre de titre en haut (cf.
 /// `WindowFrame::margins`).
 ///
-/// L'écran ne rétrécit plus pour faire place au cadre : **le métrage a la même taille avec et sans
-/// cadre**, et c'est le cadre qui pousse vers l'extérieur — dans le padding, et au-delà du canvas
-/// s'il le faut, où la sortie le coupe. Rétrécir l'image pour loger un objet décoratif, c'était
-/// l'inverse de ce qu'on veut : le métrage est le sujet, le cadre son écrin.
+/// Le compositeur ne rétrécit jamais la boîte écran qu'il reçoit pour loger le cadre : le cadre
+/// pousse vers l'extérieur. C'est le layout de l'app qui lui fait place : le padding se mesure
+/// depuis le bord extérieur de tout ce que le cadre dessine (`computeCompositeLayout`), si bien
+/// qu'au repos il ne sort jamais du canvas, et c'est l'ensemble qui est centré.
 pub(crate) fn window_frame_margins(s_px: [f32; 2], u: f32) -> [f32; 4] {
     let (bar, line) = (WINDOW_FRAME_BAR_FRAC * u, WINDOW_FRAME_LINE_FRAC * u);
     let (sw, sh) = (s_px[0].max(1.0), s_px[1].max(1.0));
@@ -938,7 +1026,24 @@ pub enum ShadowCaster {
     /// Rect droit (mode 2) : `dst` en fractions de sortie, `size_px` sa taille, `radius` en px.
     Upright { dst: [f32; 4], size_px: [f32; 2], radius: f32 },
     /// Quad incliné (mode 12) : coins TL, TR, BR, BL relatifs à `center_px`, rayon du plan.
-    Tilted { corners: [(f32, f32); 4], center_px: [f32; 2], radius: f32 },
+    /// `mask` : le slot d'un layout en bloc, qui rogne le plan — l'ombre est alors celle de
+    /// leur intersection, ce qu'on voit (`shadow_mask_fields`).
+    Tilted { corners: [(f32, f32); 4], center_px: [f32; 2], radius: f32, mask: Option<ScreenMask> },
+}
+
+/// Les champs du mode 12 qui rognent l'ombre d'un plan incliné au slot qui le masque : `dst_prev`
+/// = le slot en px LOCAUX à la boîte de l'ombre (x0, y0, x1, y1), `mb.w` = le rayon de ses coins.
+/// `origin_px` : l'origine de ce repère local, en px de sortie, décalage de l'ombre NON compris —
+/// le slot et le plan portent le même. Des zéros sans masque : le shader n'en fait rien.
+pub fn shadow_mask_fields(
+    mask: Option<ScreenMask>,
+    origin_px: [f32; 2],
+    render_px: [f32; 2],
+) -> ([f32; 4], f32) {
+    let Some(m) = mask else { return ([0.0; 4], 0.0) };
+    let [x, y, w, h] = m.rect;
+    let (x0, y0) = (x * render_px[0] - origin_px[0], y * render_px[1] - origin_px[1]);
+    ([x0, y0, x0 + w * render_px[0], y0 + h * render_px[1]], m.radius_px)
 }
 /// Rect [x,y,w,h] normalisé d'un sprite de curseur de taille `w`×`h` dont le pivot `hotspot`
 /// (fraction 0..1 de l'image) doit tomber exactement sur `center`.
@@ -1099,7 +1204,7 @@ pub fn cursor_sprite_cb(
                 src_prev: [br0, br1, bl0, bl1],
                 // Le clip vit ici et NON dans `fx` (mode 7) : `fx` porte les coins.
                 dst_prev: clip,
-                // `mb.x` : 1 = warp projectif (caméra réelle).
+                // `mb.x` : 1 = warp projectif (caméra réelle ou appareil, cf. `screen_tilt`).
                 mb: [quad.warp_flag(), 0.0, 0.0, 0.0],
                 ..Default::default()
             }
@@ -1113,9 +1218,19 @@ pub fn cursor_sprite_cb(
 /// à l'autre vaut `0,42·gain` en 16:9, soit ±4 % ici.
 pub const CAMERA_LIGHT_GAIN: f32 = 0.2;
 
+/// Le plan incliné une frame plus tôt, et le réglage du flou : ce que le mode 8 floute
+/// (`FrameGeometry::tilt_trail`, `tilted_screen_cb`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TiltTrail {
+    /// Coins TL, TR, BR, BL du quad à la frame précédente, en px relatifs au centre de la boîte
+    /// COURANTE — le repère de `TiltedQuad::corners`.
+    pub corners: [(f32, f32); 4],
+    /// `[taps, force]` : ceux du mode 0 (`FrameGeometry::mb_taps`, `mb_amount`).
+    pub mb: [f32; 2],
+}
+
 /// `LayerCB` de l'écran incliné (mode 8), pour les trois backends : le quad projeté est dessiné
-/// dans sa BBOX et le fragment remonte au (s, t) du plan par le warp inverse. Pas de flou de
-/// mouvement sur ce chemin : `src_prev`/`dst_prev` y portent déjà les coins et le plan.
+/// dans sa BBOX et le fragment remonte au (s, t) du plan par le warp inverse.
 ///
 /// - `src` : la coupe source en UV texture ; `center_px` : le centre du rect `s_px` à l'écran ;
 /// - `radius` : le rayon de l'écran droit, que le plan réduit de `quad.scale` ;
@@ -1125,10 +1240,19 @@ pub const CAMERA_LIGHT_GAIN: f32 = 0.2;
 ///   du cadre quand le rayon dépasse la barre (`color.z` = la même hauteur, px du plan) ;
 /// - `dof` : la profondeur de champ tourne (`FrameGeometry::depth_of_field_on`).
 ///
-/// Sous la caméra réelle (`quad.projective`) : `dst_prev.w` = 1 (warp projectif), et `color.xy`
-/// porte l'éclairage, `1 + color.x·(s − 0,5) + color.y·(t − 0,5)` : la lampe de la caméra, fixe
-/// dans le monde comme l'œil, éclaire un peu plus le côté proche. Nuls sous un angle fixe, dont le
-/// rendu reste celui d'avant à l'octet.
+/// `quad.projective` : `dst_prev.w` = 1 (warp projectif). Sous la caméra réelle (`quad.lamp`),
+/// `color.xy` porte l'éclairage, `1 + color.x·(s − 0,5) + color.y·(t − 0,5)` : la lampe de la
+/// caméra, fixe dans le monde comme l'œil, éclaire un peu plus le côté proche. Nuls sous un angle
+/// fixe, dont l'exposition reste celle d'avant.
+///
+/// Sous le masque d'un layout en bloc (`mask`) : le plan penche DANS le slot, qui le rogne. Il est
+/// dessiné dans le rect du slot au lieu de sa bbox, et `color.w` porte le rayon des coins du slot,
+/// que le shader applique à ce rect. Nul sans masque, comme avant.
+///
+/// `trail` : le plan à la frame précédente (`FrameGeometry::tilt_pixel_trail`). Le shader floute
+/// le contenu le long du chemin qu'a parcouru chaque pixel depuis, borné à une frame et réglé comme
+/// le mode 0 (`trail_a`, `trail_b`, `trail_mb`). `None`, ou un seul tap : l'échantillon net, le
+/// rendu d'avant à l'octet.
 #[allow(clippy::too_many_arguments)]
 pub fn tilted_screen_cb(
     quad: &crate::regions::TiltedQuad,
@@ -1140,6 +1264,8 @@ pub fn tilted_screen_cb(
     top_lift_px: f32,
     dof: bool,
     render_px: [f32; 2],
+    mask: Option<ScreenMask>,
+    trail: Option<TiltTrail>,
 ) -> LayerCB {
     let [rw, rh] = render_px;
     let corners = quad.corners;
@@ -1172,7 +1298,7 @@ pub fn tilted_screen_cb(
     } else {
         [0.0; 4]
     };
-    LayerCB {
+    let mut cb = LayerCB {
         dst: [(center_px[0] + min_x) / rw, (center_px[1] + min_y) / rh, bbox_w / rw, bbox_h / rh],
         src,
         quad_px: [bbox_w, bbox_h],
@@ -1189,7 +1315,24 @@ pub fn tilted_screen_cb(
         // Gradient de profondeur du plan, profondeur du focus et `k` (`depth_mb`).
         mb: quad.depth_mb(s_px, focus_plane, dof),
         ..Default::default()
+    };
+    if let Some(trail) = trail {
+        // Même repère local que les coins courants : sans mouvement, les deux quads coïncident
+        // au bit près et le shader garde son échantillon net.
+        let [a0, a1] = local(trail.corners[0]);
+        let [b0, b1] = local(trail.corners[1]);
+        let [c0, c1] = local(trail.corners[2]);
+        let [d0, d1] = local(trail.corners[3]);
+        cb.trail_a = [a0, a1, b0, b1];
+        cb.trail_b = [c0, c1, d0, d1];
+        cb.trail_mb = [trail.mb[0], trail.mb[1], 0.0, 0.0];
     }
+    if let Some(mask) = mask {
+        reframe_warped(&mut cb, mask.rect, render_px);
+        // Négatif : coins hauts carrés, sous la barre de la fenêtre (`slot_alpha`, shaders).
+        cb.color[3] = if mask.square_top { -mask.radius_px } else { mask.radius_px };
+    }
+    cb
 }
 
 /// `LayerCB` d'une ombre portée par un quadrilatère (mode 12). `corners` (TL, TR, BR, BL) en px
@@ -1453,24 +1596,73 @@ fn same_source_path(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
-/// Période commune des mouvements de fond (s). Chaque période du shader (20, 24, 30, 40, 12,
-/// 120 s) la divise, donc replier le temps dessus ne crée aucun raccord visible — et garde au
+/// Période commune des mouvements de fond (s). Chaque période du shader (6, 10, 12, 15, 20,
+/// 30 s) la divise, donc replier le temps dessus ne crée aucun raccord visible — et garde au
 /// shader un temps borné, là où un `f32` de plusieurs heures perdrait la finesse du bruit.
-pub const GRADIENT_MOTION_PERIOD_S: f32 = 120.0;
+pub const WALLPAPER_MOTION_PERIOD_S: f32 = 120.0;
 
-/// Emplacements libres du mode 5 pour le fond animé : `fx.zw` = (temps programme replié, indice
-/// du mouvement), `mb.x` = aspect w/h de la sortie (les nappes de l'aurore restent rondes).
+/// Ce qui décide à lui seul du fond composé — sa description, la force de son flou, la couleur
+/// de repli, la taille de rendu —, gardé avec sa copie (`bg_cache`) : tant que le fond demandé
+/// lui est égal, le backend recopie le fond de la frame d'avant au lieu de le redessiner, ce qui
+/// coûtait plus que l'écran lui-même (1,65 ms par frame 1080p sur une Radeon 610M, un wallpaper
+/// 4K échantillonné sans mips).
 ///
-/// `GradientMotion::None` rend les zéros d'avant l'animation, emplacement pour emplacement : le
-/// dégradé immobile reste celui d'aujourd'hui, octet pour octet. Fonction pure du temps
+/// La comparaison de chaque frame (`matches`) ne construit ni ne copie rien : une image en data
+/// URI pèse plusieurs Mo. Seul `of`, au moment de garder un nouveau fond, la clone.
+#[derive(Clone, PartialEq)]
+pub struct BackgroundKey {
+    background: Option<crate::scene::SceneBackground>,
+    blur: f32,
+    fallback: [f32; 4],
+    render_px: [f32; 2],
+}
+
+impl BackgroundKey {
+    /// La clé d'un fond fixe ; `None` pour un fond animé, qui change à chaque frame.
+    pub fn of(
+        background: Option<&crate::scene::SceneBackground>,
+        blur: f32,
+        fallback: [f32; 4],
+        render_px: [f32; 2],
+    ) -> Option<BackgroundKey> {
+        use crate::scene::{SceneBackground as B, WallpaperMotion};
+        if let Some(B::Gradient { motion, .. } | B::Image { motion, .. }) = background {
+            if *motion != WallpaperMotion::None {
+                return None;
+            }
+        }
+        Some(BackgroundKey { background: background.cloned(), blur, fallback, render_px })
+    }
+
+    /// Le fond demandé est celui-ci.
+    pub fn matches(
+        &self,
+        background: Option<&crate::scene::SceneBackground>,
+        blur: f32,
+        fallback: [f32; 4],
+        render_px: [f32; 2],
+    ) -> bool {
+        self.background.as_ref() == background
+            && self.blur == blur
+            && self.fallback == fallback
+            && self.render_px == render_px
+    }
+}
+
+/// Emplacements libres des modes 5 (dégradé) et 6 (image) pour le fond animé : `fx.zw` = (temps
+/// programme replié, indice du mouvement), `mb.x` = aspect w/h du rect rempli (les nappes de
+/// l'aurore restent rondes).
+///
+/// `WallpaperMotion::None` rend les zéros d'avant l'animation, emplacement pour emplacement : le
+/// fond immobile reste celui d'aujourd'hui, octet pour octet. Fonction pure du temps
 /// programme, jamais d'un état porté de frame en frame — preview et export, lecture et seek
 /// tombent sur la même image.
-pub fn gradient_motion_slots(
-    motion: crate::scene::GradientMotion,
+pub fn wallpaper_motion_slots(
+    motion: crate::scene::WallpaperMotion,
     programme_t: f32,
     aspect: f32,
 ) -> ([f32; 2], [f32; 4]) {
-    use crate::scene::GradientMotion as M;
+    use crate::scene::WallpaperMotion as M;
     let index = match motion {
         M::None => return ([0.0, 0.0], [0.0; 4]),
         M::Drift => 1.0,
@@ -1478,9 +1670,74 @@ pub fn gradient_motion_slots(
         M::Waves => 3.0,
     };
     (
-        [programme_t.rem_euclid(GRADIENT_MOTION_PERIOD_S), index],
+        [programme_t.rem_euclid(WALLPAPER_MOTION_PERIOD_S), index],
         [aspect, 0.0, 0.0, 0.0],
     )
+}
+
+/// Un dégradé linéaire en calque du mode 5, stops compris : quatre nœuds `[r, g, b, position]`
+/// dans `color`, `src_prev`, `dst_prev` puis `src`, dans l'ordre du dégradé. Le shader va de nœud
+/// en nœud comme CSS, donc un stop du milieu est peint là où la vignette le montre. Avant, seuls
+/// le premier et le dernier stop arrivaient au shader, et le milieu d'un dégradé à trois stops
+/// (celui de l'ancien éditeur) disparaissait du rendu.
+///
+/// Positions : celles de l'app quand il y en a une par stop, sinon réparties à égale distance
+/// (scène plus ancienne). Bornées à 0..1 et jamais en recul sur la précédente, comme en CSS. Un
+/// stop illisible est sauté ; sans aucun stop lisible, `fallback` remplit tout. Moins de quatre
+/// stops : le dernier se répète, en segments de longueur nulle qui ne peignent rien. Deux stops
+/// à 0 et 1 rendent donc exactement l'ancien `lerp(c0, c1, t)`.
+pub fn gradient_layer(stops: &[String], offsets: &[f32], fallback: [f32; 4]) -> LayerCB {
+    let mut knots: Vec<[f32; 4]> = Vec::with_capacity(stops.len().max(4));
+    let mut floor = 0.0f32;
+    for (i, stop) in stops.iter().enumerate() {
+        let Some(c) = parse_hex(stop) else { continue };
+        let raw = if offsets.len() == stops.len() {
+            offsets[i]
+        } else if stops.len() > 1 {
+            i as f32 / (stops.len() - 1) as f32
+        } else {
+            0.0
+        };
+        let at = if raw.is_finite() { raw.clamp(0.0, 1.0) } else { floor }.max(floor);
+        floor = at;
+        // Un stop translucide (le preset v1.5 `rgba(235,230,44,0.55)` vit dans des projets
+        // enregistrés) est prémultiplié : le fond est la couche du dessous, posée sur le clear
+        // noir, donc honorer son alpha revient exactement à `rgb · a`. CSS interpole aussi en
+        // prémultiplié, d'où la rampe juste entre deux stops d'alphas différents. Le nœud n'a
+        // pas de place pour l'alpha (w = position), et le shader rend le mode 5 opaque.
+        knots.push([c[0] * c[3], c[1] * c[3], c[2] * c[3], at]);
+    }
+    if knots.is_empty() {
+        knots.push([fallback[0], fallback[1], fallback[2], 0.0]);
+    }
+    // ponytail: quatre nœuds, les emplacements libres du mode 5. Au-delà (les presets v1.5 en
+    // avaient jusqu'à sept), on retire tour à tour le stop intérieur que ses voisins reproduisent
+    // le mieux. Une rampe en texture lèverait la limite si un dégradé plus riche devenait courant.
+    while knots.len() > 4 {
+        let miss = |i: usize| {
+            let (p, k, n) = (knots[i - 1], knots[i], knots[i + 1]);
+            let span = n[3] - p[3];
+            if span <= 1e-6 {
+                return 0.0; // stop de largeur nulle : il ne peint rien
+            }
+            let f = (k[3] - p[3]) / span;
+            (0..3).map(|c| (k[c] - (p[c] + (n[c] - p[c]) * f)).abs()).sum::<f32>()
+        };
+        let drop = (1..knots.len() - 1).min_by(|&a, &b| miss(a).total_cmp(&miss(b))).unwrap_or(1);
+        knots.remove(drop);
+    }
+    while knots.len() < 4 {
+        let last = knots[knots.len() - 1];
+        knots.push(last);
+    }
+    LayerCB {
+        mode: 5.0,
+        color: knots[0],
+        src_prev: knots[1],
+        dst_prev: knots[2],
+        src: knots[3],
+        ..Default::default()
+    }
 }
 
 /// True when this clip really has a camera to draw.
@@ -1607,9 +1864,15 @@ pub struct FrameGeometry {
     /// Part dynamique du tilt (parallaxe, `regions::dynamic_tilt`), ajoutée à la base à la
     /// projection. Nulle quand la base est neutre.
     pub zoom_rotation_dyn: [f32; 3],
-    /// Caméra réelle de `follow-cursor` (`camera.rs`), `None` sans elle. Jamais en même temps
+    /// Caméra réelle de `orbit` (`camera.rs`), `None` sans elle. Jamais en même temps
     /// qu'une `zoom_rotation` non nulle.
     pub camera: Option<crate::camera::CameraPose>,
+    /// La rotation de base une frame d'écran plus tôt : avec `s_dst_prev` et `camera_prev`, le
+    /// zoom d'AVANT, que le mode 8 floute (`tilt_trail`).
+    pub zoom_rotation_prev: [f32; 3],
+    /// La caméra réelle une frame plus tôt (poids, visée, orbite, zoom), `None` si elle n'y était
+    /// pas active — même quand elle l'est à cette frame-ci, ou l'inverse.
+    pub camera_prev: Option<crate::camera::CameraPose>,
     pub padding_scale: f32,
     /// Coupe source de l'écran en UV texture (crop utilisateur + zoom).
     pub cut: [f32; 4],
@@ -1637,6 +1900,9 @@ pub struct FrameGeometry {
     pub s_ann: [f32; 4],
     pub s_radius: f32,
     pub frame_min_px: f32,
+    /// L'unité de l'ÉCRAN (`screen_unit_px`) : ce que mesurent le curseur, l'ombre de l'écran et
+    /// ses coins sans cadre.
+    pub screen_unit_px: f32,
     pub w_dst: [f32; 4],
     pub w_dst_prev: [f32; 4],
     pub w_px: [f32; 2],
@@ -1647,6 +1913,64 @@ pub struct FrameGeometry {
     /// déjà la boîte rétrécie, et `s_radius` le rayon des coins de l'écran — des seuls coins BAS
     /// sous une barre de titre (fenêtre, navigateur), des quatre pour les autres appareils.
     pub window_frame: Option<WindowFrame>,
+    /// Layouts en bloc : le slot de l'écran, un conteneur qui le MASQUE (cf. `ScreenMask`).
+    /// `None` ailleurs, et le rendu est celui d'avant, à l'octet.
+    pub screen_mask: Option<ScreenMask>,
+}
+
+/// Le conteneur d'un layout en bloc (côte à côte, haut/bas) : un masque fixe, overflow hidden.
+///
+/// L'écran y garde la géométrie de tous les layouts — le zoom dans la boîte (#179), la 3D sur le
+/// métrage — et seul son DESSIN est rogné au slot. Sans lui, la boîte zoomée débordait sur la
+/// caméra et dans l'espace qui les sépare, et le bloc ne tenait plus. Le masque, lui, ne zoome
+/// ni ne penche jamais : le layout garde son rect et ses coins, et son ombre est la sienne.
+///
+/// Sous un cadre, le cadre EST ce conteneur : fenêtre ou appareil, il reste au repos autour du
+/// slot, à plat, et le slot est son ouverture. Le métrage zoome et penche dedans. C'est l'inverse
+/// des autres layouts, où l'appareil zoome et penche avec l'écran (`FrameGeometry::frame_box`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenMask {
+    /// Le slot, en fractions de la sortie : `layout.screenRect`, que le zoom ne touche pas.
+    pub rect: [f32; 4],
+    /// Le rayon de ses coins, en px du render target : celui de l'écran au repos.
+    pub radius_px: f32,
+    /// Coins HAUTS carrés : le slot est sous la barre de la fenêtre qui le contient. À plat, le
+    /// mode 0 le sait déjà (`screen_square_top`) ; incliné, le mode 8 le lit dans le signe de son
+    /// rayon (`tilted_screen_cb`).
+    pub square_top: bool,
+}
+
+impl ScreenMask {
+    /// `dst` rogné au slot, en fractions de la sortie. `None` s'il n'en reste rien ; `dst` tel
+    /// quel, à l'octet, s'il y tient déjà (une intersection recalculée en différerait d'un ulp).
+    fn clip(&self, dst: [f32; 4]) -> Option<[f32; 4]> {
+        let [x, y, w, h] = self.rect;
+        if dst[0] >= x && dst[1] >= y && dst[0] + dst[2] <= x + w && dst[1] + dst[3] <= y + h {
+            return Some(dst);
+        }
+        let r = intersect_rect(dst, self.rect);
+        (r[2] > 0.0 && r[3] > 0.0).then_some(r)
+    }
+}
+
+/// Redessine un calque WARPÉ (modes 8 et 16 : coins TL/TR dans `fx`, BR/BL dans `src_prev`, en px
+/// locaux à `dst` ; au mode 8, ceux de la frame d'avant dans `trail_a`/`trail_b`) dans une autre
+/// boîte `dst`. Le warp ne dépend pas de la boîte de dessin, qui ne fait que borner les pixels
+/// rastérisés : il suffit de reporter les coins dans son repère.
+fn reframe_warped(cb: &mut LayerCB, dst: [f32; 4], render_px: [f32; 2]) {
+    let shift = [(dst[0] - cb.dst[0]) * render_px[0], (dst[1] - cb.dst[1]) * render_px[1]];
+    let reframe = |c: &mut [f32; 4]| {
+        *c = [c[0] - shift[0], c[1] - shift[1], c[2] - shift[0], c[3] - shift[1]];
+    };
+    reframe(&mut cb.fx);
+    reframe(&mut cb.src_prev);
+    // La traînée, seulement s'il y en a une : sans elle, ses champs restent nuls.
+    if cb.trail_mb[0] > 0.0 {
+        reframe(&mut cb.trail_a);
+        reframe(&mut cb.trail_b);
+    }
+    cb.dst = dst;
+    cb.quad_px = [dst[2] * render_px[0], dst[3] * render_px[1]];
 }
 
 /// Rect de destination d'une annotation dans un rect d'ancrage, en fractions de la sortie.
@@ -1689,18 +2013,56 @@ impl FrameGeometry {
                 self.zoom_rotation,
                 self.zoom_rotation_dyn,
             );
-            // Sous un cadre d'APPAREIL, l'écran passe au warp PROJECTIF même sous un angle fixe.
-            // Le mode 17 lance ses rayons dans la perspective exacte ; le warp bilinéaire s'en
-            // écarte de ~8 % de la largeur au milieu des bords (mesuré par
-            // `the_device_screen_face_lands_on_the_footage_plane`), soit une lunette à cent
-            // pixels du bord de l'image. Les quatre coins sont les mêmes des deux côtés, donc
-            // l'homographie qu'ils définissent EST cette projection exacte : passer le drapeau
-            // recolle l'image sur le modèle, partout et pas seulement aux coins. Sans appareil —
-            // sans cadre ou sous le chrome plat — rien ne change, à l'octet.
-            if self.window_frame.as_ref().is_some_and(|f| f.kind.is_device()) {
+            // Un angle fixe se dessine au warp BILINÉAIRE de ses coins : le rendu des angles fixes
+            // de la v1.13.0, à l'octet. Sous un cadre d'APPAREIL seulement, l'écran passe au warp
+            // PROJECTIF : le mode 17 lance ses rayons dans la perspective exacte, et le warp
+            // bilinéaire s'en écarte de ~8 % de la largeur au milieu des bords (mesuré par
+            // `the_device_screen_face_lands_on_the_footage_plane`), soit une lunette à cent pixels
+            // du bord de l'image. Les quatre coins sont les mêmes des deux côtés, donc
+            // l'homographie qu'ils définissent EST cette projection exacte. Pas sous le masque d'un
+            // bloc : l'appareil y reste au repos, le métrage penche seul dans son ouverture, au
+            // warp de l'écran sans cadre.
+            if self.window_frame.as_ref().is_some_and(|f| f.kind.is_device())
+                && self.screen_mask.is_none()
+            {
                 quad.projective = true;
             }
             quad
+        })
+    }
+
+    /// Le plan incliné une frame d'écran plus tôt, avec le réglage du flou : d'où part la
+    /// traînée de l'écran cadré (`screen_trail_cb`), ou celle du seul métrage sous un masque de
+    /// bloc (`tilt_pixel_trail`). `None` quand l'écran est droit ou le flou coupé.
+    ///
+    /// La frame d'avant est celle du mode 0 : la boîte au zoom d'avant (`s_dst_prev`), et ici la
+    /// rotation de base d'avant (un angle fixe entre avec le zoom) ou la caméra réelle d'avant
+    /// (`camera_prev`). Parallaxe et impact restent ceux de la frame, comme le focus du mode 0 : le
+    /// flou suit le zoom et la caméra, borné à une frame.
+    pub fn tilt_trail(&self, render_px: [f32; 2]) -> Option<TiltTrail> {
+        if !self.tilted() || self.mb_taps < 2.0 || self.mb_amount <= 0.001 {
+            return None;
+        }
+        let d = self.s_dst_prev;
+        let px = [d[2] * render_px[0], d[3] * render_px[1]];
+        let quad = match self.camera_prev {
+            Some(pose) => crate::camera::View::new(px, pose).quad(px),
+            None => crate::regions::rotated_quad_corners_px(
+                px[0],
+                px[1],
+                self.zoom_rotation_prev,
+                self.zoom_rotation_dyn,
+            ),
+        };
+        // Les coins d'avant, reportés au centre de la boîte COURANTE (le repère des siens).
+        let now = self.screen_center_px(render_px);
+        let shift = [
+            (d[0] + d[2] * 0.5) * render_px[0] - now[0],
+            (d[1] + d[3] * 0.5) * render_px[1] - now[1],
+        ];
+        Some(TiltTrail {
+            corners: quad.corners.map(|(x, y)| (x + shift[0], y + shift[1])),
+            mb: [self.mb_taps, self.mb_amount],
         })
     }
 
@@ -1747,6 +2109,97 @@ impl FrameGeometry {
         }
     }
 
+    /// L'écran cadré se déplace-t-il EN BLOC sous le flou de mouvement sur cette frame ?
+    ///
+    /// La coupe est la même aux deux frames : tout le mouvement de l'écran vient de sa boîte,
+    /// `s_dst_prev` → `s_dst`, et incliné, du plan qui la montre (`tilt_trail`). L'ombre, le cadre
+    /// et l'appareil sont taillés dans cette boîte et posés sur ce plan. C'est donc un objet
+    /// rigide, et on le floute comme tel (mode 18, `screen_trail_cb`) : flouter le seul métrage
+    /// laissait un contenu qui file dans un cadre aux bords nets, et sous une caméra 3D, c'était
+    /// le cas de tout zoom.
+    ///
+    /// Incliné, le plan a bougé quand ses coins ont bougé : sans mouvement, ceux de `tilt_trail`
+    /// sont les siens au bit près, et le rendu reste celui d'avant, à l'octet.
+    ///
+    /// Pas sous un masque de bloc : la case ne bouge pas, seul le métrage bouge dedans, et le
+    /// flou par pixel (modes 0 et 8) reste le bon.
+    pub fn screen_trail(&self, render_px: [f32; 2]) -> bool {
+        if self.mb_taps < 2.0 || self.mb_amount <= 0.001 || self.screen_mask.is_some() {
+            return false;
+        }
+        match self.screen_tilt_in(render_px) {
+            None => self.s_dst != self.s_dst_prev,
+            Some(quad) => self.tilt_trail(render_px).is_some_and(|t| t.corners != quad.corners),
+        }
+    }
+
+    /// Taps du flou PAR PIXEL du mode 0 de l'écran : un seul quand `screen_trail` floute déjà
+    /// l'objet entier, sinon le métrage serait flouté deux fois.
+    pub fn screen_pixel_taps(&self, render_px: [f32; 2]) -> f32 {
+        if self.screen_trail(render_px) { 1.0 } else { self.mb_taps }
+    }
+
+    /// La traînée PAR PIXEL du mode 8 : `tilt_trail`, sauf quand `screen_trail` floute déjà
+    /// l'objet entier. Le masque de confidentialité, lui, lit toujours `tilt_trail` : les deux
+    /// flous étalent le secret sur le même chemin.
+    pub fn tilt_pixel_trail(&self, render_px: [f32; 2]) -> Option<TiltTrail> {
+        self.tilt_trail(render_px).filter(|_| !self.screen_trail(render_px))
+    }
+
+    /// Le calque du mode 18 : le rendu isolé de l'écran cadré (t2), recomposé le long de sa
+    /// trajectoire. `src` = la coupe (le métrage relu directement là où le rendu isolé s'arrête
+    /// au bord de la sortie), `quad_px` et `radius_px` = l'écran et ses coins : ce repli ne lit le
+    /// métrage que dans l'ouverture arrondie, jamais sous la lunette d'un appareil.
+    ///
+    /// À plat, la trajectoire est celle de la boîte : `fx` = la courante, `dst_prev` = la
+    /// précédente. Incliné (`mb.z` = 1), celle du plan : ses coins TL, TR, BR, BL courants dans
+    /// `fx`/`src_prev` et ceux de `tilt_trail` dans `trail_a`/`trail_b`, en fractions de la
+    /// sortie comme la boîte ; `quad_px` et `radius_px` sont alors pris dans le plan, comme au
+    /// mode 8. `mb.w` = le warp du plan (`TiltedQuad::warp_flag`, bilinéaire sous un angle fixe,
+    /// projectif sous la caméra réelle ou un appareil) : le shader passe par lui dans les deux
+    /// sens, comme le mode 8 qui a dessiné le métrage.
+    ///
+    /// Le métrage relu hors de la sortie l'est comme le mode 8 l'a dessiné : incliné, `trail_mb`
+    /// porte SA profondeur de champ (son `mb` ; `dof` = `depth_of_field_on`, vrai quand la
+    /// pyramide est liée) et `color.xy` sa lampe. Nuls à plat : le repli relit le métrage net.
+    pub fn screen_trail_cb(&self, render_px: [f32; 2], dof: bool) -> LayerCB {
+        let s_px = [self.s_dst[2] * render_px[0], self.s_dst[3] * render_px[1]];
+        let flat = LayerCB {
+            dst: [0.0, 0.0, 1.0, 1.0],
+            src: self.cut,
+            quad_px: s_px,
+            radius_px: self.s_radius,
+            mode: 18.0,
+            fx: self.s_dst,
+            dst_prev: self.s_dst_prev,
+            mb: [self.mb_taps, self.mb_amount, 0.0, 0.0],
+            ..Default::default()
+        };
+        let (Some(quad), Some(trail)) = (self.screen_tilt_in(render_px), self.tilt_trail(render_px))
+        else {
+            return flat;
+        };
+        let c = self.screen_center_px(render_px);
+        let out = |(x, y): (f32, f32)| [(c[0] + x) / render_px[0], (c[1] + y) / render_px[1]];
+        let [tl, tr, br, bl] = quad.corners.map(out);
+        let [ptl, ptr, pbr, pbl] = trail.corners.map(out);
+        // Le calque que le mode 8 dessine pour ce plan : sa profondeur de champ et sa lampe ne
+        // dépendent ni du rayon, ni du chrome, ni d'un masque.
+        let plane = tilted_screen_cb(&quad, s_px, c, self.cut, self.focus_plane, 0.0, 0.0, dof, render_px, None, None);
+        LayerCB {
+            quad_px: s_px.map(|v| v * quad.scale),
+            radius_px: self.s_radius * quad.scale,
+            color: [plane.color[0], plane.color[1], 0.0, 0.0],
+            fx: [tl[0], tl[1], tr[0], tr[1]],
+            src_prev: [br[0], br[1], bl[0], bl[1]],
+            trail_a: [ptl[0], ptl[1], ptr[0], ptr[1]],
+            trail_b: [pbr[0], pbr[1], pbl[0], pbl[1]],
+            mb: [self.mb_taps, self.mb_amount, 1.0, quad.warp_flag()],
+            trail_mb: plane.mb,
+            ..flat
+        }
+    }
+
     /// Sous le chrome de fenêtre, de combien son contour INTÉRIEUR remonte au-dessus du bord haut
     /// de l'écran, en px de l'écran droit : la barre de titre moins le filet. 0 ailleurs.
     ///
@@ -1756,14 +2209,47 @@ impl FrameGeometry {
     /// sortirait. Le shader rogne alors ses coins hauts par ce même arc, pris au contour
     /// intérieur du filet (`sd_screen_under_bar`) — l'écran suit le cadre, il ne s'arrondit pas
     /// de son côté. Le mode 0 le lit dans `mb.z`, le mode 8 dans `color.z` (px du plan).
+    ///
+    /// Sous le masque d'un bloc, la fenêtre reste au repos autour du slot : la remontée est la
+    /// sienne, et le métrage droit, rogné au slot, épouse son contour. Incliné, il penche DANS la
+    /// fenêtre, arrondi de partout comme sans cadre : 0.
     pub fn screen_top_lift_px(&self, render_px: [f32; 2]) -> f32 {
         match self.window_frame.as_ref() {
+            Some(_) if self.screen_mask.is_some() && self.tilted() => 0.0,
             Some(f) if f.kind == crate::scene::SceneFrame::Window => {
-                let (s_w, s_h) = (self.s_dst[2] * render_px[0], self.s_dst[3] * render_px[1]);
+                let b = self.frame_box();
+                let (s_w, s_h) = (b[2] * render_px[0], b[3] * render_px[1]);
                 (f.margins[1] * s_h - f.margins[0] * s_w).max(0.0)
             }
             _ => 0.0,
         }
+    }
+
+    /// La boîte autour de laquelle le cadre se construit. Sous le masque d'un bloc, le cadre EST
+    /// le conteneur (`ScreenMask`) : le slot au repos, ni zoomé ni incliné. Ailleurs, la boîte
+    /// écran : le cadre zoome avec elle (#179).
+    fn frame_box(&self) -> [f32; 4] {
+        self.screen_mask.map_or(self.s_dst, |m| m.rect)
+    }
+
+    /// Le plan du cadre : celui de l'écran, sauf sous le masque d'un bloc, où le cadre reste à
+    /// plat pendant que le métrage penche dedans.
+    fn frame_tilt(&self, render_px: [f32; 2]) -> Option<crate::regions::TiltedQuad> {
+        if self.screen_mask.is_some() {
+            return None;
+        }
+        self.screen_tilt_in(render_px)
+    }
+
+    /// Le rayon des coins du métrage autour duquel le cadre s'arrondit : celui du slot au repos
+    /// sous le masque d'un bloc, celui de la boîte écran ailleurs.
+    fn frame_screen_radius(&self) -> f32 {
+        self.screen_mask.map_or(self.s_radius, |m| m.radius_px)
+    }
+
+    fn frame_center_px(&self, render_px: [f32; 2]) -> [f32; 2] {
+        let b = self.frame_box();
+        [(b[0] + b[2] * 0.5) * render_px[0], (b[1] + b[3] * 0.5) * render_px[1]]
     }
 
     /// Le plan incliné de l'écran, `None` quand il est droit. Même appel que les backends : un
@@ -1784,15 +2270,18 @@ impl FrameGeometry {
     /// 0..1 : un warp bilinéaire est entièrement fixé par ses quatre coins, donc le prolonger
     /// donne exactement le plan que le mode 8 dessine, et le cadre penche avec l'écran sans
     /// aucune trigonométrie de plus. Sous la caméra réelle, le prolongement est celui de
-    /// l'homographie, et le drapeau rendu (`TiltedQuad::warp_flag`) le dit au mode 14.
+    /// l'homographie, et le drapeau rendu (`TiltedQuad::warp_flag`) le dit au mode 14. Sous le
+    /// masque d'un bloc, le cadre est droit autour du slot (`frame_box`), coins relatifs au centre
+    /// de celui-ci.
     fn window_frame_corners(
         &self,
         margins: [f32; 4],
         render_px: [f32; 2],
     ) -> ([(f32, f32); 4], f32, f32) {
         let [ml, mt, mr, mb] = margins;
-        let quad = self.screen_tilt_in(render_px).unwrap_or_else(|| {
-            let (hw, hh) = (self.s_dst[2] * render_px[0] * 0.5, self.s_dst[3] * render_px[1] * 0.5);
+        let quad = self.frame_tilt(render_px).unwrap_or_else(|| {
+            let b = self.frame_box();
+            let (hw, hh) = (b[2] * render_px[0] * 0.5, b[3] * render_px[1] * 0.5);
             crate::regions::TiltedQuad {
                 corners: [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)],
                 scale: 1.0,
@@ -1819,46 +2308,93 @@ impl FrameGeometry {
     /// APPAREIL ne passe pas par ici : son ombre suit la silhouette du modèle (`device_shadow_cb`),
     /// qu'un quad plat ne sait pas porter.
     pub fn shadow_caster(&self, render_px: [f32; 2]) -> ShadowCaster {
-        let center_px = self.screen_center_px(render_px);
-        match (&self.window_frame, self.screen_tilt_in(render_px)) {
+        // Le cadre porte l'ombre, là où il est : au repos autour du slot sous le masque d'un bloc.
+        if let Some(frame) = &self.window_frame {
+            return match self.frame_tilt(render_px) {
+                None => {
+                    let [ml, mt, mr, mb] = frame.margins;
+                    let d = self.frame_box();
+                    let dst = [
+                        d[0] - ml * d[2],
+                        d[1] - mt * d[3],
+                        d[2] * (1.0 + ml + mr),
+                        d[3] * (1.0 + mt + mb),
+                    ];
+                    ShadowCaster::Upright {
+                        dst,
+                        size_px: [dst[2] * render_px[0], dst[3] * render_px[1]],
+                        radius: frame.radius[0],
+                    }
+                }
+                Some(_) => {
+                    let (corners, scale, _) = self.window_frame_corners(frame.margins, render_px);
+                    ShadowCaster::Tilted {
+                        corners,
+                        center_px: self.frame_center_px(render_px),
+                        radius: frame.radius[0] * scale,
+                        mask: None,
+                    }
+                }
+            };
+        }
+        // Sous le masque d'un layout en bloc, l'ombre est celle de ce qu'on voit. Droite, la boîte
+        // zoomée couvre tout le slot : c'est le slot, qui ne zoome pas. Inclinée, le plan rogné
+        // par le slot (`mask` du quad).
+        match (self.screen_mask, self.screen_tilt_in(render_px)) {
+            (Some(mask), None) => ShadowCaster::Upright {
+                dst: mask.rect,
+                size_px: [mask.rect[2] * render_px[0], mask.rect[3] * render_px[1]],
+                radius: mask.radius_px,
+            },
             (None, None) => ShadowCaster::Upright {
                 dst: self.s_dst,
                 size_px: [self.s_dst[2] * render_px[0], self.s_dst[3] * render_px[1]],
                 radius: self.s_radius,
             },
-            (None, Some(quad)) => ShadowCaster::Tilted {
+            (mask, Some(quad)) => ShadowCaster::Tilted {
                 corners: quad.corners,
-                center_px,
+                center_px: self.screen_center_px(render_px),
                 radius: self.s_radius * quad.scale,
+                mask,
             },
-            (Some(frame), None) => {
-                let [ml, mt, mr, mb] = frame.margins;
-                let d = self.s_dst;
-                let dst = [
-                    d[0] - ml * d[2],
-                    d[1] - mt * d[3],
-                    d[2] * (1.0 + ml + mr),
-                    d[3] * (1.0 + mt + mb),
-                ];
-                ShadowCaster::Upright {
-                    dst,
-                    size_px: [dst[2] * render_px[0], dst[3] * render_px[1]],
-                    radius: frame.radius[0],
-                }
-            }
-            (Some(frame), Some(_)) => {
-                let (corners, scale, _) = self.window_frame_corners(frame.margins, render_px);
-                ShadowCaster::Tilted { corners, center_px, radius: frame.radius[0] * scale }
-            }
         }
+    }
+
+    /// L'écran droit (mode 0) sous le masque d'un layout en bloc : `dst` rogné au slot, `src`
+    /// d'autant (même mapping image→écran), et les coins du slot. Sans masque, les valeurs du
+    /// backend repartent telles quelles, à l'octet. Le flou de mouvement n'a rien à suivre : il
+    /// lit la frame précédente par `dst_prev`/`src_prev`, que le masque ne touche pas.
+    pub fn mask_flat_screen(
+        &self,
+        dst: [f32; 4],
+        src: [f32; 4],
+        quad_px: [f32; 2],
+        radius_px: f32,
+        render_px: [f32; 2],
+    ) -> ([f32; 4], [f32; 4], [f32; 2], f32) {
+        let Some(mask) = self.screen_mask else { return (dst, src, quad_px, radius_px) };
+        let clipped = intersect_rect(dst, mask.rect);
+        let u = |x: f32| src[0] + (x - dst[0]) / dst[2] * (src[2] - src[0]);
+        let v = |y: f32| src[1] + (y - dst[1]) / dst[3] * (src[3] - src[1]);
+        let [x0, y0, w, h] = clipped;
+        (
+            clipped,
+            [u(x0), v(y0), u(x0 + w), v(y0 + h)],
+            [w * render_px[0], h * render_px[1]],
+            mask.radius_px,
+        )
     }
 
     /// Décalage de l'ombre portée de l'écran, en px de sortie : vers le bas sous un écran droit
     /// ou un angle fixe (inchangé) ; sous la caméra réelle, le long de la lumière qui éclaire aussi
     /// la flèche modélisée (`MODEL_LIGHT`), pour que les deux ombres tombent du même côté. La
-    /// direction glisse avec le poids de la caméra : aucun saut à l'entrée du zoom.
+    /// direction glisse avec le poids de la caméra : aucun saut à l'entrée du zoom. Sous le masque
+    /// d'un layout en bloc, l'ombre est celle du slot, que la caméra ne fait pas tourner.
     pub fn screen_shadow_offset(&self) -> [f32; 2] {
-        let off = SCREEN_SHADOW_OFFSET_FRAC * self.frame_min_px;
+        let off = SCREEN_SHADOW_OFFSET_FRAC * self.screen_unit_px;
+        if self.screen_mask.is_some() {
+            return [0.0, off];
+        }
         let Some(pose) = self.camera else { return [0.0, off] };
         let (lx, ly) = (-MODEL_LIGHT[0], -MODEL_LIGHT[1]);
         let n = lx.hypot(ly);
@@ -1868,16 +2404,32 @@ impl FrameGeometry {
         [off * dir[0] / len, off * dir[1] / len]
     }
 
-    /// Le calque du cadre (mode 14), à dessiner après l'ombre et AVANT l'écran. `None` sans cadre.
+    /// Le calque du cadre qui passe SOUS l'écran, à dessiner après l'ombre et AVANT lui : le
+    /// chrome de fenêtre (mode 14). `None` sans cadre.
     ///
     /// Une seule forme pour le cas droit et le cas incliné : le mode 14 fait toujours le warp
     /// inverse du mode 8, et sur un rect ce warp est l'identité exacte (le terme quadratique est
     /// nul). Le calque se construit donc ici, une fois, pour les trois backends.
+    ///
+    /// Sous le masque d'un bloc, un APPAREIL y pose le verre de son écran (mode 1, le slot et ses
+    /// coins) : là où le métrage incliné ne couvre plus l'ouverture, on voit l'écran éteint, pas
+    /// un trou vers le fond d'écran. Ailleurs, l'appareil n'a rien sous l'écran.
     pub fn window_frame_cb(&self, render_px: [f32; 2]) -> Option<LayerCB> {
-        let frame = self.window_frame.as_ref().filter(|f| !f.kind.is_device())?;
+        let frame = self.window_frame.as_ref()?;
         let [rw, rh] = render_px;
+        if frame.kind.is_device() {
+            let mask = self.screen_mask?;
+            return Some(LayerCB {
+                dst: mask.rect,
+                quad_px: [mask.rect[2] * rw, mask.rect[3] * rh],
+                radius_px: mask.radius_px,
+                mode: 1.0,
+                color: device_glass_rgba(frame.dark),
+                ..Default::default()
+            });
+        }
         let (corners, scale, warp) = self.window_frame_corners(frame.margins, render_px);
-        let center = self.screen_center_px(render_px);
+        let center = self.frame_center_px(render_px);
         let (min_x, max_x) =
             corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
         let (min_y, max_y) =
@@ -1886,7 +2438,8 @@ impl FrameGeometry {
         let local = |(x, y): (f32, f32)| [x - min_x, y - min_y];
         let [tl, tr, br, bl] = corners.map(local);
         let [ml, mt, mr, mb] = frame.margins;
-        let (s_w, s_h) = (self.s_dst[2] * rw, self.s_dst[3] * rh);
+        let b = self.frame_box();
+        let (s_w, s_h) = (b[2] * rw, b[3] * rh);
         // Dimensions dans le repère du plan, avant projection, comme `plane_px` au mode 8.
         let plane_px = [s_w * (1.0 + ml + mr) * scale, s_h * (1.0 + mt + mb) * scale];
         let (bar_px, line_px) = (mt * s_h * scale, ml * s_w * scale);
@@ -1914,14 +2467,16 @@ impl FrameGeometry {
     /// La caméra qui voit le plan de l'écran, reconstruite pour les calques lancés de rayons
     /// (mode 17). Sous un angle fixe ou la caméra réelle c'est celle du plan ; à plat, l'identité
     /// avec la MÊME distance de fuite que les présets. Le relief du modèle, lui, est vu d'un œil
-    /// reculé sur la même droite (`DEV_EYE_MIN`, `DeviceView::project`).
+    /// reculé sur la même droite (`DEV_EYE_MIN`, `DeviceView::project`). Sous le masque d'un bloc,
+    /// l'appareil au repos autour du slot (`frame_box`).
     fn device_view(&self, render_px: [f32; 2]) -> Option<DeviceView> {
         let [rw, rh] = render_px;
-        let (s_w, s_h) = (self.s_dst[2] * rw, self.s_dst[3] * rh);
+        let b = self.frame_box();
+        let (s_w, s_h) = (b[2] * rw, b[3] * rh);
         if !(s_w > 1.0) || !(s_h > 1.0) {
             return None;
         }
-        let quad = self.screen_tilt_in(render_px);
+        let quad = self.frame_tilt(render_px);
         let perspective = quad
             .as_ref()
             .map(|q| q.perspective)
@@ -1938,15 +2493,17 @@ impl FrameGeometry {
             perspective,
             offset: quad.as_ref().map(|q| q.offset).unwrap_or([0.0; 2]),
             unit,
-            center: self.screen_center_px(render_px),
+            center: self.frame_center_px(render_px),
             half: [0.5 * s_w / u, 0.5 * s_h / u],
         })
     }
 
-    /// L'unité du cadre (`frame_unit_px`) de CETTE boîte écran, zoom compris, en px de la boîte
+    /// L'unité du cadre (`frame_unit_px`) de la boîte autour de laquelle il se construit — la boîte
+    /// écran, zoom compris, ou le slot au repos sous le masque d'un bloc —, en px de la boîte
     /// droite : ce que mesurent les marges, les rayons et le modèle d'un appareil.
     pub fn frame_unit_px(&self, render_px: [f32; 2]) -> f32 {
-        frame_unit_px([self.s_dst[2] * render_px[0], self.s_dst[3] * render_px[1]], render_px)
+        let b = self.frame_box();
+        frame_unit_px([b[2] * render_px[0], b[3] * render_px[1]], render_px)
     }
 
     /// Le calque de l'appareil modelé (mode 17), à dessiner APRÈS l'écran. `None` sans cadre ou
@@ -1994,8 +2551,9 @@ impl FrameGeometry {
         // shader lit l'angle dans `dst_prev.x`, jamais une constante.
         let deck_angle = device_deck_angle(view.half, bb, thick);
         let u = self.frame_unit_px(render_px);
-        // UNE forme de coin pour le métrage et l'ouverture : le rayon du métrage, en unités.
-        let aperture_radius = self.s_radius / u;
+        // UNE forme de coin pour le métrage et l'ouverture : le rayon du métrage, en unités (celui
+        // du slot au repos sous le masque d'un bloc, qui rogne le métrage à cette ouverture).
+        let aperture_radius = self.frame_screen_radius() / u;
         // Le recouvrement se compte en PIXELS : exprimé en unités, il fondait à 1,2 px sur un petit
         // écran, sous la somme des deux antialiasings (celui du métrage, celui de la lunette).
         let overlap = DEV_OVERLAP_PX / view.unit.max(1.0);
@@ -2121,16 +2679,25 @@ impl FrameGeometry {
                 upright
             };
             let dst = pad_rect(rect, render_px, PRIVACY_MASK_PAD_PX * zoom_k);
+            // Sous le masque d'un layout en bloc, rien n'est dessiné hors du slot : rien à y
+            // cacher, et un masque y flouterait la caméra.
+            let (dst, clipped) = match self.screen_mask {
+                Some(m) => {
+                    let c = m.clip(dst)?;
+                    (c, c != dst)
+                }
+                None => (dst, false),
+            };
             let mut mask = PrivacyMask::upright(dst, render_px, zoom_k);
             // Un ovale inscrit dans la boîte ÉLARGIE ne contient plus l'ovale courant dès que
             // les deux centres diffèrent : son bord laisserait passer une frange du secret. On
-            // retombe alors sur le rectangle, comme le tracé libre.
-            mask.oval_ok = !trail;
+            // retombe alors sur le rectangle, comme le tracé libre. Même chose dans la boîte
+            // ROGNÉE par le slot.
+            mask.oval_ok = !trail && !clipped;
             return Some(mask);
         }
 
-        // Écran incliné (le mode 8 n'a pas de flou de mouvement : pas de trace à couvrir).
-        // Même quad et même centre que le dessin de l'écran et que `plan_cursor`.
+        // Écran incliné. Même quad et même centre que le dessin de l'écran et que `plan_cursor`.
         let s_px = [self.s_dst[2] * rw, self.s_dst[3] * rh];
         let quad = self.screen_tilt(s_px)?;
         let centre = [
@@ -2150,17 +2717,6 @@ impl FrameGeometry {
             [centre[0] + px, centre[1] + py]
         };
         let pts = [at(x0, y0), at(x1, y0), at(x1, y1), at(x0, y1)];
-        let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
-        let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
-        for [px, py] in pts {
-            min_x = min_x.min(px);
-            min_y = min_y.min(py);
-            max_x = max_x.max(px);
-            max_y = max_y.max(py);
-        }
-        // Plancher d'un pixel : un masque très fin ferait diverger le warp inverse.
-        let quad_px = [(max_x - min_x).max(1.0), (max_y - min_y).max(1.0)];
-        let local = pts.map(|[px, py]| [px - min_x, py - min_y]);
         // La perspective grossit localement le côté proche : la force suit l'arête la plus
         // agrandie par rapport au rect droit zoomé, pour que nulle part le masque ne soit plus
         // fin, rapporté au contenu, qu'au repos.
@@ -2170,15 +2726,116 @@ impl FrameGeometry {
             .max(len(pts[3], pts[2]) / ew)
             .max(len(pts[0], pts[3]) / eh)
             .max(len(pts[1], pts[2]) / eh);
+        let strength = (zoom_k * tilt_k).max(1.0);
+        // Le mode 8 étale aussi chaque pixel vers là où le plan était une frame plus tôt
+        // (`tilt_trail`) : une copie traînée du secret sort du quad courant. Le masque garde la
+        // perspective du quad courant, élargi de la plus grande avance d'un de ses coins : chaque
+        // coin d'avant tombe dedans, donc tout le secret d'avant aussi (un quad convexe contient
+        // l'enveloppe de ses coins), et la traînée, qui va de l'un à l'autre. Même warp que le
+        // shader sur les coins d'avant (le drapeau projectif est celui du plan). Sans mouvement,
+        // la traînée EST le quad (au bit près) : rien de plus à couvrir.
+        let trail = self.tilt_trail(render_px).filter(|t| t.corners != quad.corners);
+        let pts = match trail {
+            Some(trail) => {
+                let before = crate::regions::TiltedQuad { corners: trail.corners, ..quad };
+                let then = |fx: f32, fy: f32| {
+                    let (px, py) = before.point_px(fx, fy);
+                    [centre[0] + px, centre[1] + py]
+                };
+                let prev = [then(x0, y0), then(x1, y0), then(x1, y1), then(x0, y1)];
+                let reach = (0..4)
+                    .map(|i| (prev[i][0] - pts[i][0]).hypot(prev[i][1] - pts[i][1]))
+                    .fold(0.0f32, f32::max);
+                grow_quad(pts, reach + 0.5)
+            }
+            None => pts,
+        };
+        let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+        let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+        for [px, py] in pts {
+            min_x = min_x.min(px);
+            min_y = min_y.min(py);
+            max_x = max_x.max(px);
+            max_y = max_y.max(py);
+        }
+        // Plancher d'un pixel : un masque très fin ferait diverger le warp inverse.
+        let mut quad_px = [(max_x - min_x).max(1.0), (max_y - min_y).max(1.0)];
+        let mut local = pts.map(|[px, py]| [px - min_x, py - min_y]);
+        let mut dst = [min_x / rw, min_y / rh, quad_px[0] / rw, quad_px[1] / rh];
+        // Sous le masque d'un layout en bloc, dessiné dans la part du slot qu'il couvre : les
+        // coins passent dans le repère de cette boîte, le warp (et son ovale) ne bouge pas.
+        if let Some(m) = self.screen_mask {
+            let c = m.clip(dst)?;
+            let shift = [(c[0] - dst[0]) * rw, (c[1] - dst[1]) * rh];
+            local = local.map(|[px, py]| [px - shift[0], py - shift[1]]);
+            quad_px = [c[2] * rw, c[3] * rh];
+            dst = c;
+        }
         Some(PrivacyMask {
-            dst: [min_x / rw, min_y / rh, quad_px[0] / rw, quad_px[1] / rh],
+            dst,
             quad_px,
             warp: Some(local),
             projective: quad.projective,
-            strength: (zoom_k * tilt_k).max(1.0),
-            oval_ok: true,
+            strength,
+            // Un ovale inscrit dans le quad élargi ne couvrirait plus sûrement l'ovale d'avant.
+            oval_ok: trail.is_none(),
         })
     }
+
+    /// Où tombe le métrage dans l'image (`FootageQuad`) : là où `privacy_mask` pose un masque,
+    /// donc là où l'éditeur doit poser le gimbal d'un flou pour qu'il couvre ce qu'il cache.
+    pub fn footage_quad(&self, render_px: [f32; 2]) -> FootageQuad {
+        let [rw, rh] = render_px;
+        let s_px = [self.s_dst[2] * rw, self.s_dst[3] * rh];
+        if let Some(quad) = self.screen_tilt(s_px).filter(|_| self.tilted() && rw > 0.0 && rh > 0.0) {
+            let centre = self.screen_center_px(render_px);
+            let at = |fx: f32, fy: f32| {
+                let (px, py) = quad.point_px(fx, fy);
+                [(centre[0] + px) / rw, (centre[1] + py) / rh]
+            };
+            return FootageQuad {
+                corners: [at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0)],
+                projective: quad.projective,
+            };
+        }
+        let [x, y, w, h] = self.s_dst;
+        FootageQuad { corners: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], projective: false }
+    }
+}
+
+/// Le métrage dans l'image : ses coins TL, TR, BR, BL en fractions de la sortie, et la
+/// correspondance d'un point `(u, v)` du métrage à l'image, bilinéaire entre eux ou, sous la
+/// caméra réelle, l'homographie qu'ils définissent (`TiltedQuad::point_px`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FootageQuad {
+    pub corners: [[f32; 2]; 4],
+    pub projective: bool,
+}
+
+/// Le quad convexe `pts` (TL, TR, BR, BL) dont chaque côté recule de `d` px vers l'extérieur :
+/// ses côtés restent parallèles aux siens, donc sa perspective aussi, et il contient tout point
+/// à moins de `d` de lui.
+fn grow_quad(pts: [[f32; 2]; 4], d: f32) -> [[f32; 2]; 4] {
+    // L'extérieur d'un côté est d'un bord ou de l'autre selon le sens de parcours.
+    let area: f32 = (0..4)
+        .map(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % 4]);
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum();
+    let side = area.signum();
+    let normal = |i: usize| {
+        let (a, b) = (pts[i], pts[(i + 1) % 4]);
+        let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+        let len = ex.hypot(ey).max(1e-6);
+        [side * ey / len, -side * ex / len]
+    };
+    std::array::from_fn(|i| {
+        // Le coin glisse sur la bissectrice jusqu'à la rencontre des deux côtés reculés.
+        let (na, nb) = (normal((i + 3) % 4), normal(i));
+        let k = d / (1.0 + na[0] * nb[0] + na[1] * nb[1]).max(0.2);
+        [pts[i][0] + (na[0] + nb[0]) * k, pts[i][1] + (na[1] + nb[1]) * k]
+    })
 }
 
 /// Marge ajoutée autour d'un masque de confidentialité, en px de la boîte écran AU REPOS : un
@@ -2239,6 +2896,13 @@ fn union_rect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let (x0, y0) = (a[0].min(b[0]), a[1].min(b[1]));
     let (x1, y1) = ((a[0] + a[2]).max(b[0] + b[2]), (a[1] + a[3]).max(b[1] + b[3]));
     [x0, y0, x1 - x0, y1 - y0]
+}
+
+/// Vide (largeur ou hauteur nulle) quand les deux rects ne se touchent pas.
+fn intersect_rect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let (x0, y0) = (a[0].max(b[0]), a[1].max(b[1]));
+    let (x1, y1) = ((a[0] + a[2]).min(b[0] + b[2]), (a[1] + a[3]).min(b[1] + b[3]));
+    [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
 }
 
 fn pad_rect(r: [f32; 4], render_px: [f32; 2], pad_px: f32) -> [f32; 4] {
@@ -2323,28 +2987,36 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
             scene.map(|s| &s.camera_fullscreen_regions).unwrap_or(&empty_cam);
         let webcam_reactive = scene.map(|s| s.layout.webcam_reactive_zoom).unwrap_or(false);
         let source_t = input.timeline_t_override.unwrap_or(frame / FPS);
-        let source_t_prev = source_t - 1.0 / FPS;
+        // Les transitions se mesurent à l'écran (`ScreenClock`), la frame précédente aussi : une
+        // frame d'écran plus tôt, ce qui donne au flou de mouvement du zoom la même traînée qu'à 1×,
+        // y compris sur la première frame après une frontière de vitesse.
+        let clock = scene
+            .map(|s| crate::regions::ScreenClock::new(&s.speed_regions, s.active_clip_index))
+            .unwrap_or_default();
+        let source_t_prev = clock.source_at(clock.at(source_t) - 1.0 / FPS);
         // le focus "auto" (suivi curseur) réutilise la même piste que le rendu du curseur.
         let cursor_for_zoom = cursor;
-        // La rotation 3D (mode 8, pas de motion blur dans ce chemin — cf. le commentaire au
-        // point d'appel) n'est calculée QUE pour la frame courante ; `pp` ne sert qu'au zoom
-        // écran normal (vélocité pour le motion blur du chemin non-tilté).
+        // `pp` porte le zoom de la frame précédente, pour le flou de mouvement ; celui du plan
+        // incliné y ajoute sa rotation de base et le poids de la caméra réelle (`tilt_trail`).
         let mut zoom_rotation = [0.0f32; 3];
+        let mut zoom_rotation_prev = [0.0f32; 3];
         let mut zoom_tilt = 0.0f32;
-        let mut zoom_click_impact = 0.0f32;
         let mut zoom_camera = 0.0f32;
+        let mut zoom_camera_prev = 0.0f32;
+        let mut zoom_strength = 0.0f32;
+        let mut zoom_strength_prev = 0.0f32;
         let mut zoom_aim = [0.5f32; 2];
         let mut zoom_orbit = [0.5f32; 2];
-        // Curseur masqué → pas de piste pour ce qui anime le plan (parallaxe, impact, caméra
-        // `follow-cursor`) : l'export ne charge la piste que si le curseur est affiché
-        // (`timeline_walk`), la preview toujours. Sans cette porte, la preview pencherait un
-        // plan que l'export laisse immobile.
+        let (mut zoom_aim_prev, mut zoom_orbit_prev) = ([0.5f32; 2], [0.5f32; 2]);
+        // Curseur masqué → pas de piste pour ce qui anime le plan (parallaxe, impact, orbite en
+        // focus auto) : un plan ne bouge que sous un pointeur qu'on voit. Preview et export
+        // chargent la piste dans tous les cas (le focus auto la suit), cette porte fait le reste.
         let parallax_track = cursor_for_zoom.filter(|_| scene.is_some_and(|s| s.cursor.show));
         let active_crop = scene.and_then(|scene| {
             scene.crop_by_clip.get(scene.active_clip_index).copied().flatten()
         });
         if !zoom_regions.is_empty() {
-            // La caméra `follow-cursor` lit le curseur dans l'image SOURCE recadrée — pas dans la
+            // L'orbite en focus auto lit le curseur dans l'image SOURCE recadrée — pas dans la
             // coupe zoomée, qu'un focus auto recentre sur lui — et ignore ce qu'une coupe retire.
             let camera = crate::regions::CameraFrame {
                 track: parallax_track,
@@ -2354,29 +3026,50 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
                     .map(|c| [c.source_start_sec as f32, c.source_end_sec as f32])
                     .unwrap_or([f32::NEG_INFINITY, f32::INFINITY]),
             };
-            let zs = crate::regions::zoom_state_in(zoom_regions, source_t, cursor_for_zoom, &camera);
+            let zs =
+                crate::regions::zoom_state_in(zoom_regions, source_t, cursor_for_zoom, &camera, &clock);
             p.zoom = zs.scale;
             p.focus = zs.focus;
             zoom_rotation = zs.rotation;
             zoom_tilt = zs.tilt;
-            zoom_click_impact = zs.click_impact;
             zoom_camera = zs.camera;
+            zoom_strength = zs.strength;
             zoom_aim = zs.aim;
             zoom_orbit = zs.orbit;
-            let zs_p = crate::regions::zoom_state_at(zoom_regions, source_t_prev, cursor_for_zoom);
+            // Même `CameraFrame` qu'à la frame courante : la caméra réelle d'avant (poids, visée,
+            // orbite) sert au flou du mode 8. Échelle et focus n'en dépendent pas.
+            let zs_p = crate::regions::zoom_state_in(
+                zoom_regions,
+                source_t_prev,
+                cursor_for_zoom,
+                &camera,
+                &clock,
+            );
             pp.zoom = zs_p.scale;
             pp.focus = zs_p.focus;
+            zoom_rotation_prev = zs_p.rotation;
+            zoom_camera_prev = zs_p.camera;
+            zoom_strength_prev = zs_p.strength;
+            zoom_aim_prev = zs_p.aim;
+            zoom_orbit_prev = zs_p.orbit;
         }
         // Full Camera ignore le rétrécissement réactif de la webcam (design web : mélanger
         // "rétrécit pour le zoom" et "grandit en plein cadre" dans la même frame n'a pas de sens).
-        let cam_progress = crate::regions::camera_fullscreen_progress_at(cam_regions, source_t);
+        let cam_progress =
+            crate::regions::camera_fullscreen_progress_at(cam_regions, source_t, &clock);
         let cam_progress_prev =
-            crate::regions::camera_fullscreen_progress_at(cam_regions, source_t_prev);
-        // rétrécissement réactif : la webcam rétrécit pendant un zoom actif (1/zoom, plancher
-        // 0.35 — parité `reactiveWebcamScale`, TS). Ignoré pendant Full Camera (voir ci-dessus).
-        let reactive_scale = |zoom: f32, progress: f32| -> f32 {
-            if webcam_reactive && progress <= 0.0 && zoom.is_finite() && zoom > 0.0 {
-                (1.0 / zoom).clamp(0.35, 1.0)
+            crate::regions::camera_fullscreen_progress_at(cam_regions, source_t_prev, &clock);
+        let shape_fade =
+            crate::regions::camera_fullscreen_shape_at(cam_regions, source_t, &clock);
+        // rétrécissement réactif : la webcam garde 70 % de sa taille pendant un zoom actif, quel
+        // que soit son niveau (elle suivait 1/zoom, et rétrécissait donc d'autant plus que le zoom
+        // était profond : ×0,6 au zoom maximal). L'enveloppe est celle de la région : elle descend
+        // avec le ease-in du zoom, tient 0,7 sur le span, remonte avec le ease-out. Une région à
+        // échelle 1 ne zoome rien : elle laisse la caméra à sa taille. Ignoré pendant Full Camera
+        // (voir ci-dessus).
+        let reactive_scale = |strength: f32, zoom: f32, progress: f32| -> f32 {
+            if webcam_reactive && progress <= 0.0 && zoom > 1.0 && strength.is_finite() {
+                (1.0 - 0.3 * strength.clamp(0.0, 1.0)).clamp(0.7, 1.0)
             } else {
                 1.0
             }
@@ -2390,8 +3083,9 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         // Seul `reactive_scale` (rétrécissement pendant un zoom, une valeur ANIMÉE par frame que
         // le rect statique de l'app ne capture pas) doit encore s'appliquer dans ce cas.
         let base_size_scale = if app_webcam_rect.is_some() { 1.0 } else { lp.webcam_size_scale };
-        let webcam_size_scale = base_size_scale * reactive_scale(p.zoom, cam_progress);
-        let webcam_size_scale_prev = base_size_scale * reactive_scale(pp.zoom, cam_progress_prev);
+        let webcam_size_scale = base_size_scale * reactive_scale(zoom_strength, p.zoom, cam_progress);
+        let webcam_size_scale_prev =
+            base_size_scale * reactive_scale(zoom_strength_prev, pp.zoom, cam_progress_prev);
 
         // padding : échelle globale du layout autour du centre du cadre (parité web frameRenderer :
         // paddingScale = 1 - padding*0.4 → padding 0 = plein cadre). S'applique à TOUS les presets :
@@ -2420,29 +3114,26 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
             let (brx, bry) = (dst[0] + dst[2], dst[1] + dst[3]);
             [brx - nw, bry - nh, nw, nh]
         };
-        // Variantes ancrées au CENTRE (au lieu du coin bas-droite) de `dst`, pour le cas où
-        // `dst` vient de `app_webcam_rect` : ce rect est déjà la position que l'utilisateur a
-        // choisie/déplacée (résolue côté app via `computeCompositeLayout`, même convention
-        // centre-fraction que `cx`/`cy` dans `compositeLayout.ts`) — l'ancrer au coin bas-droite
-        // comme le fait `fit_cam_aspect` (pensé pour le placement par DÉFAUT, ancré à ce coin
-        // avec une marge fixe) réancre silencieusement la webcam glissée n'importe où d'autre à
-        // ce coin, ignorant la position réelle choisie par l'utilisateur — le bug rapporté
-        // (webcam glissée au coin bas-gauche, DOM/JSON envoyé au natif confirmant une position
-        // flush, mais rendu natif visiblement décalé). Le centre est le point fixe qui a un sens
-        // pour un rect DÉJÀ positionné par l'app ; le coin bas-droite n'a de sens que pour le
-        // placement par défaut, qui grandit depuis ce coin faute de position explicite.
-        let scale_center = |dst: [f32; 4], s: f32| -> [f32; 4] {
-            let (cx, cy) = (dst[0] + dst[2] * 0.5, dst[1] + dst[3] * 0.5);
+        // Variante ancrée à l'ANCRE de la caméra (au lieu du coin bas-droite) de `dst`, pour le cas
+        // où `dst` vient de `app_webcam_rect` : ce rect est déjà la position que l'utilisateur a
+        // choisie (résolue côté app via `computeCompositeLayout`) — l'ancrer au coin bas-droite
+        // comme le fait `fit_cam_aspect` (pensé pour le placement par DÉFAUT) réancrerait la
+        // webcam posée n'importe où d'autre à ce coin (bug rapporté : webcam au coin bas-gauche,
+        // rendu natif décalé).
+        //
+        // L'app pose la caméra à marge constante de son ancre (un coin ou un milieu de bord) :
+        // `x = marge + fx·(W − 2·marge − w)`, donc le point de la boîte à la fraction `fx` vaut
+        // `marge + fx·(W − 2·marge)` quelle que soit sa largeur. Rétrécir autour de ce point-là,
+        // c'est exactement la mise en page de l'app à la taille réduite : une caméra de coin garde
+        // sa marge aux deux bords, une caméra de milieu de bord reste centrée sur lui. Rétrécir
+        // vers son propre centre l'arrachait de son coin pendant chaque zoom. Sans ancre (vieux
+        // payload), le centre.
+        let anchor = scene.map(|s| s.layout.webcam_anchor_fractions()).unwrap_or([0.5, 0.5]);
+        let scale_anchored = |dst: [f32; 4], s: f32| -> [f32; 4] {
+            let (ax, ay) = (dst[0] + dst[2] * anchor[0], dst[1] + dst[3] * anchor[1]);
             let (nw, nh) = (dst[2] * s, dst[3] * s);
-            [cx - nw * 0.5, cy - nh * 0.5, nw, nh]
+            [ax - nw * anchor[0], ay - nh * anchor[1], nw, nh]
         };
-        // Le ratio de sortie réel (peut différer du canvas interne 16:9 fixe) et le facteur
-        // d'étirement non uniforme que `blit_resized` appliquera en fin de pipeline — nécessaires
-        // ici (avant `undistort`, plus bas) pour que le fit ci-dessous cible le ratio de boîte tel
-        // qu'il apparaîtra APRÈS cet étirement, pas tel qu'il est dans l'espace canvas pré-étirement
-        // (sinon le fit et l'undistort composent deux corrections indépendantes et sur-rétrécissent
-        // le contenu — cf. rapport utilisateur : crop 9:16 + sortie 9:16 + padding 0% laissait
-        // quand même une grosse marge, alors que le crop correspond déjà exactement au cadre).
         // Le crop de l'utilisateur (dialogue "Edit clip") a son PROPRE ratio (ex. une bande
         // verticale 9:16 recadrée dans une source 16:9) — le zoom appliqué ensuite (§
         // `screen_source_rect`) le préserve (mêmes facteurs sur les deux axes), donc c'est bien
@@ -2458,13 +3149,8 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
             _ => scw / sch.max(0.0001),
         };
         // Contain (parité `centerRectInBounds`) : rétrécit `dst` (centré) pour que son ratio
-        // devienne `aspect`, sans jamais dépasser sa boîte d'origine — mais la boîte de référence
-        // doit être mesurée telle qu'elle apparaîtra APRÈS l'étirement de sortie (`dst` * ratio de
-        // sortie), pas dans l'espace canvas 16:9 pré-étirement : sinon le fit cible le mauvais
-        // ratio de boîte dès que la sortie n'est pas 16:9. `undistort` (plus bas) annule ensuite
-        // exactement ce même facteur, donc convertir le résultat en fraction canvas se fait par
-        // `/ uniform_stretch` (propriété de `undistort` : le ratio final ne dépend que de la
-        // taille de `dst` en PIXELS CANVAS, jamais du ratio de sortie choisi).
+        // devienne `aspect`, sans jamais dépasser sa boîte d'origine. La boîte se mesure en px du
+        // render target, qui porte la géométrie de sortie : son ratio est celui qu'on verra.
         let fit_dst_to_aspect = |dst: [f32; 4], aspect: f32| -> [f32; 4] {
             let box_w_px = dst[2] * rw;
             let box_h_px = dst[3] * rh;
@@ -2497,10 +3183,10 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         // déborde le padding — c'est la géométrie de `applyZoomTransform` (TS).
         let s_box = fit_screen(p.screen.dst);
         let s_box_prev = fit_screen(pp.screen.dst);
-        // Le cadre ne touche PAS à la boîte écran : le métrage a la même taille avec et sans
-        // cadre, et le cadre pousse vers l'extérieur — dans le padding, et au-delà du canvas s'il
-        // le faut, où la sortie le coupe. Ombre, masques, annotations et curseurs, ancrés sur
-        // `s_dst`, n'ont donc rien à rattraper.
+        // Le cadre ne touche PAS à la boîte écran : il pousse vers l'extérieur, dans la place que
+        // le layout de l'app lui a faite (le padding se mesure depuis son bord extérieur,
+        // `computeCompositeLayout`). Ombre, masques, annotations et curseurs, ancrés sur `s_dst`,
+        // n'ont donc rien à rattraper.
         // Le cadre et son thème. `resolved` ramène les anciennes valeurs `window-light` /
         // `window-dark` au chrome de fenêtre, et `theme_override` leur rend le thème qu'elles
         // nommaient : un projet qui les porte encore rend exactement ce qu'il rendait, sans que
@@ -2538,27 +3224,60 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
                 .screen_cover
                 .then_some((s_base[2] * rw) / (s_base[3] * rh).max(0.0001))
         });
-        let cover = |uv: [f32; 4]| -> [f32; 4] {
-            match cover_box_ar {
-                Some(ar) => cover_uv_rect(uv, [stw as f32, sth as f32], ar),
-                None => uv,
+        // Remplissage du format (`screen_follow`) : la fenêtre du cover suit le curseur lissé,
+        // en UV. Sans piste, elle reste centrée.
+        let follow = cover_box_ar.is_some() && scene.is_some_and(|s| s.layout.screen_follow);
+        let follow_at = |t: f32| -> Option<[f32; 2]> {
+            let (x, y) = cursor.filter(|_| follow)?.follow_at(t)?;
+            Some([x * u_max, y * v_max])
+        };
+        let cover = |uv: [f32; 4], at: Option<[f32; 2]>| -> [f32; 4] {
+            match (cover_box_ar, at) {
+                (Some(ar), Some(at)) => follow_cover_uv_rect(uv, [stw as f32, sth as f32], ar, at),
+                (Some(ar), None) => cover_uv_rect(uv, [stw as f32, sth as f32], ar),
+                (None, _) => uv,
             }
         };
         // La coupe RÉFÉRENCE (zoom entier) est celle qui remplissait la boîte paddée avant
         // ce correctif ; la coupe DESSINÉE ne porte plus que le crop. `remap_box` reporte la
         // seconde à travers le mapping de la première, ce qui conserve le cadrage exact.
         // Le focus courant reste volontairement utilisé pour la frame précédente, comme avant.
-        let cut_ref = cover(screen_source_rect(u_max, v_max, active_crop, p.zoom, p.focus));
-        let cut_ref_prev = cover(screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus));
-        let cut = cover(screen_source_rect(u_max, v_max, active_crop, 1.0, p.focus));
-        // Impact du clic : mêmes piste, coupe, porte et budget que la parallaxe sous un angle fixe ;
-        // sous la caméra réelle, les mêmes clics font reculer l'œil.
+        let cut_ref =
+            cover(screen_source_rect(u_max, v_max, active_crop, p.zoom, p.focus), follow_at(source_t));
+        let cut_ref_prev = cover(
+            screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus),
+            follow_at(source_t_prev),
+        );
+        // Sous le remplissage, la coupe dessinée est le crop ENTIER : la fenêtre bouge, et une
+        // coupe dessinée qui ne la contiendrait plus laisserait un trou dans le slot. Le masque du
+        // slot (`screen_mask`) rogne le reste.
+        let crop_cut = screen_source_rect(u_max, v_max, active_crop, 1.0, p.focus);
+        let cut = if follow { crop_cut } else { cover(crop_cut, None) };
+        // Ce que l'écran montre au repos : la fenêtre couverte, suivie ou non. Le curseur, les coins
+        // et l'ombre se mesurent sur elle, pas sur la coupe entière que le remplissage dessine.
+        let window = cover(crop_cut, follow_at(source_t));
+        let shown = |i: usize| (crop_cut[i + 2] - crop_cut[i]) / (window[i + 2] - window[i]).max(1e-6);
+        let screen_unit_px =
+            screen_unit_px([s_base[2] * rw * shown(0), s_base[3] * rh * shown(1)], padding_scale);
+        // Impact du clic, un réglage du curseur qui vaut sous toutes les caméras : sous un angle
+        // fixe, mêmes piste, coupe, porte et budget que la parallaxe ; sous la caméra réelle, les
+        // mêmes clics font reculer l'œil ; sur un écran droit, l'écran lui-même (`pressed`).
         let (impact, press) = match (scene, parallax_track) {
-            (Some(s), Some(track)) if zoom_click_impact > 0.0 => {
-                let (tilt, press) = click_impact_at(s, cfg, &lp, track, source_t, cut, [u_max, v_max]);
-                (tilt.map(|d| d * zoom_click_impact), press * zoom_click_impact)
+            (Some(s), Some(track)) if s.cursor.click_impact => {
+                click_impact_at(s, cfg, &lp, track, source_t, cut, [u_max, v_max])
             }
             _ => ([0.0; 3], 0.0),
+        };
+        // Sur un écran droit, le clic fait reculer l'écran comme l'œil recule sous la caméra réelle
+        // (`camera::PRESS`) : la boîte rapetisse autour de son centre, puis revient. Le faire
+        // basculer depuis l'écran droit amènerait des arêtes sur les axes (la règle des 2°). Là où
+        // un angle fixe est installé, la bascule prend le relais (`tilt_gate`) ; sous la caméra
+        // réelle, l'œil (son poids). Même recul aux deux frames : comme la bascule, l'impact
+        // n'entre pas dans le flou de mouvement.
+        let flat_press = press * (1.0 - crate::regions::tilt_gate(zoom_tilt)) * (1.0 - zoom_camera);
+        let pressed = |b: [f32; 4]| -> [f32; 4] {
+            let k = 1.0 / (1.0 - crate::camera::PRESS * flat_press);
+            [b[0] + b[2] * (1.0 - k) * 0.5, b[1] + b[3] * (1.0 - k) * 0.5, b[2] * k, b[3] * k]
         };
         // Sous la caméra réelle, la visée et l'orbite vivent dans le recadrage, comme le focus :
         // même report dans la coupe (un cover la rogne). La mise au point suit le pointeur lissé
@@ -2571,11 +3290,21 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
             zoom: p.zoom,
             press,
         });
+        // La caméra réelle de la frame d'avant, dès qu'elle y était active — y compris quand elle
+        // ne l'est plus à celle-ci (fin de sa moitié d'une transition vers un angle fixe) ; `None`
+        // quand elle ne l'était pas, et le mode 8 reprend alors la rotation d'avant.
+        let camera_prev = (zoom_camera_prev > 0.0).then(|| crate::camera::CameraPose {
+            weight: zoom_camera_prev,
+            aim: focus_in_cut(u_max, v_max, active_crop, zoom_aim_prev, cut),
+            orbit: focus_in_cut(u_max, v_max, active_crop, zoom_orbit_prev, cut),
+            zoom: pp.zoom,
+            press,
+        });
         let focus_plane = match camera {
             Some(pose) => pose.orbit,
             None => focus_in_cut(u_max, v_max, active_crop, p.focus, cut),
         };
-        let s_dst = remap_box(s_base, cut_ref, cut);
+        let s_dst = pressed(remap_box(s_base, cut_ref, cut));
         // Parallaxe : calculée ici, une fois la coupe connue — elle mesure la vitesse du curseur
         // en coupes VISIBLES par seconde. La coupe visible est `cut_ref`, zoom compris : `cut`
         // ne porte plus que le crop depuis #179, et sous un x2 le même geste traverse deux fois
@@ -2593,29 +3322,25 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
             zoom_tilt,
             impact,
         );
-        let s_dst_prev = remap_box(s_base_prev, cut_ref_prev, cut);
+        let s_dst_prev = pressed(remap_box(s_base_prev, cut_ref_prev, cut));
         // le padding n'affecte QUE l'écran (la quantité de fond révélée). La webcam reste ancrée
         // en bas-droite à sa marge fixe, quelle que soit la valeur de padding (pas de scale_frame)
         // — SAUF quand l'app a résolu un placement explicite (`app_webcam_rect`, drag-to-reposition
-        // compris). Ce rect est déjà exprimé en fraction du VRAI output (calculé côté web par
+        // compris). Ce rect est déjà exprimé en fraction de la sortie (calculé côté web par
         // `computeCompositeLayout` avec les vraies dimensions de sortie), position ET aspect déjà
-        // corrects — `fit_cam_aspect`/`scale_corner_br` (chemin preset par défaut) sont donc
-        // doublement inadaptés ici : ils réancrent au coin bas-droite (ignorant la position
-        // choisie par l'utilisateur) ET recalculent l'aspect en pixels du canvas fixe 16:9
-        // (`OUT_W`×`OUT_H`), une référence différente du vrai output dès que la sortie n'est pas
-        // 16:9 (rapport utilisateur : webcam glissée au coin bas-gauche en 9:16, JSON envoyé au
-        // natif confirmant une position flush, mais rendu native visiblement décalé ET trop
-        // petit). On garde seulement `scale_center` (zoom réactif, préserve position+aspect) puis
-        // on pré-compense par `inverse_undistort` pour annuler le `undistort()` générique
-        // appliqué plus bas à tous les calques (écran compris) — sans quoi ce rect déjà correct
-        // se ferait déformer une seconde fois par cet undistort partagé.
+        // corrects. `fit_cam_aspect`/`scale_corner_br` (chemin preset par défaut) y sont donc
+        // inadaptés : ils le réancreraient au coin bas-droite, en ignorant la position choisie par
+        // l'utilisateur (rapport : webcam glissée au coin bas-gauche, rendue ailleurs), et
+        // recalculeraient un aspect déjà juste. On garde seulement `scale_anchored` (zoom réactif,
+        // préserve l'ancre et l'aspect), et le rect est dessiné tel quel : le render target porte
+        // la géométrie de sortie, rien ne le déforme après coup.
         let mut w_dst = if app_webcam_rect.is_some() {
-            scale_center(p.webcam.dst, webcam_size_scale)
+            scale_anchored(p.webcam.dst, webcam_size_scale)
         } else {
             fit_cam_aspect(scale_corner_br(p.webcam.dst, webcam_size_scale))
         };
         let mut w_dst_prev = if app_webcam_rect.is_some() {
-            scale_center(pp.webcam.dst, webcam_size_scale_prev)
+            scale_anchored(pp.webcam.dst, webcam_size_scale_prev)
         } else {
             fit_cam_aspect(scale_corner_br(pp.webcam.dst, webcam_size_scale_prev))
         };
@@ -2640,16 +3365,8 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         w_dst = fullscreen_dst(w_dst, cam_progress);
         w_dst_prev = fullscreen_dst(w_dst_prev, cam_progress_prev);
 
-        // Contre-étirement "fit" : le canvas interne compose TOUJOURS en OUT_W×OUT_H (16:9),
-        // puis `blit_resized` étire tout, de façon non uniforme si besoin, vers la résolution
-        // de sortie demandée — voulu pour que le FOND (dessiné plus bas en dst=[0,0,1,1])
-        // remplisse tout le cadre quel que soit le ratio choisi. Mais l'écran et la webcam ne
-        // doivent PAS être déformés par cet étirement : on rétrécit ici leur rect de
-        // destination (centré, dans cet espace 16:9 PRÉ-étirement) par l'inverse du plus fort
-        // des deux facteurs d'étirement, pour qu'après l'étirement final leur ratio d'origine
-        // reste préservé (letterboxé/pillarboxé sur le fond, qui lui reste plein cadre) — mode
-        // "fit"/contain. Si l'utilisateur veut un rendu "fill" (remplir sans bandes), il ajuste
-        // le crop lui-même ; le natif ne fait plus ce choix à sa place en étirant l'image.
+        // Aucun contre-étirement ici : le render target porte la géométrie de sortie, rien n'est
+        // étiré après coup, donc aucun rect n'est rétréci pour compenser.
         // Le dessin du coin (SDF, shaders.hlsl) compare le rayon à `quad_px`, exprimé en px du
         // RENDER TARGET : c'est donc dans cet espace-là qu'il faut le lui donner.
         //
@@ -2662,7 +3379,6 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         // la boîte, pas suivre le cadre.
         let frame_min_px = rw.min(rh);
         let s_px = [s_dst[2] * rw, s_dst[3] * rh];
-        let s_min_px = s_px[0].min(s_px[1]);
         let app_screen_radius_frac = scene.and_then(|s| s.layout.screen_radius_frac);
         let scene_roundness_frac = scene.map(|s| s.effects.roundness_frac);
         // ---- Le rayon des coins, en UN seul endroit ----
@@ -2681,33 +3397,53 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         // chaque bordure garde son épaisseur tout autour de chaque coin. Sous le chrome de
         // fenêtre, les coins HAUTS du métrage restent carrés, à ras de la barre : l'arrondi du
         // haut se fait une seule fois, par le cadre (`screen_square_top`, `screen_top_lift_px`).
-        let outer_radius = match (cfg.rounded, app_screen_radius_frac, scene_roundness_frac) {
+        let outer_radius_of = |s_px: [f32; 2]| match (cfg.rounded, app_screen_radius_frac, scene_roundness_frac) {
             (false, _, _) => 0.0,
             (true, _, _) if frame_kind != crate::scene::SceneFrame::None => {
                 let t = scene.map(roundness_slider_position).unwrap_or(0.0);
                 t * frame_roundness_cap(frame_kind) * frame_unit_px(s_px, [rw, rh])
             }
             // Preset en bloc : le rayon appartient à la boîte écran (parité exacte avec la caméra).
-            (true, Some(f), _) => f * s_min_px,
-            // Scène sans rayon imposé : slider Roundness, relatif au cadre.
-            (true, None, Some(f)) => f * frame_min_px,
+            (true, Some(f), _) => f * s_px[0].min(s_px[1]),
+            // Scène sans rayon imposé : slider Roundness, en px d'une référence 1080 rapportée à
+            // l'écran (`screen_unit_px`) — ni à la source, ni au cadre.
+            (true, None, Some(f)) => f * screen_unit_px,
             // Fixture/bench (pas de scène) : chemin inspector historique, inchangé.
             (true, None, None) => p.screen.radius * lp.radius_scale,
         };
-        let s_radius = screen_corner_radius_px(outer_radius, s_px);
+        let s_radius = screen_corner_radius_px(outer_radius_of(s_px), s_px);
+        // Layouts en bloc : le slot masque l'écran (`ScreenMask`), avec les coins de l'écran AU
+        // REPOS — la boîte, elle, grandit avec le zoom. `screen_cover` est le drapeau du slot :
+        // l'app le lève pour ces deux layouts, sur un clip qui a une caméra, et pour le
+        // remplissage du format, qui exclut les cadres (`formatFillAvailability`). Un cadre sous
+        // un slot est donc toujours dans un bloc : il y devient le conteneur, au repos autour.
+        let screen_mask = scene.is_some_and(|s| s.layout.screen_cover).then(|| {
+            let slot_px = [s_base[2] * rw, s_base[3] * rh];
+            ScreenMask {
+                rect: s_base,
+                radius_px: screen_corner_radius_px(outer_radius_of(slot_px), slot_px),
+                square_top: frame_kind == crate::scene::SceneFrame::Window,
+            }
+        });
+        // Le cadre se construit autour de la boîte écran, zoom compris ; sous le masque d'un bloc,
+        // autour du slot au repos et de ses coins, qui ne zooment pas.
+        let (f_px, f_radius) = match screen_mask {
+            Some(m) => ([m.rect[2] * rw, m.rect[3] * rh], m.radius_px),
+            None => (s_px, s_radius),
+        };
         let window_frame = frame_margins.map(|margins| {
-            let (l, t, b) = (margins[0] * s_px[0], margins[1] * s_px[1], margins[3] * s_px[1]);
+            let (l, t, b) = (margins[0] * f_px[0], margins[1] * f_px[1], margins[3] * f_px[1]);
             // La fenêtre n'a qu'un rayon (mode 14) : celui de ses coins BAS, où le métrage s'arrondit
             // sous le filet. En haut, le contour intérieur du chrome a le rayon du métrage, remonté
             // sous la barre (`sd_screen_under_bar`) : le même arc, rentré du filet.
             let top = match frame_kind {
-                crate::scene::SceneFrame::Window => concentric_radius(s_radius, l, b),
-                _ => concentric_radius(s_radius, l, t),
+                crate::scene::SceneFrame::Window => concentric_radius(f_radius, l, b),
+                _ => concentric_radius(f_radius, l, t),
             };
             // Portable et moniteur : la coque garde ses rayons, seule l'ouverture suit le slider.
             let radius = match device_shell_radius(frame_kind) {
-                Some(shell) => shell.map(|r| r * frame_unit_px(s_px, [rw, rh])),
-                None => [top, concentric_radius(s_radius, l, b)],
+                Some(shell) => shell.map(|r| r * frame_unit_px(f_px, [rw, rh])),
+                None => [top, concentric_radius(f_radius, l, b)],
             };
             WindowFrame { kind: frame_kind, dark: frame_dark, margins, radius }
         });
@@ -2719,12 +3455,11 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         // était une SECONDE, indépendante — fraction différente (0.12 vs 0.06 côté web) et sans
         // bornes — donc écran et caméra ne pouvaient pas s'accorder.
         let app_webcam_radius_frac = scene.and_then(|s| s.layout.webcam_radius_frac);
-        // Full Camera dissout la forme en même temps qu'elle prend le cadre : le rayon fond
-        // vers 0 avec `cam_progress`, donc le cercle devient un rect à coins de plus en plus
-        // francs puis un plein cadre net — aucun masque ne survit au plein écran (parité
-        // `computeCameraFullscreenRect`, qui ramène `maskShape` à "rectangle" et lerpe le
-        // rayon vers 0 pour exactement la même raison).
-        let shape_fade = (1.0 - cam_progress).clamp(0.0, 1.0);
+        // Full Camera dissout la forme en prenant le cadre : le rayon fond vers 0, donc le cercle
+        // devient un rect à coins de plus en plus francs puis un plein cadre net — aucun masque
+        // ne survit au plein écran. Il fond sur sa propre courbe, en retard sur le rect
+        // (`camera_fullscreen_shape_at`). `computeCameraFullscreenRect` (TS) le lerpe encore
+        // avec le progrès, mais ce rayon-là n'habille qu'une `<video>` cachée.
         let w_radius = shape_fade
             * w_nominal_min
             * match app_webcam_radius_frac {
@@ -2748,6 +3483,8 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         zoom_rotation,
         zoom_rotation_dyn,
         camera,
+        zoom_rotation_prev,
+        camera_prev,
         padding_scale,
         cut,
         focus_plane,
@@ -2761,12 +3498,14 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         s_ann: s_base,
         s_radius,
         frame_min_px,
+        screen_unit_px,
         w_dst,
         w_dst_prev,
         w_px,
         w_radius,
         shape_fade,
         window_frame,
+        screen_mask,
     }
 }
 
@@ -2780,7 +3519,8 @@ pub struct CursorPlan {
     pub placement: CursorPlacement,
     /// Placement à `t - trail_frames/FPS`, pour la traînée. `placement` quand il n'y en a pas.
     pub prev_placement: CursorPlacement,
-    /// Côté du sprite en px de sortie (bounce et padding déjà appliqués).
+    /// Côté du sprite en px de sortie (bounce et padding déjà appliqués). Sous un angle fixe, le
+    /// côté sur le plan qui donne cette taille au point de focus.
     pub size_px: f32,
     /// Nombre d'échantillons de la traînée. 1 = curseur net, pas d'accumulation.
     pub taps: u32,
@@ -2798,6 +3538,10 @@ pub struct CursorPlan {
     /// L'impact des clics récents sur l'écran (mode 16), à dessiner SOUS le curseur. Vide sans
     /// curseur modélisé, sans clic récent ou à `clickBounce` nul.
     pub impacts: Vec<LayerCB>,
+    /// Le curseur modélisé est le cristal de Prism Glow : il réfracte l'image déjà composée, le
+    /// métrage et ses flous de confidentialité, que le backend lui copie juste avant de le
+    /// dessiner. Seuls des pixels floutés passent ainsi à travers le verre.
+    pub glass: bool,
 }
 
 impl CursorPlan {
@@ -2842,7 +3586,10 @@ pub fn cursor_alpha(
     }
     let idle_alpha = track.opacity_at(t, live.cursor_auto_hide);
     let zoom_alpha = match scene {
-        Some(s) => crate::regions::zoom_cursor_alpha(&s.zoom_regions, t),
+        Some(s) => {
+            let clock = crate::regions::ScreenClock::new(&s.speed_regions, s.active_clip_index);
+            crate::regions::zoom_cursor_alpha(&s.zoom_regions, t, &clock)
+        }
         None => 1.0,
     };
     idle_alpha * zoom_alpha
@@ -2859,12 +3606,15 @@ pub fn cursor_plane_point(cut: [f32; 4], uv_max: [f32; 2], p: (f32, f32)) -> Opt
     ((0.0..=1.0).contains(&fx) && (0.0..=1.0).contains(&fy)).then_some([fx, fy])
 }
 
-/// L'impact des clics (`regions::click_impact`) avec les portes qui dépendent de la scène, à
-/// multiplier encore par le poids des régions (`ZoomState::click_impact`) ; la porte du préset
-/// vient ensuite, dans `dynamic_tilt`.
+/// L'impact des clics (la bascule `regions::click_impact`, le recul `regions::click_press`) avec
+/// les portes qui dépendent de la scène ; la porte du préset vient ensuite, dans `dynamic_tilt`
+/// pour la bascule, dans `plan_frame` pour le recul.
 ///
-/// - curseur visible (`cursor_alpha`) : `cursor.show` explicite, parce que l'export ne charge la
-///   piste que si le curseur est affiché alors que la preview la charge toujours ;
+/// - curseur visible (`cursor_alpha`) : `cursor.show` explicite, la piste étant chargée même
+///   curseur masqué (le focus auto la suit) ;
+/// - curseur caché par l'application (`visible: false`) : ses clics ne sont pas chargés
+///   (`CursorTrack::load`). Un clic visible va au bout même si le pointeur disparaît juste après
+///   (un glisser sur un champ numérique) : le couper là ferait sauter l'écran en plein creux ;
 /// - clics dans la fenêtre source du clip actif seulement (cf. `click_impact`) ;
 /// - vitesse : poids `clamp(2 − vitesse, 0, 1)`. À 100× une frame couvre 3,3 s de source, la
 ///   courbe serait échantillonnée une fois, au hasard : une secousse d'une frame ;
@@ -2906,6 +3656,11 @@ fn click_impact_at(
 pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorPlan> {
     let (rw, rh) = (input.render_px[0], input.render_px[1]);
 
+    // Caché par l'application (`visible: false`) : rien de ce plan n'est dessiné, ni le sprite,
+    // ni le modèle et son ombre, ni l'anneau d'un clic. Les trois backends passent tous par ici.
+    if !input.track.visible_at(input.t) {
+        return None;
+    }
     let alpha = cursor_alpha(input.scene, input.cfg, &input.live, input.track, input.t);
     if alpha <= 0.001 {
         return None;
@@ -2973,7 +3728,19 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
         (1.0 + (input.track.bounce(input.t) - 1.0) * lp.cursor_bounce_scale).max(0.0)
     };
     let size_px =
-        CURSOR_BASE_SIZE_FRAC * g.frame_min_px * lp.cursor_size_scale * bounce * g.padding_scale;
+        CURSOR_BASE_SIZE_FRAC * g.screen_unit_px * lp.cursor_size_scale * bounce * g.padding_scale;
+    // Sous un angle fixe, le plan tourne autour du centre de sa boîte ZOOMÉE, réduit de son
+    // containment : au point de focus, un px du plan vaut `scale·P/(P − z)` px de sortie, ~0,84 au
+    // zoom doré. Le curseur y rapetissait donc pendant que le zoom grossissait l'image. Il est
+    // taillé pour faire `size_px` au focus ; ailleurs, seule la perspective le change. La caméra
+    // réelle n'en a pas besoin : elle vise déjà le point regardé.
+    let size_px = match (tilt.as_ref(), g.camera) {
+        (Some(quad), None) => {
+            let z = quad.depth_mb(s_px, g.focus_plane, false)[2];
+            size_px * (quad.perspective - z) / (quad.perspective * quad.scale)
+        }
+        _ => size_px,
+    };
     // Taille nulle = rien à dessiner, et surtout rien à projeter : sur un plan incliné les quatre
     // coins du sprite se confondent, et le warp inverse du mode 13 résout alors 0/0. Son rejet
     // ne tiendrait qu'à des comparaisons avec NaN, que Metal (fast-math) ne garantit pas.
@@ -2984,12 +3751,18 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
 
     let blur01 = lp.cursor_motion_blur.clamp(0.0, 1.0);
     let has_scene = input.scene.is_some();
+    // La traînée ne remonte pas dans une phase cachée : à sa réapparition, le curseur ne vient pas
+    // de là où il était caché.
+    let trail_from = |t: f32| {
+        let prev = if input.track.visible_at(t) { place(at(t), g.s_dst_prev) } else { None };
+        prev.unwrap_or(placement)
+    };
     let (taps, prev_placement) = if !has_scene {
         let taps = input.cfg.mblur_n;
         let prev = if taps <= 1 {
             placement
         } else {
-            place(at(input.t - 1.0 / FPS), g.s_dst_prev).unwrap_or(placement)
+            trail_from(input.t - 1.0 / FPS)
         };
         (taps, prev)
     } else if blur01 <= 0.001 {
@@ -2997,7 +3770,7 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
     } else {
         // Intervalle d'obturateur court, borné à 1 frame (100% blur = 1 frame d'exposition)
         let trail_dt = blur01 / FPS;
-        let prev = place(at(input.t - trail_dt), g.s_dst_prev).unwrap_or(placement);
+        let prev = trail_from(input.t - trail_dt);
         let c_now = placement.upright_center();
         let c_prev = prev.upright_center();
         let dist_px = ((c_now[0] - c_prev[0]) * rw).hypot((c_now[1] - c_prev[1]) * rh);
@@ -3030,6 +3803,11 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
         Some(s) if s.cursor.clip_to_bounds => cursor_bounds,
         _ => [-1.0, -1.0, 3.0, 3.0],
     };
+    // Le curseur est sur le métrage : sous le masque d'un layout en bloc, le slot le rogne aussi.
+    let clip = match g.screen_mask {
+        Some(m) => intersect_rect(clip, m.rect),
+        None => clip,
+    };
 
     // L'impact : un anneau par clic récent, centré sur son point BRUT, là où la pointe se pose.
     let strength = (lp.cursor_bounce_scale / MODEL_CLICK_BOUNCE_REF).clamp(0.0, 2.0);
@@ -3040,7 +3818,12 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
             .clicks_with_points(input.t - IMPACT_DELAY_S - IMPACT_S, input.t - IMPACT_DELAY_S)
             .filter_map(|(tc, p)| {
                 let impact = impact_at(input.t - tc, strength)?;
-                cursor_impact_cb(place(Some(p), g.s_dst)?, half_px, impact, alpha)
+                let mut cb = cursor_impact_cb(place(Some(p), g.s_dst)?, half_px, impact, alpha)?;
+                if let Some(m) = g.screen_mask {
+                    let dst = m.clip(cb.dst)?;
+                    reframe_warped(&mut cb, dst, [rw, rh]);
+                }
+                Some(cb)
             })
             .collect()
     } else {
@@ -3060,21 +3843,22 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
             cursor_pose(input.track, input.t, lp.cursor_bounce_scale, pointing)
         }),
         impacts,
+        glass: model_sprite.and_then(|s| s.sculpt.as_deref()).is_some_and(crate::sculpt::refracts),
     })
 }
 
 // ============ Curseur modélisé (mode 15) ============
 //
-// Le sprite de l'état courant (thème par défaut) devient un OBJET : sa silhouette extrudée, lancée
-// de rayons par pixel dans le shader, éclairée, et qui porte une vraie ombre sur l'écran. La
-// silhouette est le champ de distance signé que `cursor_sdf` tire de l'alpha du sprite ; le dessus
-// porte l'art du sprite, les flancs et le chanfrein la couleur de son bord. Rust ne fait ici que la
-// pose (fonction pure de `t`), la caméra et la boîte de dessin ; les trois shaders font le reste
-// avec les MÊMES constantes.
+// Le curseur devient un OBJET, lancé de rayons par pixel dans le shader, éclairé, et qui porte une
+// vraie ombre sur l'écran : la flèche ou la main d'un thème d'origine SCULPTÉE en volumes
+// (`sculpt.rs`), sinon le sprite de l'état courant extrudé, sa silhouette tirée de l'alpha
+// (`cursor_sdf`), son dessus portant l'art du sprite et ses flancs la couleur de son bord. Rust
+// calcule la pose, la caméra et la boîte de dessin ; les trois shaders font le reste avec les
+// MÊMES constantes.
 //
 // Repère du MODÈLE : unité = plus grand côté du sprite (`size_px`, la taille du curseur), origine
-// au hotspot de la face du dessus, x à droite, y vers le bas, z vers la caméra ; le modèle occupe
-// z de -MODEL_THICK à 0.
+// au hotspot, x à droite, y vers le bas, z vers la caméra ; le modèle occupe z de
+// -`SpriteShape::thick` à `SpriteShape::max_height`.
 //
 // Emplacements du `LayerCB` au mode 15 (128 octets, inchangés) :
 //   dst           rect de dessin (sortie 0..1) : boîte du modèle ET de son ombre
@@ -3082,7 +3866,7 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
 //   src.xy        décalage px : `local + src.xy` = pixel relatif à l'axe de la caméra, ancrage ôté
 //   src.z         P, distance caméra–plan (px) ; src.w = U, l'unité du modèle (px du plan)
 //   color.rg      coin haut-gauche du sprite, repère du modèle (unités)
-//   color.b       écrasement : l'épaisseur vaut MODEL_THICK × color.b (`CursorPose::squash`).
+//   color.b       facteur d'épaisseur des shaders, toujours 1 : le clic n'écrase plus le volume.
 //                 Un texel du sprite se tire de la taille du champ (`SDF_UPSAMPLE` / plus grand côté)
 //   color.a       opacité (auto-hide, zoom)
 //   fx.xyz        rotation dessinée du plan (rad, X/Y/Z, ordre de `regions::rotate_point`)
@@ -3094,11 +3878,17 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
 //   mb.zw         translation du plan dans le repère caméra (px, `TiltedQuad::offset`) : le
 //                 plan vaut `R·p + (mb.zw, 0)`, œil en (0, 0, P). Nulle sous un angle fixe.
 //   radius_px     rapport w/h du sprite : sa taille (unités) en découle, plus grand côté = 1
-// Textures : le sprite RGBA (alpha droit) et son champ R16F (`cursor_sdf`), sur le même rect.
-//   Windows et macOS : sprite en t2/texture(2) (`texImg`), champ en t4/texture(4) (`texSdf`).
-//   Linux : sprite au binding 1 (`texY`), champ au binding 2 (`texU`).
+//   trail_a       le curseur sculpté (0 = le sprite extrudé), l'épaisseur sous z = 0 avant
+//                 écrasement, la hauteur au-dessus de z = 0 (`SpriteShape`), 0
+// Textures : le sprite RGBA (alpha droit) et son champ R16F (`cursor_sdf`), sur le même rect ;
+// pour le cristal de Prism Glow (`CursorPlan::glass`), une copie de l'image composée, flous de
+// confidentialité compris, qu'il réfracte.
+//   Windows et macOS : sprite en t2/texture(2) (`texImg`), champ en t4/texture(4) (`texSdf`),
+//   copie en t5/texture(5) (`texDof`).
+//   Linux : sprite au binding 6 (`texDof`), champ au binding 4 (`texMask`), copie au binding 1
+//   (`texY`).
 
-/// Épaisseur du modèle : la face du dessus est en z = 0, celle du dessous en z = -épaisseur.
+/// Épaisseur du sprite extrudé : son dessus est en z = 0, son dessous en z = -épaisseur.
 pub const MODEL_THICK: f32 = 0.19;
 /// Rayon du chanfrein arrondi des arêtes du dessus et du dessous.
 pub const MODEL_BEVEL: f32 = 0.045;
@@ -3108,14 +3898,30 @@ pub const MODEL_LIGHT: [f32; 3] = [-0.4194, -0.5792, 0.6990];
 
 /// Garde au sol au repos, en unités du modèle.
 const MODEL_HOVER: f32 = 0.35;
-/// Gain sur `tap` pour la descente : à 1,25 le modèle reste posé de 27 à 74 ms après le clic,
-/// assez pour qu'au moins une image le montre au contact jusqu'à 21 i/s.
-const MODEL_CONTACT_GAIN: f32 = 1.25;
-/// Tangage au repos (queue relevée, pointe vers le bas) et supplément au creux de la pression.
+/// Le geste du clic (`click_height`), à « Light » (1) : il prend son élan `MODEL_LIFT` au-dessus
+/// du survol dès `MODEL_LEAD_S` avant le clic, plonge en `MODEL_DIVE_S` jusqu'à toucher le plan au
+/// clic même, appuie `MODEL_HOLD_S` (dans la tenue de `CursorTrack::pinned_at`), remonte
+/// `MODEL_OVERSHOOT` au-dessus du survol en `MODEL_RELEASE_S` et s'y repose en `MODEL_SETTLE_S` :
+/// 720 ms, une vingtaine d'images à 30 i/s. « Strong » (2) prend moitié plus d'élan, plonge en
+/// 96 ms, penche et rebondit deux fois plus. L'ancienne descente tenait entre deux images.
+const MODEL_LEAD_S: f32 = 0.3;
+const MODEL_LIFT: f32 = 0.4;
+const MODEL_DIVE_S: f32 = 0.12;
+const MODEL_HOLD_S: f32 = 0.08;
+const MODEL_RELEASE_S: f32 = 0.14;
+const MODEL_OVERSHOOT: f32 = 0.15;
+const MODEL_SETTLE_S: f32 = 0.2;
+/// Tangage au repos (queue relevée, pointe vers le bas). Il suit la hauteur, pour que pivot et
+/// plongée ne fassent qu'un geste : la pointe se relève pendant l'élan (jusqu'à `LIFT_DEG` par
+/// `MODEL_LIFT` d'élan) et plonge vers la cible en descendant (jusqu'à `DIVE_DEG` par niveau au
+/// contact).
 const MODEL_PITCH_IDLE_DEG: f32 = 18.0;
-const MODEL_PITCH_PRESS_DEG: f32 = 10.0;
-/// Le supplément de tangage suit `clickBounce` rapporté à sa valeur par défaut, borné à 2×.
-const MODEL_CLICK_BOUNCE_REF: f32 = 2.5;
+const MODEL_PITCH_DIVE_DEG: f32 = 8.0;
+const MODEL_PITCH_LIFT_DEG: f32 = 5.0;
+/// Le supplément de tangage suit `clickBounce` rapporté à sa valeur par défaut, borné à 2× : 1,
+/// « Light » (`DEFAULT_PROJECT_APPEARANCE`), donc « Strong » (2) en est le double. Restée à 2,5,
+/// l'ancien défaut, elle ne donnait plus que 40 % de la pression à « Light » et 80 % à « Strong ».
+const MODEL_CLICK_BOUNCE_REF: f32 = 1.0;
 /// Lacet maximal, et la vitesse (largeurs de l'écran par seconde) qui en donne 76 % (`tanh 1`).
 const MODEL_YAW_MAX_DEG: f32 = 25.0;
 const MODEL_YAW_SPEED: f32 = 0.8;
@@ -3123,10 +3929,6 @@ const MODEL_YAW_SPEED: f32 = 0.8;
 const MODEL_YAW_HALF_WINDOW_S: f32 = 0.1;
 /// Combien de temps avant un clic le modèle se tourne vers sa cible.
 const MODEL_AIM_S: f32 = 0.3;
-/// Écrasement au creux du clic (part de l'épaisseur perdue), à `clickBounce` par défaut.
-/// L'épaisseur ne descend jamais sous `MODEL_SQUASH_MIN` (deux chanfreins, plus un peu de flanc).
-const MODEL_SQUASH: f32 = 0.3;
-const MODEL_SQUASH_MIN: f32 = 0.55;
 /// Hotspot → part « pointeur » (cf. `pointing_factor`) : sous `LO` (distance au centre rapportée
 /// au demi-côté), un curseur centré ; au-delà de `HI`, un pointeur. La flèche est à 0,83.
 const MODEL_POINTING_LO: f32 = 0.3;
@@ -3149,6 +3951,13 @@ pub struct SpriteShape {
     pub hotspot: [f32; 2],
     /// Haut de la silhouette (alpha 0,5), fraction de la hauteur du sprite.
     pub top: f32,
+    /// Hauteur du modèle au-dessus de z = 0, en unités du modèle : 0 pour un sprite extrudé.
+    pub max_height: f32,
+    /// Épaisseur sous z = 0 : `MODEL_THICK` pour un sprite extrudé, celle du modèle pour un
+    /// curseur sculpté (`sculpt::sculpted_shape`).
+    pub thick: f32,
+    /// Le curseur sculpté que dessine le shader (`sculpt`), 0 pour le sprite extrudé.
+    pub sculpt: u32,
 }
 
 impl SpriteShape {
@@ -3157,19 +3966,22 @@ impl SpriteShape {
         [-self.hotspot[0] * self.size[0], -self.hotspot[1] * self.size[1]]
     }
 
-    /// La boîte englobante du modèle écrasé à `squash` : le rect du sprite, sur toute l'épaisseur.
-    fn model_box(&self, squash: f32) -> ([f32; 3], [f32; 3]) {
+    /// La boîte englobante du modèle : le rect du sprite, sur toute l'épaisseur.
+    fn model_box(&self) -> ([f32; 3], [f32; 3]) {
         let [x, y] = self.origin();
-        ([x, y, -MODEL_THICK * squash], [x + self.size[0], y + self.size[1], 0.0])
+        (
+            [x, y, -self.thick],
+            [x + self.size[0], y + self.size[1], self.max_height],
+        )
     }
 
-    /// Hauteur du hotspot du dessus quand le point le plus bas du modèle basculé de `pitch` (≥ 0)
-    /// et écrasé à `squash` affleure le plan : le bas du haut de la silhouette (y minimal, face du
-    /// dessous) ; à plat, toute la face du dessous. Le chanfrein arrondit ce coin et laisse,
+    /// Hauteur du hotspot du dessus quand le point le plus bas du modèle basculé de `pitch`
+    /// affleure le plan : le bas du haut de la silhouette (y minimal, face du dessous) si la
+    /// pointe plonge, toute la face du dessous à plat. Le chanfrein arrondit ce coin et laisse,
     /// basculé, un jour d'au plus ~1 % de l'unité, invisible sous l'ombre de contact.
-    fn contact_lift(&self, pitch: f32, squash: f32) -> f32 {
+    fn contact_lift(&self, pitch: f32) -> f32 {
         let y_top = (self.top - self.hotspot[1]) * self.size[1];
-        MODEL_THICK * squash * pitch.cos() - y_top * pitch.sin()
+        self.thick * pitch.cos() - y_top * pitch.sin()
     }
 }
 
@@ -3196,50 +4008,92 @@ pub struct CursorPose {
     /// Lacet (rad) autour de la normale du plan, appliqué après le tangage : positif = sens
     /// horaire à l'écran (y vers le bas), la pointe part vers la droite.
     pub yaw: f32,
-    /// Épaisseur du modèle rapportée à `MODEL_THICK` : moins de 1 quand le clic l'écrase.
-    pub squash: f32,
 }
 
-/// La pose à `t`. `click_bounce` est le réglage brut (0..5, 2,5 par défaut), `pointing` la part
-/// « pointeur » du sprite (`pointing_factor`).
+fn smoothstep01(x: f32) -> f32 {
+    let u = x.clamp(0.0, 1.0);
+    u * u * (3.0 - 2.0 * u)
+}
+
+/// La hauteur du point le plus bas `tau` secondes après un clic (avant lui si négatif), au
+/// niveau `s` de `clickBounce` (0 à 2) : élan au-dessus du survol, plongée qui accélère jusqu'au
+/// contact au clic même, appui, remontée qui freine au-delà du survol, puis repos. Sous « Light »,
+/// le geste est réduit d'autant : à 0, le modèle ne bouge pas.
+fn click_height(tau: f32, s: f32) -> f32 {
+    let top = MODEL_HOVER + MODEL_LIFT * (1.0 + s) * 0.5;
+    let over = MODEL_HOVER + MODEL_OVERSHOOT * s;
+    let dive = MODEL_DIVE_S * (1.2 - 0.2 * s.max(1.0));
+    let release = MODEL_HOLD_S + MODEL_RELEASE_S;
+    let full = if tau < -dive {
+        MODEL_HOVER + (top - MODEL_HOVER) * smoothstep01((tau + MODEL_LEAD_S) / (MODEL_LEAD_S - dive))
+    } else if tau < 0.0 {
+        let u = (tau + dive) / dive;
+        top * (1.0 - u * u)
+    } else if tau < MODEL_HOLD_S {
+        0.0
+    } else if tau < release {
+        let u = 1.0 - (tau - MODEL_HOLD_S) / MODEL_RELEASE_S;
+        over * (1.0 - u * u)
+    } else {
+        over + (MODEL_HOVER - over) * smoothstep01((tau - release) / MODEL_SETTLE_S)
+    };
+    MODEL_HOVER + (full - MODEL_HOVER) * s.min(1.0)
+}
+
+/// La pose à `t`. `click_bounce` est le réglage brut (0 à 2 : None, Light, Strong ; 1 par défaut),
+/// `pointing` la part « pointeur » du sprite (`pointing_factor`).
 ///
-/// - Hauteur : `MODEL_HOVER` au repos ; chaque clic le fait descendre TOUCHER le plan au creux de
-///   `regions::tap`, la courbe de l'impact du clic, dont le creux (49,5 ms) est celui de la
-///   pression de `CursorTrack::bounce` : le modèle, le plan et le rebond d'échelle lisent le même
-///   contact à la même image. Dernier clic avant `t`, comme `bounce`. Tous les états.
-/// - Tangage : 18° au repos, jusqu'à +10° au creux de la pression, fois `clickBounce`.
+/// - Hauteur : `MODEL_HOVER` au repos. Chaque clic est un geste en vraie profondeur
+///   (`click_height`) : élan, plongée jusqu'à toucher le plan au clic même, appui, remontée,
+///   repos. Il enjambe l'instant où le plan, le rebond d'échelle et l'impact lisent le contact
+///   (49,5 ms). Le niveau règle le geste, comme le rebond d'échelle en 2D : « Strong » monte plus
+///   haut, plonge plus vite et rebondit deux fois plus ; « None » ne bouge pas. Deux clics proches
+///   se partagent le geste, l'appui l'emportant sur l'élan : un double clic ne remonte pas entre
+///   eux. Tous les états.
+/// - Tangage : 18° au repos, et il suit la hauteur : relevé pendant l'élan, plongé vers la cible
+///   en descendant, jusqu'à +8° par niveau au contact.
 /// - Lacet : vers la vitesse horizontale lissée (`follow_at`, différence centrée), et vers la
 ///   cible d'un clic dans les 300 ms qui le précèdent ; borné à ±25° en douceur (`tanh`), nul au
 ///   repos. Les contributions des clics montent avant eux et retombent sur la fenêtre de l'impact,
-///   donc la pose reste continue en `t`.
+///   donc la pose reste continue en `t` ; à « None », seule la vitesse compte.
 /// - Tangage et lacet sont multipliés par `pointing` : entiers pour la flèche, nuls pour un
 ///   curseur centré.
-/// - Écrasement : sur la même courbe `tap`, l'épaisseur descend à 1 − `MODEL_SQUASH` au creux,
-///   puis le rebond l'épaissit un instant. Fois `clickBounce`, comme le tangage ; tous les états.
-///   L'empreinte ne change pas : pas de rebond d'échelle en 3D.
+/// - Ni écrasement ni rebond d'échelle : le volume reste entier, le mouvement dit le clic.
 pub fn cursor_pose(
     track: &crate::cursor::CursorTrack,
     t: f32,
     click_bounce: f32,
     pointing: f32,
 ) -> CursorPose {
-    use crate::regions::{tap, CLICK_IMPACT_WINDOW_S};
-    let k = track.last_click_at(t).map(|tc| tap((t - tc) / CLICK_IMPACT_WINDOW_S)).unwrap_or(0.0);
-    let clearance = MODEL_HOVER * (1.0 + MODEL_CONTACT_GAIN * k).max(0.0);
+    use crate::regions::CLICK_IMPACT_WINDOW_S;
     let strength = (click_bounce / MODEL_CLICK_BOUNCE_REF).clamp(0.0, 2.0);
-    let press = (-k).max(0.0) * strength;
-    let pitch = pointing * (MODEL_PITCH_IDLE_DEG + MODEL_PITCH_PRESS_DEG * press).to_radians();
-    let squash = (1.0 + MODEL_SQUASH * k * strength).max(MODEL_SQUASH_MIN);
-
-    let smooth = |x: f32| {
-        let u = x.clamp(0.0, 1.0);
-        u * u * (3.0 - 2.0 * u)
+    // Le dernier clic et le suivant : l'élan le plus haut, l'appui le plus profond, et l'appui
+    // l'emporte. Un clic seul garde exactement sa courbe ; un double clic reste posé entre les deux.
+    let near = track.last_click_at(t).into_iter();
+    let near = near.chain(track.clicks_between(t, t + MODEL_LEAD_S).first().copied());
+    let (mut lift, mut press) = (0.0f32, 0.0f32);
+    for tc in near {
+        let dh = click_height(t - tc, strength) - MODEL_HOVER;
+        lift = lift.max(dh);
+        press = press.max(-dh / MODEL_HOVER);
+    }
+    let clearance = (MODEL_HOVER + lift) * (1.0 - press);
+    let dh = clearance - MODEL_HOVER;
+    let tilt = if dh < 0.0 {
+        -dh / MODEL_HOVER * MODEL_PITCH_DIVE_DEG * strength
+    } else {
+        -dh / MODEL_LIFT * MODEL_PITCH_LIFT_DEG
     };
+    let pitch = pointing * (MODEL_PITCH_IDLE_DEG + tilt).to_radians();
+
+    let smooth = smoothstep01;
     let h = MODEL_YAW_HALF_WINDOW_S;
     let mut v = match (track.follow_at(t - h), track.follow_at(t + h)) {
         (Some(a), Some(b)) => (b.0 - a.0) / (2.0 * h),
         _ => 0.0,
     };
+    // La visée d'un clic fait partie de son geste : absente à « None », entière dès « Light ».
+    let aim = strength.min(1.0);
     if let Some(here) = track.follow_at(t) {
         for (tc, target) in track.clicks_with_points(t - CLICK_IMPACT_WINDOW_S, t + MODEL_AIM_S) {
             let w = if tc > t {
@@ -3247,21 +4101,31 @@ pub fn cursor_pose(
             } else {
                 1.0 - smooth((t - tc) / CLICK_IMPACT_WINDOW_S)
             };
-            v += w * (target.0 - here.0) / MODEL_AIM_S;
+            v += aim * w * (target.0 - here.0) / MODEL_AIM_S;
         }
     }
     let yaw = pointing * MODEL_YAW_MAX_DEG.to_radians() * (v / MODEL_YAW_SPEED).tanh();
-    CursorPose { clearance, pitch, yaw, squash }
+    CursorPose { clearance, pitch, yaw }
 }
 
-/// Le sprite du thème par défaut que les backends résoudraient pour `cursor_type`, s'il y en a
-/// un : c'est lui que le mode 15 extrude. Même résolution qu'eux : l'état s'il a un sprite, sinon
-/// la flèche. Les autres thèmes restent plats.
+/// La forme que le mode 15 donne à `sprite` : son curseur sculpté s'il en a un
+/// (`sculpt::sculpted_shape`), sinon le sprite extrudé (`sdf_shape`, du champ de son PNG) au
+/// hotspot de la scène. Commun aux trois backends.
+pub fn model_shape(sprite: &crate::scene::SceneCursorSprite, sdf_shape: SpriteShape) -> SpriteShape {
+    sprite
+        .sculpt
+        .as_deref()
+        .and_then(crate::sculpt::sculpted_shape)
+        .unwrap_or(SpriteShape { hotspot: [sprite.hotspot_x, sprite.hotspot_y], ..sdf_shape })
+}
+
+/// Le sprite que les backends résoudraient pour `cursor_type` : c'est lui que le mode 15 modèle.
+/// Même résolution qu'eux : l'état s'il a un sprite, sinon la flèche.
 fn modelled_sprite<'a>(
     scene: Option<&'a Scene>,
     cursor_type: Option<&str>,
 ) -> Option<&'a crate::scene::SceneCursorSprite> {
-    let s = scene.filter(|s| s.cursor.theme == "default")?;
+    let s = scene?;
     let sprites = &s.cursor.cursor_sprites;
     cursor_type.and_then(|k| sprites.get(k)).or_else(|| sprites.get("arrow"))
 }
@@ -3322,7 +4186,7 @@ impl ModelView {
         }
         let ground =
             [(plane_pt[0] - 0.5) * 2.0 * half[0], (plane_pt[1] - 0.5) * 2.0 * half[1], 0.0];
-        let height = unit * (pose.clearance + shape.contact_lift(pose.pitch, pose.squash));
+        let height = unit * (pose.clearance + shape.contact_lift(pose.pitch));
         let k = height / eye[2];
         let tip =
             [ground[0] + (eye[0] - ground[0]) * k, ground[1] + (eye[1] - ground[1]) * k, height];
@@ -3378,7 +4242,7 @@ impl ModelView {
     /// plus `d / lz` de son ombre géométrique (`lz` = élévation de la lumière au-dessus du plan),
     /// et la pénombre s'arrête à `d = min(t / MODEL_SOFTNESS, MODEL_SHADOW_PAD)`.
     pub(crate) fn footprint(&self) -> Option<[f32; 4]> {
-        let (lo, hi) = self.shape.model_box(self.pose.squash);
+        let (lo, hi) = self.shape.model_box();
         let light = self.light();
         let lz = light[2].max(0.2);
         let corners: [[f32; 3]; 8] = std::array::from_fn(|i| {
@@ -3389,7 +4253,10 @@ impl ModelView {
             ])
         });
         let top = corners.iter().fold(0.0f32, |m, p| m.max(p[2])) / self.unit;
-        let penumbra = (top / lz / MODEL_SOFTNESS).min(MODEL_SHADOW_PAD);
+        // La marche du shader court jusqu'à la sortie de la boîte ÉLARGIE de `MODEL_SHADOW_PAD` :
+        // sous une lumière rasante (`right`, `lz` ≈ 0,2), le rayon y va bien au-delà de `top / lz`,
+        // et la pénombre avec lui.
+        let penumbra = ((top + MODEL_SHADOW_PAD) / lz / MODEL_SOFTNESS).min(MODEL_SHADOW_PAD);
         let reach = (penumbra / lz + MODEL_CONTACT_RADIUS) * self.unit;
         let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
         let mut add = |p: [f32; 2]| {
@@ -3436,12 +4303,14 @@ pub fn cursor_model_cb(
         ],
         quad_px: [bw, bh],
         mode: 15.0,
-        color: [shape.origin()[0], shape.origin()[1], pose.squash, alpha],
+        // Les shaders multiplient encore l'épaisseur par `color.b` : plus rien ne l'écrase.
+        color: [shape.origin()[0], shape.origin()[1], 1.0, alpha],
         fx: [r[0], r[1], r[2], pose.pitch],
         src_prev: [view.tip[0], view.tip[1], view.tip[2], pose.yaw],
         dst_prev: clip,
         mb: [view.half[0], view.half[1], view.offset[0], view.offset[1]],
         radius_px: shape.size[0] / shape.size[1],
+        trail_a: [shape.sculpt as f32, shape.thick, shape.max_height, 0.0],
         ..Default::default()
     })
 }
@@ -3551,6 +4420,7 @@ fn cursor_impact_cb(
         src_prev: [br0, br1, bl0, bl1],
         dst_prev: [x0, y0, 2.0 * hx, 2.0 * hy],
         mb: [quad.warp_flag(), impact.spot_r, impact.spot_a, 0.0],
+        ..Default::default()
     })
 }
 
@@ -3606,6 +4476,63 @@ pub fn lru_evictions(entries: &[(String, u64, u64)], budget: u64, protect_from: 
 #[cfg(test)]
 mod tests {
     use super::lru_evictions;
+
+    /// Un fond fixe a une clé qui ne reconnaît que lui, chacune de ses entrées comptant ; un fond
+    /// animé n'en a pas.
+    #[test]
+    fn a_static_background_is_keyed_by_everything_that_draws_it() {
+        use crate::scene::{SceneBackground as B, WallpaperMotion};
+        use super::BackgroundKey;
+        let image = |path: &str, motion| B::Image { path: path.to_string(), motion };
+        let still = image("/w/1.jpg", WallpaperMotion::None);
+        let (blur, fallback, size) = (0.0, [0.0; 4], [1920.0, 1080.0]);
+        let key = BackgroundKey::of(Some(&still), blur, fallback, size).expect("fond fixe");
+        assert!(key.matches(Some(&still), blur, fallback, size));
+        let other = image("/w/2.jpg", WallpaperMotion::None);
+        assert!(!key.matches(Some(&other), blur, fallback, size), "autre image");
+        assert!(!key.matches(Some(&still), 0.5, fallback, size), "autre flou");
+        assert!(!key.matches(Some(&still), blur, [1.0, 0.0, 0.0, 1.0], size), "autre repli");
+        assert!(!key.matches(Some(&still), blur, fallback, [1280.0, 720.0]), "autre taille");
+        assert!(!key.matches(None, blur, fallback, size), "pas de scène");
+        let drifting = image("/w/1.jpg", WallpaperMotion::Drift);
+        assert!(!key.matches(Some(&drifting), blur, fallback, size), "même image, animée");
+        assert!(BackgroundKey::of(Some(&drifting), blur, fallback, size).is_none());
+        let aurora = B::Gradient {
+            angle_deg: 90.0,
+            stops: vec!["#000".into(), "#fff".into()],
+            offsets: vec![],
+            motion: WallpaperMotion::Aurora,
+        };
+        assert!(BackgroundKey::of(Some(&aurora), blur, fallback, size).is_none(), "dégradé animé");
+        assert!(BackgroundKey::of(None, blur, fallback, size).is_some(), "fond de repli");
+    }
+
+    /// Les modèles 3D, et eux seuls, passent par la variante « modèles » du shader de calque.
+    #[test]
+    fn only_the_3d_models_need_the_models_shader() {
+        for mode in 0..=18 {
+            let cb = super::LayerCB { mode: mode as f32, ..Default::default() };
+            assert_eq!(cb.needs_models(), (15..=17).contains(&mode), "mode {mode}");
+        }
+    }
+
+    #[test]
+    fn background_blur_steps_off_at_zero_and_old_switch_at_half() {
+        use super::background_blur_steps;
+        assert_eq!(background_blur_steps(0.0), None);
+        let (levels, off) = background_blur_steps(0.5).unwrap();
+        assert_eq!(levels, 3);
+        assert!((off - 2.2).abs() < 1e-5);
+        // Le rayon (2^niveaux × écart) croît avec la force, sans saut en arrière d'un niveau à
+        // l'autre.
+        let radius = |a: f32| background_blur_steps(a).map_or(0.0, |(l, o)| (1 << l) as f32 * o);
+        let mut prev = 0.0;
+        for i in 1..=100 {
+            let r = radius(i as f32 / 100.0);
+            assert!(r > prev, "rayon non croissant à {i}%");
+            prev = r;
+        }
+    }
 
     /// `(clé, octets, tick)` — le tick croît avec l'usage, donc le plus petit est le plus ancien.
     fn e(key: &str, mb: u64, tick: u64) -> (String, u64, u64) {
@@ -3742,6 +4669,10 @@ mod tests {
         assert_eq!(a.s_ann, a.s_dst, "sans zoom, ancre et boîte écran coïncident");
     }
 
+    /// La caméra en orbite, en focus auto : celle qui bouge avec le pointeur. Sans piste, elle
+    /// rend comme l'orbite manuelle posée au centre.
+    const ORBIT: &str = r#""orbit","focusMode":"auto""#;
+
     /// Scène à boîte écran résolue par l'app, pour le cadre de fenêtre. `frame` est inséré tel
     /// quel dans `effects` (chaîne vide = clé absente).
     fn framed_scene(frame: &str, rotation: &str, zoom: f32, cover: bool) -> Scene {
@@ -3797,6 +4728,7 @@ mod tests {
                     corners: q.corners,
                     center_px: none.screen_center_px(RENDER),
                     radius: none.s_radius * q.scale,
+                    mask: None,
                 },
             };
             assert_eq!(none.shadow_caster(RENDER), expected);
@@ -3808,8 +4740,70 @@ mod tests {
             let want: [f32; 4] = [0.1, 0.1, 0.8, 0.8];
             assert_eq!(rest.s_dst.map(f32::to_bits), want.map(f32::to_bits));
             assert_eq!(rest.s_ann.map(f32::to_bits), want.map(f32::to_bits));
-            assert_eq!(rest.s_radius.to_bits(), (0.03f32 * 1080.0).to_bits());
+            assert_eq!(rest.s_radius.to_bits(), (0.03f32 * rest.screen_unit_px).to_bits());
         }
+    }
+
+    /// Une scène sans cadre, écran 16:9 (texture 1920×1080) posé par l'app dans `rect`, rendue
+    /// dans `render` au padding 50 % (`padding_scale` 0,8) avec un Roundness de 24 px.
+    fn unit_plan(rect: [f32; 4], render: [f32; 2]) -> FrameGeometry {
+        let scene = Scene::from_json(&format!(
+            r##"{{
+            "clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
+            "layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rounded","webcamMirror":false,"webcamPosition":null,
+                      "webcamReactiveZoom":false,"screenRect":{{"x":{},"y":{},"width":{},"height":{}}},"screenCover":false}},
+            "effects":{{"padding":0.5,"blur":false,"shadow":0.5,"roundnessFrac":{},"motionBlur":0}},
+            "background":{{"kind":"color","color":"#1e1e2e"}},
+            "zoomRegions":[],
+            "cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":1,"clipToBounds":false,"theme":"default"}},
+            "cropByClip":[null],
+            "output":{{"width":{},"height":{},"fps":60}}
+        }}"##,
+            rect[0], rect[1], rect[2], rect[3], 24.0 / 1080.0, render[0], render[1]
+        ))
+        .expect("scène");
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let mut input = golden_input(&scene, &cfg);
+        input.render_px = render;
+        input.u_max = 1.0;
+        input.v_max = 1.0;
+        input.screen_tex_px = [1920.0, 1080.0];
+        input.screen_visible_px = [1920.0, 1080.0];
+        plan_frame(&input)
+    }
+
+    /// Le curseur, l'ombre et les coins se mesurent sur l'ÉCRAN (`screen_unit_px`), plus sur le
+    /// cadre ni sur la source.
+    ///
+    /// * sortie au ratio du clip : l'unité est le petit côté du cadre, le rendu d'avant ;
+    /// * clip 16:9 dans une sortie 9:16 : l'écran est une bande de 864×486, et l'unité rétrécit
+    ///   avec lui (× 9/16) au lieu de rester à 1080 — la proportion curseur / écran est celle
+    ///   du 16:9 ;
+    /// * sortie 4K (prise 2160p) : l'unité double avec l'écran, et 24 px de Roundness font
+    ///   48 px, la même part de l'écran qu'en 1080p.
+    #[test]
+    fn style_lengths_follow_the_screen_not_the_frame_or_the_source() {
+        let (w, h) = (1920.0f32, 1080.0f32);
+        let landscape = unit_plan([0.1, 0.1, 0.8, 0.8], [w, h]);
+        assert!((landscape.screen_unit_px - 1080.0).abs() < 0.01, "{}", landscape.screen_unit_px);
+        assert!((landscape.s_radius - 24.0).abs() < 0.01, "{}", landscape.s_radius);
+
+        let band_h = 0.8 * h * 9.0 / 16.0 / w; // 486 px sur 1920
+        let portrait = unit_plan([0.1, 0.5 - band_h / 2.0, 0.8, band_h], [h, w]);
+        assert!(
+            (portrait.screen_unit_px - 1080.0 * 9.0 / 16.0).abs() < 0.01,
+            "{}",
+            portrait.screen_unit_px
+        );
+        // Même part de l'écran : rayon / petit côté de l'écran.
+        let share = |g: &FrameGeometry, px: [f32; 2]| {
+            g.s_radius / (g.s_dst[2] * px[0]).min(g.s_dst[3] * px[1])
+        };
+        assert!((share(&portrait, [h, w]) - share(&landscape, [w, h])).abs() < 1e-4);
+
+        let uhd = unit_plan([0.1, 0.1, 0.8, 0.8], [2.0 * w, 2.0 * h]);
+        assert!((uhd.s_radius - 48.0).abs() < 0.02, "{}", uhd.s_radius);
+        assert!((share(&uhd, [2.0 * w, 2.0 * h]) - share(&landscape, [w, h])).abs() < 1e-4);
     }
 
     /// Sous un cadre, le masque de confidentialité couvre le rect que l'overlay web montre à
@@ -3832,6 +4826,96 @@ mod tests {
                 assert!(contains(m.dst, drawn, 1e-6), "{frame}: masque {:?} / tracé {drawn:?}", m.dst);
                 // Et il ne déborde que de sa marge d'un pixel.
                 assert!((m.dst[1] - drawn[1]).abs() * RENDER[1] < 1.01);
+            }
+        }
+    }
+
+    /// Le flou de mouvement prend l'écran cadré EN BLOC (ombre, cadre, appareil compris) dès que
+    /// sa boîte bouge, et rend alors la main au flou par pixel du seul métrage ; jamais sous un
+    /// masque de bloc, dont la case reste fixe.
+    #[test]
+    fn a_moving_screen_box_is_motion_blurred_as_one_object() {
+        for frame in ["", r#","frame":"window""#, r#","frame":"phone""#] {
+            let mut g = framed_plan(&framed_scene(frame, "null", 1.5, false));
+            (g.mb_taps, g.mb_amount) = (16.0, 1.0);
+            g.s_dst_prev = g.s_dst;
+            assert!(!g.screen_trail(RENDER), "{frame}: boîte immobile");
+            assert_eq!(g.screen_pixel_taps(RENDER), 16.0);
+            g.s_dst_prev[2] *= 0.9;
+            assert!(g.screen_trail(RENDER), "{frame}: boîte qui bouge");
+            assert_eq!(g.screen_pixel_taps(RENDER), 1.0, "{frame}: flou compté deux fois");
+            let cb = g.screen_trail_cb(RENDER, true);
+            assert_eq!((cb.fx, cb.dst_prev, cb.src), (g.s_dst, g.s_dst_prev, g.cut));
+            assert_eq!(cb.mb, [16.0, 1.0, 0.0, 0.0], "{frame}: la boîte, pas le plan");
+            // À plat, ni profondeur de champ ni lampe : le repli relit le métrage net.
+            assert_eq!((cb.trail_mb, cb.color), ([0.0; 4], [0.0; 4]), "{frame}: repli net");
+            g.mb_amount = 0.0;
+            assert!(!g.screen_trail(RENDER), "{frame}: flou coupé");
+            g.mb_amount = 1.0;
+            g.screen_mask = Some(ScreenMask { rect: [0.0, 0.0, 0.5, 1.0], radius_px: 0.0, square_top: false });
+            assert!(!g.screen_trail(RENDER), "{frame}: la case d'un bloc ne bouge pas");
+            assert_eq!(g.screen_pixel_taps(RENDER), 16.0);
+        }
+    }
+
+    /// Sous une caméra 3D aussi (angle fixe ou caméra réelle), l'écran cadré est flouté en bloc :
+    /// pendant la rampe du zoom, son PLAN bouge, et le mode 8 lâche alors sa traînée par pixel,
+    /// sinon le métrage serait flouté deux fois. Le calque porte les coins du plan en fractions de
+    /// la sortie : ceux que le mode 8 dessine, et ceux de `tilt_trail`. Au palier, rien ne bouge.
+    #[test]
+    fn a_moving_tilted_screen_is_motion_blurred_as_one_object() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        for rotation in [r#""iso""#, ORBIT] {
+            for frame in ["", r#","frame":"laptop""#] {
+                let mut scene = framed_scene(frame, rotation, 1.5, false);
+                scene.effects.motion_blur = 1.0;
+                // La région démarre à 2 s : à 1,6 s, sa rampe d'entrée est en cours.
+                scene.zoom_regions[0].start_sec = 2.0;
+                let at = |t: f32| {
+                    let input = golden_input(&scene, &cfg);
+                    plan_frame(&FrameGeometryInput { render_px: RENDER, timeline_t_override: Some(t), ..input })
+                };
+                let case = format!("{rotation}{frame}");
+
+                let hold = at(3.0);
+                assert!(hold.tilted(), "{case}: le palier doit être incliné");
+                assert!(!hold.screen_trail(RENDER), "{case}: au palier, rien ne bouge");
+                assert!(hold.tilt_pixel_trail(RENDER).is_some(), "{case}: le mode 8 garde sa traînée");
+
+                let g = at(1.6);
+                let quad = g.screen_tilt_in(RENDER).expect("incliné");
+                let trail = g.tilt_trail(RENDER).expect("traînée");
+                assert_ne!(trail.corners, quad.corners, "{case}: le plan doit bouger à 1,6 s");
+                assert!(g.screen_trail(RENDER), "{case}: le plan bouge, le cadre doit suivre");
+                assert_eq!(g.tilt_pixel_trail(RENDER), None, "{case}: flou compté deux fois");
+
+                let cb = g.screen_trail_cb(RENDER, true);
+                // Le warp du plan, celui du mode 8 : bilinéaire sous un angle fixe nu, projectif
+                // sous la caméra réelle ou un appareil.
+                let warp = if rotation == r#""iso""# && frame.is_empty() { 0.0 } else { 1.0 };
+                assert_eq!(quad.warp_flag(), warp, "{case}: warp du plan");
+                assert_eq!((cb.mode, cb.mb, cb.src), (18.0, [g.mb_taps, g.mb_amount, 1.0, warp], g.cut));
+                let c = g.screen_center_px(RENDER);
+                let out = |(x, y): (f32, f32)| [(c[0] + x) / RENDER[0], (c[1] + y) / RENDER[1]];
+                let pairs = |a: [f32; 4], b: [f32; 4]| [[a[0], a[1]], [a[2], a[3]], [b[0], b[1]], [b[2], b[3]]];
+                assert_eq!(pairs(cb.fx, cb.src_prev), quad.corners.map(out), "{case}: coins courants");
+                assert_eq!(pairs(cb.trail_a, cb.trail_b), trail.corners.map(out), "{case}: coins d'avant");
+                // L'ouverture du repli se mesure dans le plan, comme au mode 8.
+                let s_px = [g.s_dst[2] * RENDER[0], g.s_dst[3] * RENDER[1]];
+                assert_eq!(cb.quad_px, s_px.map(|v| v * quad.scale));
+                assert_eq!(cb.radius_px, g.s_radius * quad.scale);
+                // Et il relit le métrage comme le mode 8 l'a dessiné : même profondeur de champ
+                // (son `mb`), même lampe (son `color.xy`).
+                let mode8 = tilted_screen_cb(&quad, s_px, c, g.cut, g.focus_plane, g.s_radius, 0.0, true, RENDER, None, None);
+                assert!(mode8.mb[3] > 0.0, "{case}: la profondeur de champ doit tourner");
+                assert_eq!(cb.trail_mb, mode8.mb, "{case}: profondeur de champ du repli");
+                assert_eq!(cb.color, [mode8.color[0], mode8.color[1], 0.0, 0.0], "{case}: lampe du repli");
+
+                // Sous un masque de bloc, la case ne bouge pas : retour au flou par pixel.
+                let mut masked = g;
+                masked.screen_mask = Some(ScreenMask { rect: [0.0, 0.0, 0.5, 1.0], radius_px: 0.0, square_top: false });
+                assert!(!masked.screen_trail(RENDER), "{case}: la case d'un bloc ne bouge pas");
+                assert_eq!(masked.tilt_pixel_trail(RENDER), Some(trail));
             }
         }
     }
@@ -3882,7 +4966,7 @@ mod tests {
             let g = framed_plan(&framed_scene(r#","frame":"window-light""#, preset, 1.0, false));
             let wf = g.window_frame.expect("un cadre");
             let quad = g.screen_tilt_in(RENDER).expect("incliné");
-            let ShadowCaster::Tilted { corners: frame, center_px, radius } = g.shadow_caster(RENDER) else {
+            let ShadowCaster::Tilted { corners: frame, center_px, radius, .. } = g.shadow_caster(RENDER) else {
                 panic!("un cadre incliné porte une ombre inclinée");
             };
             assert_eq!(center_px, g.screen_center_px(RENDER));
@@ -3986,7 +5070,7 @@ mod tests {
     #[test]
     fn the_device_screen_face_lands_on_the_footage_plane() {
         for (name, _) in DEVICES {
-            for rotation in ["null", r#""iso""#, r#""left""#, r#""follow-cursor""#] {
+            for rotation in ["null", r#""iso""#, r#""left""#, ORBIT] {
                 let g = device_plan(name, rotation, 1.0);
                 let view = g.device_view(RENDER).expect("caméra");
                 let center = g.screen_center_px(RENDER);
@@ -4029,7 +5113,7 @@ mod tests {
     fn the_footage_edge_falls_on_the_aperture_edge() {
         let mut worst: f32 = 0.0;
         for (name, _) in DEVICES {
-            for rotation in ["null", r#""iso""#, r#""left""#, r#""right""#, r#""follow-cursor""#] {
+            for rotation in ["null", r#""iso""#, r#""left""#, r#""right""#, ORBIT] {
                 let g = device_plan(name, rotation, 1.0);
                 let view = g.device_view(RENDER).expect("caméra");
                 let center = g.screen_center_px(RENDER);
@@ -4083,6 +5167,8 @@ mod tests {
                 g.screen_top_lift_px(RENDER),
                 false,
                 RENDER,
+                g.screen_mask,
+                None,
             )
         };
         for (name, _) in DEVICES {
@@ -4094,7 +5180,7 @@ mod tests {
         // caméra réelle, elle, garde les deux.
         let plain = flat_cb(&framed_plan(&framed_scene("", r#""iso""#, 1.0, false)));
         assert_eq!((plain.dst_prev[3], plain.color), (0.0, [0.0; 4]));
-        let orbit = flat_cb(&framed_plan(&framed_scene("", r#""follow-cursor""#, 1.0, false)));
+        let orbit = flat_cb(&framed_plan(&framed_scene("", ORBIT, 1.0, false)));
         assert_eq!(orbit.dst_prev[3], 1.0);
         assert!(orbit.color[0] != 0.0 || orbit.color[1] != 0.0, "la caméra réelle n'éclaire plus");
     }
@@ -4105,7 +5191,7 @@ mod tests {
     #[test]
     fn the_device_box_and_its_shadow_contain_the_model() {
         for (name, kind) in DEVICES {
-            for rotation in ["null", r#""iso""#, r#""left""#, r#""right""#, r#""follow-cursor""#] {
+            for rotation in ["null", r#""iso""#, r#""left""#, r#""right""#, ORBIT] {
                 let g = device_plan(name, rotation, 1.0);
                 let frame = g.window_frame.expect("un cadre");
                 let view = g.device_view(RENDER).expect("caméra");
@@ -4133,6 +5219,7 @@ mod tests {
                 let (spread, off) = (40.0, g.screen_shadow_offset());
                 let sh = g.device_shadow_cb(RENDER, spread, off, 0.3).expect("ombre");
                 assert_eq!((sh.mode, sh.dst_prev[3], sh.color[3]), (17.0, spread, 0.3), "{name}");
+                assert!(sh.needs_models(), "{name}: l'ombre d'un appareil passe par le shader des modèles");
                 assert_eq!(&sh.dst_prev[..3], &cb.dst_prev[..3], "{name}: l'ombre n'a pas le même modèle");
                 let sx = [sh.dst[0] * RENDER[0], sh.dst[1] * RENDER[1]];
                 let sb = [sx[0], sx[1], sx[0] + sh.quad_px[0], sx[1] + sh.quad_px[1]];
@@ -4155,13 +5242,45 @@ mod tests {
         assert!(w.device_shadow_cb(RENDER, 40.0, [0.0, 16.0], 0.3).is_none());
     }
 
+    /// L'emprise d'un appareil AU REPOS, en unités du cadre autour d'un écran 16:9 dans une sortie
+    /// 16:9 : gauche, haut, droite, bas, socle et pied compris. `src/lib/frameFootprint.ts` en est
+    /// le miroir — le layout en bloc écarte la caméra de cette emprise — et son test épingle les
+    /// MÊMES nombres : un modèle qui change doit changer des deux côtés.
+    #[test]
+    fn the_device_footprint_at_rest_is_pinned_for_the_block_layout() {
+        for (name, want) in [
+            ("laptop", [0.18596f32, 0.0409, 0.18596, 0.09983]),
+            ("phone", [0.0193; 4]),
+            ("monitor", [0.0231, 0.0231, 0.0231, 0.2446]),
+        ] {
+            let g = device_plan(name, "null", 1.0);
+            let frame = g.window_frame.expect("un cadre");
+            let view = g.device_view(RENDER).expect("caméra");
+            let (c, h) = view.body_rect(frame.margins);
+            let thick = device_thickness(frame.kind);
+            let deck = device_deck_angle(view.half, view.body_margins(frame.margins)[3], thick);
+            let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for p in view.model_points(frame.kind, c, h, thick, deck) {
+                let q = view.project(p).expect("point projeté");
+                b = [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])];
+            }
+            let (o, u) = (g.screen_center_px(RENDER), g.frame_unit_px(RENDER));
+            let half = [g.s_dst[2] * RENDER[0] * 0.5, g.s_dst[3] * RENDER[1] * 0.5];
+            let got = [o[0] - b[0] - half[0], o[1] - b[1] - half[1], b[2] - o[0] - half[0], b[3] - o[1] - half[1]]
+                .map(|v| v / u);
+            for k in 0..4 {
+                assert!((got[k] - want[k]).abs() < 1e-4, "{name}: emprise {got:?} au lieu de {want:?}");
+            }
+        }
+    }
+
     /// Le métrage a EXACTEMENT la même boîte et la même coupe sans cadre, sous la fenêtre et sous
     /// chacun des appareils : le cadre pousse vers l'extérieur, jamais vers l'intérieur. Ombre,
     /// masques, annotations et curseurs, ancrés sur cette boîte, n'ont donc rien à rattraper. (Son
     /// RAYON, lui, suit la course de Roundness propre au cadre : `roundness_spans_each_frames_own_range`.)
     #[test]
     fn the_footage_box_is_the_same_under_every_frame() {
-        for rotation in ["null", r#""iso""#, r#""follow-cursor""#] {
+        for rotation in ["null", r#""iso""#, ORBIT] {
             for zoom in [1.0f32, 2.0] {
                 let bare = framed_plan(&framed_scene("", rotation, zoom, false));
                 for frame in ["window", "laptop", "phone", "monitor"] {
@@ -4206,7 +5325,8 @@ mod tests {
             assert!((wf.radius[1] - (g.s_radius + line)).abs() < 1e-3, "r{roundness}: bas pas concentrique");
             assert_eq!(wf.radius[0], wf.radius[1], "r{roundness}: le mode 14 n'a qu'un rayon");
             // Le rognage du haut du metrage est le contour INTERIEUR du cadre : son contour
-            // exterieur rentre du filet, rayon compris. Un seul arrondi, deux contours paralleles.
+            // exterieur rentre du filet, rayon compris. Un seul arrondi, deux contours paralleles
+            // -- a 2 % du filet pres depuis que les coins sont continus (`sd_round_rect`).
             let (sw, sh) = (s_px[0] * 0.5, s_px[1] * 0.5);
             for (x, y) in [(sw - 0.5, -sh + 0.5), (sw - 3.0, -sh + 2.0), (0.0, -sh + 0.5), (sw * 0.9, -sh * 0.9)] {
                 let inner = sd_round_rect_test([x, y + lift * 0.5], [sw, sh + lift * 0.5], g.s_radius);
@@ -4215,7 +5335,8 @@ mod tests {
                     [sw + line, sh + (bar + line) * 0.5],
                     wf.radius[0],
                 );
-                assert!((inner - (outer + line)).abs() < 1e-2, "r{roundness} ({x},{y}): {inner} vs {outer} + {line}");
+                let tol = 0.02 * line + 1e-2;
+                assert!((inner - (outer + line)).abs() < tol, "r{roundness} ({x},{y}): {inner} vs {outer} + {line}");
             }
             // Le plafond de la fenêtre tient dans la barre : le coin haut du métrage reste
             // entièrement carré, à toutes les positions du slider.
@@ -4311,7 +5432,7 @@ mod tests {
     /// curseur affiché quand `rotation` est la caméra en orbite (elle le suit).
     fn ratio_scene(frame: &str, ar: f32, roundness: f32, rotation: &str, zoom: f32) -> Scene {
         let (w, h) = if ar >= 16.0 / 9.0 { (0.8, 0.8 * 16.0 / 9.0 / ar) } else { (0.8 * ar * 9.0 / 16.0, 0.8) };
-        let show = rotation.contains("follow-cursor");
+        let show = rotation.contains("orbit");
         Scene::from_json(&format!(
             r##"{{
             "clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
@@ -4408,7 +5529,7 @@ mod tests {
         use crate::scene::SceneFrame as F;
         // Sans cadre : rien ne change, 0,03 × 1080 px.
         let bare = framed_plan_round("", 0.03);
-        assert_eq!(bare.s_radius.to_bits(), (0.03f32 * 1080.0).to_bits());
+        assert_eq!(bare.s_radius.to_bits(), (0.03f32 * bare.screen_unit_px).to_bits());
         // Les trois points de la course : 0, la moitié (32 px de slider), le bout (64 px) et au-delà.
         let half = 32.0 / 1080.0;
         for (frame, kind) in [("window", F::Window), ("laptop", F::Laptop), ("phone", F::Phone), ("monitor", F::Monitor)] {
@@ -4461,10 +5582,10 @@ mod tests {
         }
     }
 
-    /// Une scène 1080p où la caméra en orbite (`follow-cursor`) zoome de `zoom` sur un pointeur
+    /// Une scène 1080p où la caméra en orbite (focus auto) zoome de `zoom` sur un pointeur
     /// garé en (x, y) de l'image, sous le cadre `frame`, clip de ratio `ar`.
     fn orbit_plan(frame: &str, ar: f32, zoom: f32, x: f32, y: f32) -> FrameGeometry {
-        let scene = ratio_scene(&format!(r#","frame":"{frame}""#), ar, 0.03, r#""follow-cursor""#, zoom);
+        let scene = ratio_scene(&format!(r#","frame":"{frame}""#), ar, 0.03, ORBIT, zoom);
         let cfg = crate::config::all().pop().expect("au moins une config");
         let track: &'static crate::cursor::CursorTrack = Box::leak(Box::new(crate::cursor::CursorTrack::new(
             (0..=150).map(|i| (i as f32 / 30.0, x, y)).collect(),
@@ -4620,7 +5741,7 @@ mod tests {
             [(r[0] - b[0]) / b[2], (r[1] - b[1]) / b[3], r[2] / b[2], r[3] / b[3]]
         };
         for roundness in [0.0f32, 0.05] {
-            for rotation in ["null", r#""iso""#, r#""right""#, r#""follow-cursor""#] {
+            for rotation in ["null", r#""iso""#, r#""right""#, ORBIT] {
                 for zoom in [1.0f32, 2.0] {
                     let bare = plan("", roundness, rotation, zoom);
                     for frame in
@@ -4694,11 +5815,67 @@ mod tests {
         }
     }
 
-    /// `sd_round_rect` du shader, côté CPU : <0 dedans.
+    /// `sd_round_rect` du shader, côté CPU : <0 dedans. Coins continus, cf. le commentaire du
+    /// shader.
     fn sd_round_rect_test(p: [f32; 2], half: [f32; 2], r: f32) -> f32 {
-        let q = [p[0].abs() - half[0] + r, p[1].abs() - half[1] + r];
+        let hmin = half[0].min(half[1]);
+        if r <= 0.0 || hmin <= 0.0 {
+            let q = [p[0].abs() - half[0], p[1].abs() - half[1]];
+            let m = [q[0].max(0.0), q[1].max(0.0)];
+            return (m[0] * m[0] + m[1] * m[1]).sqrt() + q[0].max(q[1]).min(0.0);
+        }
+        let u = ((r / hmin - 0.5) / 0.5).clamp(0.0, 1.0);
+        let n = 3.0 - u * u * (3.0 - 2.0 * u);
+        let e = (r * 0.292_893_22 / (1.0 - (-1.0 / n).exp2())).min(hmin);
+        let q = [p[0].abs() - half[0] + e, p[1].abs() - half[1] + e];
         let m = [q[0].max(0.0), q[1].max(0.0)];
-        (m[0] * m[0] + m[1] * m[1]).sqrt() + q[0].max(q[1]).min(0.0) - r
+        if m[0] > 0.0 && m[1] > 0.0 {
+            let len = (m[0].powf(n) + m[1].powf(n)).powf(1.0 / n);
+            let g = [(m[0] / len).powf(n - 1.0), (m[1] / len).powf(n - 1.0)];
+            return (len - e) / (g[0] * g[0] + g[1] * g[1]).sqrt();
+        }
+        m[0].max(m[1]) + q[0].max(q[1]).min(0.0) - e
+    }
+
+    /// Les coins continus tiennent leurs trois promesses : le coin se creuse à 45° autant qu'un
+    /// cercle de même rayon (un réglage arrondit autant qu'avant), un carré arrondi à fond reste
+    /// un cercle, et la distance garde une pente de 1 sur le contour (antialiasing régulier).
+    #[test]
+    fn continuous_corners_keep_the_depth_the_circle_and_the_edge_width() {
+        let half = [300.0f32, 200.0];
+        for r in [8.0f32, 24.0, 60.0] {
+            let c = [half[0] - r, half[1] - r];
+            let on_circle = [c[0] + r * std::f32::consts::FRAC_1_SQRT_2, c[1] + r * std::f32::consts::FRAC_1_SQRT_2];
+            let d = sd_round_rect_test(on_circle, half, r);
+            assert!(d.abs() < 0.02, "r {r}: le coin à 45° est à {d} px de celui du cercle");
+            // Pente de la distance SUR le contour, à plusieurs angles du coin : chaque point est
+            // trouvé par dichotomie le long d'un rayon partant de l'intérieur du coin, donc sans
+            // recopier la forme que le test vérifie.
+            let inside = [half[0] - 2.0 * r, half[1] - 2.0 * r];
+            for deg in [15.0f32, 45.0, 75.0] {
+                let dir = [deg.to_radians().cos(), deg.to_radians().sin()];
+                let (mut lo, mut hi) = (0.0f32, 4.0 * r);
+                for _ in 0..60 {
+                    let mid = 0.5 * (lo + hi);
+                    let q = [inside[0] + dir[0] * mid, inside[1] + dir[1] * mid];
+                    if sd_round_rect_test(q, half, r) < 0.0 { lo = mid } else { hi = mid }
+                }
+                let p = [inside[0] + dir[0] * lo, inside[1] + dir[1] * lo];
+                assert!(sd_round_rect_test(p, half, r).abs() < 1e-3, "r {r} à {deg}°: point hors du contour");
+                let h = 0.01f32;
+                let gx = (sd_round_rect_test([p[0] + h, p[1]], half, r) - sd_round_rect_test([p[0] - h, p[1]], half, r)) / (2.0 * h);
+                let gy = (sd_round_rect_test([p[0], p[1] + h], half, r) - sd_round_rect_test([p[0], p[1] - h], half, r)) / (2.0 * h);
+                let slope = (gx * gx + gy * gy).sqrt();
+                assert!((slope - 1.0).abs() < 0.05, "r {r} à {deg}°: pente {slope} sur le contour");
+            }
+        }
+        // À fond, un carré est un cercle.
+        let square = [100.0f32, 100.0];
+        for p in [[0.0f32, 99.0], [70.0, 70.0], [60.0, 90.0], [120.0, 20.0]] {
+            let circle = (p[0] * p[0] + p[1] * p[1]).sqrt() - 100.0;
+            let d = sd_round_rect_test(p, square, 100.0);
+            assert!((d - circle).abs() < 1e-2, "{p:?}: {d} au lieu de {circle}");
+        }
     }
 
     /// La même scène, zoomée ET inclinée par un préset de rotation 3D.
@@ -4912,6 +6089,385 @@ mod tests {
         assert!((m.strength - 2.0).abs() < 1e-3, "force {} au lieu de 2", m.strength);
     }
 
+    /// Le bloc « côte à côte » tel que `computeCompositeLayout` le résout : l'écran dans un slot
+    /// au ratio de la capture, la caméra à côté, `screenCover`. Zoom `zoom` sous `rotation`, focus
+    /// décentré (0.3, 0.6). `cover: false` rend le même bloc sans slot, comme les autres layouts.
+    fn slot_scene(rotation: &str, zoom: f32, cover: bool) -> Scene {
+        slot_scene_with(rotation, zoom, cover, "")
+    }
+
+    /// `slot_scene`, `effects_extra` inséré tel quel dans `effects` (un cadre, par exemple).
+    fn slot_scene_with(rotation: &str, zoom: f32, cover: bool, effects_extra: &str) -> Scene {
+        Scene::from_json(&format!(
+            r##"{{
+            "clips":[{{"screenPath":"/s.mp4","webcamPath":"/w.mp4","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
+            "layout":{{"preset":"dual-frame","webcamSize":0.25,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,
+                      "webcamReactiveZoom":false,"screenRect":{{"x":0.1,"y":0.25,"width":0.55,"height":0.55}},
+                      "webcamRect":{{"x":0.666,"y":0.25,"width":0.234,"height":0.55}},
+                      "screenRadiusFrac":0.04,"webcamRadiusFrac":0.04,"screenCover":{cover}}},
+            "effects":{{"padding":0.5,"blur":false,"shadow":0.5,"roundnessFrac":0.03,"motionBlur":0{effects_extra}}},
+            "background":{{"kind":"color","color":"#1e1e2e"}},
+            "zoomRegions":[{{"clipIndex":0,"startSec":0.0,"endSec":5.0,"scale":{zoom},"focusX":0.3,"focusY":0.6,"rotation":{rotation}}}],
+            "cursor":{{"show":true,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":1,"clipToBounds":false,"theme":"default"}},
+            "cropByClip":[null],
+            "output":{{"width":1920,"height":1080,"fps":60}}
+        }}"##
+        ))
+        .expect("scène côte à côte")
+    }
+
+    /// Le `screenRect` de `slot_scene`.
+    const SLOT: [f32; 4] = [0.1, 0.25, 0.55, 0.55];
+
+    /// Une piste où le pointeur reste garé en (x, y).
+    fn parked_track(x: f32, y: f32) -> &'static crate::cursor::CursorTrack {
+        Box::leak(Box::new(crate::cursor::CursorTrack::new(
+            (0..=150).map(|i| (i as f32 / 30.0, x, y)).collect(),
+            vec![],
+            vec![],
+        )))
+    }
+
+    /// Un clip 16:9 dans une sortie 9:16 remplie (`screenCover` + `screenFollow`) : la boîte écran
+    /// est la zone paddée entière, `follow` décide si la fenêtre suit le pointeur.
+    fn fill_plan(follow: bool, pointer: Option<(f32, f32)>) -> FrameGeometry {
+        let scene = Scene::from_json(&format!(
+            r##"{{
+            "clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
+            "layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rounded","webcamMirror":false,"webcamPosition":null,
+                      "webcamReactiveZoom":false,"screenRect":{{"x":0.1,"y":0.1,"width":0.8,"height":0.8}},
+                      "screenCover":true,"screenFollow":{follow}}},
+            "effects":{{"padding":0.5,"blur":false,"shadow":0.5,"roundnessFrac":0.02,"motionBlur":0}},
+            "background":{{"kind":"color","color":"#1e1e2e"}},
+            "zoomRegions":[],
+            "cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":1,"clipToBounds":false,"theme":"default"}},
+            "cropByClip":[null],
+            "output":{{"width":1080,"height":1920,"fps":60}}
+        }}"##
+        ))
+        .expect("scène remplie");
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let mut input = golden_input(&scene, &cfg);
+        input.render_px = [1080.0, 1920.0];
+        input.cursor = pointer.map(|(x, y)| parked_track(x, y));
+        plan_frame(&input)
+    }
+
+    /// Le remplissage du format : un clip 16:9 remplit une sortie 9:16, et la fenêtre 9:16 qu'il
+    /// y montre suit le pointeur lissé, bornée à l'enregistrement.
+    ///
+    /// * la fenêtre a le ratio de la boîte, toute la hauteur de l'enregistrement ;
+    /// * elle se centre sur le pointeur, et bute sur le bord quand il s'en approche ;
+    /// * sans `screenFollow`, ou sans piste, elle reste centrée ;
+    /// * la coupe DESSINÉE est l'enregistrement entier, et sa boîte couvre le slot : la fenêtre
+    ///   peut bouger sans jamais laisser de trou.
+    #[test]
+    fn a_filled_format_follows_the_pointer_inside_the_recording() {
+        let (u, v) = (1.0f32, 1080.0f32 / 1088.0);
+        // Ce que le slot montre de l'enregistrement, en 0..1 : le slot reporté par s_dst → cut.
+        let seen = |g: &FrameGeometry| -> [f32; 4] {
+            let (s, d, c) = (g.s_ann, g.s_dst, g.cut);
+            let x = |f: f32| (c[0] + (f - d[0]) / d[2] * (c[2] - c[0])) / u;
+            let y = |f: f32| (c[1] + (f - d[1]) / d[3] * (c[3] - c[1])) / v;
+            [x(s[0]), y(s[1]), x(s[0] + s[2]), y(s[1] + s[3])]
+        };
+
+        let at = fill_plan(true, Some((0.7, 0.5)));
+        let w = seen(&at);
+        assert!((0.5 * (w[0] + w[2]) - 0.7).abs() < 1e-3, "fenêtre {w:?}, pointeur en 0.7");
+        assert!(w[1].abs() < 1e-3 && (w[3] - 1.0).abs() < 1e-3, "toute la hauteur : {w:?}");
+        let shown_ar = ((w[2] - w[0]) * 1920.0) / ((w[3] - w[1]) * 1080.0);
+        assert!((shown_ar - 864.0 / 1536.0).abs() < 1e-3, "ratio montré {shown_ar}");
+        assert!(contains(at.s_dst, at.s_ann, 1e-5), "la boîte dessinée ne couvre pas le slot");
+
+        // Au bord : la fenêtre bute sur l'enregistrement.
+        let edge = seen(&fill_plan(true, Some((0.98, 0.5))));
+        assert!((edge[2] - 1.0).abs() < 1e-3, "fenêtre {edge:?}");
+
+        // Sans suivi, ou sans piste : centrée.
+        for g in [fill_plan(false, Some((0.7, 0.5))), fill_plan(true, None)] {
+            let w = seen(&g);
+            assert!((0.5 * (w[0] + w[2]) - 0.5).abs() < 1e-3, "fenêtre centrée attendue, {w:?}");
+        }
+    }
+
+    /// `slot_scene` à 1,5 s (zoom tenu), pointeur garé en `pointer` (la caméra en orbite le suit).
+    fn slot_plan(scene: &Scene, pointer: Option<(f32, f32)>) -> FrameGeometry {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let mut input = golden_input(scene, &cfg);
+        input.render_px = RENDER;
+        input.cursor = pointer.map(|(x, y)| parked_track(x, y));
+        plan_frame(&input)
+    }
+
+    /// Côte à côte et haut/bas : le slot MASQUE l'écran (overflow hidden). L'écran garde la
+    /// géométrie de tous les layouts — sa boîte zoomée déborde — et seul son dessin est rogné au
+    /// slot, coins du slot compris, sans déplacer un pixel. L'ombre est celle du slot.
+    #[test]
+    fn a_block_layout_masks_its_screen_with_the_slot() {
+        let rest = slot_plan(&slot_scene("null", 1.0, true), None);
+        let g = slot_plan(&slot_scene("null", 2.0, true), None);
+        let free = slot_plan(&slot_scene("null", 2.0, false), None);
+        assert_eq!(free.screen_mask, None, "sans slot, pas de masque");
+        let mask = g.screen_mask.expect("un layout en bloc masque son écran");
+        assert_eq!(mask.rect, SLOT);
+        assert!((mask.radius_px - rest.s_radius).abs() < 1e-3, "coins {} au lieu de {}", mask.radius_px, rest.s_radius);
+
+        // La géométrie de partout : la boîte zoomée est celle du même bloc sans slot, et déborde.
+        for k in 0..4 {
+            assert!((g.s_dst[k] - free.s_dst[k]).abs() < 1e-3, "{:?} au lieu de {:?}", g.s_dst, free.s_dst);
+        }
+        assert!(!contains(SLOT, g.s_dst, 1e-3), "garde : la boîte zoomée doit déborder, {:?}", g.s_dst);
+
+        // Le dessin, lui, est rogné au slot, avec ses coins.
+        let s_px = [g.s_dst[2] * RENDER[0], g.s_dst[3] * RENDER[1]];
+        let (dst, src, quad_px, radius) = g.mask_flat_screen(g.s_dst, g.cut, s_px, g.s_radius, RENDER);
+        for k in 0..4 {
+            assert!((dst[k] - SLOT[k]).abs() < 1e-6, "dessin {dst:?} au lieu du slot");
+        }
+        assert_eq!(quad_px, [dst[2] * RENDER[0], dst[3] * RENDER[1]]);
+        assert_eq!(radius, mask.radius_px);
+        // Rogner ne déplace aucun pixel : même mapping image→écran, coins du slot compris.
+        let uv = |d: [f32; 4], s: [f32; 4], x: f32, y: f32| {
+            [s[0] + (x - d[0]) / d[2] * (s[2] - s[0]), s[1] + (y - d[1]) / d[3] * (s[3] - s[1])]
+        };
+        for (x, y) in [(0.1, 0.25), (0.65, 0.8), (0.3, 0.5)] {
+            let (a, b) = (uv(dst, src, x, y), uv(g.s_dst, g.cut, x, y));
+            assert!((a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5, "({x}, {y}) : {a:?} au lieu de {b:?}");
+        }
+
+        let size_px = [SLOT[2] * RENDER[0], SLOT[3] * RENDER[1]];
+        assert_eq!(g.shadow_caster(RENDER), ShadowCaster::Upright { dst: SLOT, size_px, radius: mask.radius_px });
+        // Sans masque, les valeurs du backend repartent telles quelles, à l'octet.
+        let free_px = [free.s_dst[2] * RENDER[0], free.s_dst[3] * RENDER[1]];
+        assert_eq!(
+            free.mask_flat_screen(free.s_dst, free.cut, free_px, free.s_radius, RENDER),
+            (free.s_dst, free.cut, free_px, free.s_radius)
+        );
+    }
+
+    /// Incliné, angle fixe ou caméra en orbite : c'est le MÉTRAGE qui penche, avec le plan de tous
+    /// les layouts, et le slot le rogne — le conteneur, lui, ne penche jamais. Le plan est dessiné
+    /// dans le rect du slot (coins arrondis par le shader, `color.w`), et son ombre est celle de
+    /// ce qu'on voit, le plan rogné par le slot.
+    #[test]
+    fn a_tilted_zoom_tilts_the_footage_inside_its_slot() {
+        for rotation in [r#""iso""#, r#""right""#, ORBIT] {
+            let g = slot_plan(&slot_scene(rotation, 2.0, true), Some((0.8, 0.3)));
+            let free = slot_plan(&slot_scene(rotation, 2.0, false), Some((0.8, 0.3)));
+            let mask = g.screen_mask.expect("masque");
+            assert!(g.tilted(), "{rotation} : garde, l'écran doit pencher");
+            let s_px = [g.s_dst[2] * RENDER[0], g.s_dst[3] * RENDER[1]];
+            let quad = g.screen_tilt(s_px).expect("incliné");
+            let free_px = [free.s_dst[2] * RENDER[0], free.s_dst[3] * RENDER[1]];
+            for (a, b) in quad.corners.iter().zip(free.screen_tilt(free_px).expect("incliné").corners.iter()) {
+                assert!((a.0 - b.0).abs() < 0.5 && (a.1 - b.1).abs() < 0.5, "{rotation} : {a:?} au lieu de {b:?}");
+            }
+            let (hx, hy) = quad.half_extents_px();
+            let slot_px = [SLOT[2] * RENDER[0], SLOT[3] * RENDER[1]];
+            assert!(hx > slot_px[0] * 0.5 && hy > slot_px[1] * 0.5, "{rotation} : garde, le plan zoomé déborde du slot");
+
+            let centre = g.screen_center_px(RENDER);
+            let draw = |m| tilted_screen_cb(&quad, s_px, centre, g.cut, g.focus_plane, g.s_radius, 0.0, false, RENDER, m, None);
+            let (cb, bare) = (draw(g.screen_mask), draw(None));
+            assert_eq!(cb.dst, SLOT, "{rotation} : dessiné dans le slot");
+            assert_eq!(cb.color[3], mask.radius_px);
+            assert_eq!(bare.color[3], 0.0, "sans masque, rien ne change");
+            // Les coins reportés dans le repère du slot : le même plan, au centième de pixel.
+            let corners = |c: &LayerCB| {
+                [[c.fx[0], c.fx[1]], [c.fx[2], c.fx[3]], [c.src_prev[0], c.src_prev[1]], [c.src_prev[2], c.src_prev[3]]]
+                    .map(|[x, y]| [c.dst[0] * RENDER[0] + x, c.dst[1] * RENDER[1] + y])
+            };
+            for (a, b) in corners(&cb).iter().zip(corners(&bare).iter()) {
+                assert!((a[0] - b[0]).abs() < 1e-2 && (a[1] - b[1]).abs() < 1e-2, "{rotation} : coin {a:?} au lieu de {b:?}");
+            }
+            match g.shadow_caster(RENDER) {
+                ShadowCaster::Tilted { mask: m, .. } => assert_eq!(m, Some(mask), "{rotation}"),
+                other => panic!("{rotation} : {other:?}"),
+            }
+        }
+        // Le slot passé à l'ombre, en px locaux à sa boîte : décalé de l'origine de celle-ci.
+        let mask = ScreenMask { rect: SLOT, radius_px: 12.0, square_top: false };
+        let (rect, r) = shadow_mask_fields(Some(mask), [100.0, 50.0], RENDER);
+        let want = [0.1 * 1920.0 - 100.0, 0.25 * 1080.0 - 50.0, 0.65 * 1920.0 - 100.0, 0.8 * 1080.0 - 50.0];
+        for k in 0..4 {
+            assert!((rect[k] - want[k]).abs() < 1e-3, "{rect:?} au lieu de {want:?}");
+        }
+        assert_eq!(r, 12.0);
+        assert_eq!(shadow_mask_fields(None, [100.0, 50.0], RENDER), ([0.0; 4], 0.0));
+    }
+
+    /// Un calque au bit près : `LayerCB` n'a pas de `PartialEq`, et c'est l'octet qu'on compare.
+    fn cb_bits(cb: Option<LayerCB>) -> Option<Vec<u32>> {
+        cb.map(|c| {
+            [c.dst, c.src, c.color, c.fx, c.src_prev, c.dst_prev, c.mb, c.trail_a, c.trail_b, c.trail_mb]
+                .concat()
+                .into_iter()
+                .chain(c.quad_px)
+                .chain([c.radius_px, c.mode])
+                .map(f32::to_bits)
+                .collect()
+        })
+    }
+
+    /// Sous un cadre, dans un bloc, le cadre EST le conteneur : fenêtre ou appareil reste au repos
+    /// autour du slot — mêmes calques et même ombre qu'au repos, sous un zoom à plat, un angle fixe
+    /// ou la caméra en orbite —, et le métrage zoome et penche dedans, rogné au slot, avec la
+    /// géométrie qu'il aurait sans cadre. C'est l'inverse des autres layouts, où l'appareil zoome
+    /// et penche avec l'écran.
+    #[test]
+    fn a_block_frame_stays_at_rest_while_the_footage_zooms_inside() {
+        let pointer = Some((0.8, 0.3));
+        for frame in ["window", "laptop", "phone", "monitor"] {
+            let extra = format!(r#","frame":"{frame}""#);
+            let rest = slot_plan(&slot_scene_with("null", 1.0, true, &extra), pointer);
+            let rest_mask = rest.screen_mask.expect("un bloc masque son écran, sous un cadre aussi");
+            let rest_off = rest.screen_shadow_offset();
+            for rotation in ["null", r#""iso""#, ORBIT] {
+                let case = format!("{frame} {rotation}");
+                let g = slot_plan(&slot_scene_with(rotation, 2.0, true, &extra), pointer);
+                let bare = slot_plan(&slot_scene(rotation, 2.0, true), pointer);
+                let mask = g.screen_mask.expect("masque");
+                assert_eq!(mask, rest_mask, "{case}: le slot a bougé");
+                assert_eq!(mask.rect, SLOT, "{case}");
+
+                // Le métrage : la géométrie du même bloc sans cadre, zoom et plan compris.
+                assert_eq!(g.s_dst.map(f32::to_bits), bare.s_dst.map(f32::to_bits), "{case}: boîte");
+                assert!(!contains(SLOT, g.s_dst, 1e-3), "{case}: garde, la boîte zoomée déborde");
+                assert_eq!(g.tilted(), rotation != "null", "{case}");
+                let s_px = [g.s_dst[2] * RENDER[0], g.s_dst[3] * RENDER[1]];
+                let plane = |g: &FrameGeometry| g.screen_tilt(s_px).map(|q| (q.corners, q.projective));
+                assert_eq!(plane(&g), plane(&bare), "{case}: le métrage ne penche pas comme sans cadre");
+
+                // Le cadre : au repos, à l'octet — calque sous l'écran, appareil, ombre.
+                assert_eq!(g.window_frame, rest.window_frame, "{case}: corps du cadre");
+                assert_eq!(cb_bits(g.window_frame_cb(RENDER)), cb_bits(rest.window_frame_cb(RENDER)), "{case}: sous l'écran");
+                assert_eq!(cb_bits(g.device_frame_cb(RENDER)), cb_bits(rest.device_frame_cb(RENDER)), "{case}: appareil");
+                assert_eq!(g.shadow_caster(RENDER), rest.shadow_caster(RENDER), "{case}: ombre");
+                assert_eq!(g.screen_shadow_offset(), rest_off, "{case}: décalage de l'ombre");
+                assert_eq!(
+                    cb_bits(g.device_shadow_cb(RENDER, 40.0, rest_off, 0.3)),
+                    cb_bits(rest.device_shadow_cb(RENDER, 40.0, rest_off, 0.3)),
+                    "{case}: ombre de l'appareil"
+                );
+                if let Some(cb) = g.device_frame_cb(RENDER) {
+                    assert_eq!(&cb.fx[..3], &[0.0; 3], "{case}: l'appareil penche");
+                    let u = g.frame_unit_px(RENDER);
+                    assert!((cb.dst_prev[1] * u - mask.radius_px).abs() < 1e-3, "{case}: ouverture ≠ coins du slot");
+                }
+
+                // Le métrage est dessiné dans le slot, à plat comme incliné.
+                match g.screen_tilt(s_px) {
+                    None => {
+                        let (dst, ..) = g.mask_flat_screen(g.s_dst, g.cut, s_px, g.s_radius, RENDER);
+                        assert_eq!(dst, SLOT, "{case}");
+                        assert_eq!(g.screen_top_lift_px(RENDER), rest.screen_top_lift_px(RENDER), "{case}: remontée");
+                    }
+                    Some(quad) => {
+                        let centre = g.screen_center_px(RENDER);
+                        let lift = g.screen_top_lift_px(RENDER);
+                        assert_eq!(lift, 0.0, "{case}: le plan incliné n'est pas sous la barre");
+                        let cb = tilted_screen_cb(&quad, s_px, centre, g.cut, g.focus_plane, g.s_radius, lift, false, RENDER, g.screen_mask, None);
+                        assert_eq!(cb.dst, SLOT, "{case}");
+                        // Sous la barre de la fenêtre, le slot garde ses coins hauts carrés : le
+                        // mode 8 le lit dans le signe du rayon (`slot_alpha`).
+                        assert_eq!(mask.square_top, frame == "window", "{case}");
+                        assert!(mask.radius_px > 0.0, "{case}: garde, un rayon à signer");
+                        let want = if mask.square_top { -mask.radius_px } else { mask.radius_px };
+                        assert_eq!(cb.color[3], want, "{case}: coins du slot");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sous un appareil, dans un bloc, le verre de son écran passe SOUS le métrage, au slot et à
+    /// ses coins, de la teinte que le mode 17 rend de face : ce que le plan incliné découvre est
+    /// l'écran éteint, pas le fond d'écran. Hors d'un bloc, rien sous l'écran, comme avant.
+    #[test]
+    fn a_block_device_puts_its_glass_under_the_footage() {
+        for (name, _) in DEVICES {
+            for (theme, dark) in [("", false), (r#","frameTheme":"dark""#, true)] {
+                let g = slot_plan(&slot_scene_with(r#""iso""#, 2.0, true, &format!(r#","frame":"{name}"{theme}"#)), None);
+                let mask = g.screen_mask.expect("masque");
+                let cb = g.window_frame_cb(RENDER).expect("verre");
+                assert_eq!((cb.mode, cb.dst, cb.radius_px), (1.0, SLOT, mask.radius_px), "{name}");
+                assert_eq!(cb.quad_px, [SLOT[2] * RENDER[0], SLOT[3] * RENDER[1]], "{name}");
+                assert_eq!(cb.color, device_glass_rgba(dark), "{name} {dark}");
+                assert!(cb.color[3] == 1.0 && cb.color[..3].iter().all(|c| *c < 0.06), "{name}: pas du verre noir");
+            }
+            assert!(device_plan(name, r#""iso""#, 2.0).window_frame_cb(RENDER).is_none(), "{name}: hors bloc");
+        }
+        assert_ne!(device_glass_rgba(true), device_glass_rgba(false), "deux thèmes, deux verres");
+    }
+
+    /// Le flou de confidentialité suit le métrage comme ailleurs, et le slot le rogne : ce qui en
+    /// sort n'est pas dessiné, rien à y cacher, et un masque y flouterait la caméra.
+    #[test]
+    fn a_privacy_mask_stays_inside_the_slot() {
+        let g = slot_plan(&slot_scene("null", 2.0, true), None);
+        let free = slot_plan(&slot_scene("null", 2.0, false), None);
+        let mut a = blur_annotation("");
+        // La vue x2 autour de (0.3, 0.6) : [0.05, 0.55] × [0.35, 0.85] de l'écran.
+        (a.x, a.y) = (0.2, 0.5);
+        let (m, f) = (g.privacy_mask(&a, RENDER).expect("masque"), free.privacy_mask(&a, RENDER).expect("masque"));
+        for k in 0..4 {
+            assert!((m.dst[k] - f.dst[k]).abs() < 1e-4, "dedans : {:?} au lieu de {:?}", m.dst, f.dst);
+        }
+        assert!(m.oval_ok, "dedans, l'ovale tient");
+        // À cheval sur le bord droit de la vue.
+        (a.x, a.y) = (0.45, 0.5);
+        let (m, f) = (g.privacy_mask(&a, RENDER).expect("masque"), free.privacy_mask(&a, RENDER).expect("masque"));
+        assert!(!contains(SLOT, f.dst, 1e-4), "garde : sans slot, le masque sort du slot, {:?}", f.dst);
+        assert!(contains(SLOT, m.dst, 1e-6), "{:?} sort du slot", m.dst);
+        let want = intersect_rect(f.dst, SLOT);
+        for k in 0..4 {
+            assert!((m.dst[k] - want[k]).abs() < 1e-5, "rogné, pas déplacé : {:?} au lieu de {want:?}", m.dst);
+        }
+        assert!(!m.oval_ok, "rogné, l'ovale inscrit ne couvrirait plus le secret");
+        // Hors de la vue.
+        (a.x, a.y) = (0.62, 0.18);
+        assert!(g.privacy_mask(&a, RENDER).is_none(), "hors du slot : rien à masquer");
+
+        // Incliné : dessiné dans la part du slot qu'il couvre, le warp au même endroit.
+        let t = slot_plan(&slot_scene(r#""iso""#, 2.0, true), None);
+        let tf = slot_plan(&slot_scene(r#""iso""#, 2.0, false), None);
+        (a.x, a.y) = (0.45, 0.5);
+        let (m, f) = (t.privacy_mask(&a, RENDER).expect("masque incliné"), tf.privacy_mask(&a, RENDER).expect("masque"));
+        assert!(contains(SLOT, m.dst, 1e-6), "incliné : {:?} sort du slot", m.dst);
+        let abs = |p: &PrivacyMask| p.warp.expect("incliné").map(|[x, y]| [p.dst[0] * RENDER[0] + x, p.dst[1] * RENDER[1] + y]);
+        for (x, y) in abs(&m).iter().zip(abs(&f).iter()) {
+            assert!((x[0] - y[0]).abs() < 0.5 && (x[1] - y[1]).abs() < 0.5, "incliné : coin {x:?} au lieu de {y:?}");
+        }
+    }
+
+    /// Le curseur est sur le métrage : le slot le rogne aussi.
+    #[test]
+    fn the_cursor_is_clipped_to_the_slot() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        for (cover, want) in [(true, SLOT), (false, [-1.0, -1.0, 3.0, 3.0])] {
+            let scene = slot_scene("null", 2.0, cover);
+            let g = slot_plan(&scene, Some((0.3, 0.6)));
+            let plan = plan_cursor(
+                &g,
+                &CursorPlanInput {
+                    render_px: RENDER,
+                    u_max: 1.0,
+                    v_max: 1080.0 / 1088.0,
+                    cfg: &cfg,
+                    live: live_params_from_scene(&scene),
+                    scene: Some(&scene),
+                    track: parked_track(0.3, 0.6),
+                    t: 1.5,
+                },
+            )
+            .expect("un curseur dans la vue");
+            for k in 0..4 {
+                assert!((plan.clip[k] - want[k]).abs() < 1e-6, "slot {cover} : clip {:?} au lieu de {want:?}", plan.clip);
+            }
+        }
+    }
+
     /// La parallaxe (`regions::dynamic_tilt`) passe par `plan_frame` une seule fois, et le
     /// curseur la porte comme l'écran : même quad, même échelle gelée. Curseur masqué ou
     /// région sans préset → rien ne bouge.
@@ -4976,6 +6532,182 @@ mod tests {
         assert_eq!(flat.zoom_rotation_dyn, [0.0; 3], "sans préset");
     }
 
+    /// Le plan incliné a son flou de mouvement, borné à une frame comme celui du mode 0 : sa
+    /// traînée est le plan une frame d'écran plus tôt, boîte ET rotation de base — un angle fixe
+    /// entre avec le zoom.
+    #[test]
+    fn the_tilted_screen_trails_its_previous_frame() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let render = [1170.0, 658.0];
+        // La région démarre à 2 s : à 1,6 s, sa rampe d'entrée est en cours.
+        let ramp = |json: &str| json.replace(r#""startSec":0.0"#, r#""startSec":2.0"#);
+        let tilted = ramp(zoomed_golden_scene_json()).replace(r#""rotation":"none""#, r#""rotation":"iso""#);
+        let at = |json: &str, t: f32| {
+            let scene = Scene::from_json(json).expect("scène");
+            plan_frame(&FrameGeometryInput { timeline_t_override: Some(t), ..golden_input(&scene, &cfg) })
+        };
+        let quad_of = |g: &FrameGeometry| {
+            g.screen_tilt([g.s_dst[2] * render[0], g.s_dst[3] * render[1]]).expect("incliné")
+        };
+        let width = |c: &[(f32, f32); 4]| {
+            c.iter().map(|p| p.0).fold(f32::MIN, f32::max) - c.iter().map(|p| p.0).fold(f32::MAX, f32::min)
+        };
+
+        let g = at(&tilted, 1.6);
+        let trail = g.tilt_trail(render).expect("flou sur le plan incliné");
+        assert_eq!(trail.mb, [g.mb_taps, g.mb_amount]);
+        assert_ne!(g.zoom_rotation_prev, g.zoom_rotation, "le préset entre avec le zoom");
+        let (now, before) = (width(&quad_of(&g).corners), width(&trail.corners));
+        // Zoom avant : le plan d'une frame plus tôt est plus petit, de quelques pour cent.
+        assert!(before < now && before > now * 0.9, "traînée {before} px, plan {now} px");
+
+        // Au palier, rien ne bouge : la traînée EST le plan, au bit près, et le shader garde son
+        // échantillon net.
+        let hold = at(&tilted, 3.0);
+        assert_eq!(hold.tilt_trail(render).expect("incliné").corners, quad_of(&hold).corners);
+
+        // Flou coupé, ou écran droit (le mode 0 a le sien) : pas de traînée.
+        let off = tilted.replace(r#""roundnessFrac":0.0255,"motionBlur":0.35"#, r#""roundnessFrac":0.0255,"motionBlur":0"#);
+        assert_ne!(off, tilted, "la substitution doit couper le flou");
+        assert_eq!(at(&off, 1.6).tilt_trail(render), None);
+        assert_eq!(at(&ramp(zoomed_golden_scene_json()), 1.6).tilt_trail(render), None);
+    }
+
+    /// Transition chaînée caméra réelle → angle fixe : la frame d'avant peut encore être dans la
+    /// moitié orbite quand celle-ci est dans la moitié fixe. La traînée doit alors partir
+    /// du plan vu par la caméra d'AVANT, pas d'un plan droit.
+    #[test]
+    fn the_trail_keeps_the_previous_camera_across_a_follow_to_fixed_handover() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let render = [1170.0, 658.0];
+        let track: &'static crate::cursor::CursorTrack = Box::leak(Box::new(
+            crate::cursor::CursorTrack::new((0..=300).map(|i| (i as f32 / 30.0, 0.8, 0.3)).collect(), vec![], vec![]),
+        ));
+        let json = zoomed_golden_scene_json().replace(
+            r#"[{"clipIndex":0,"startSec":0.0,"endSec":5.0,"scale":2.0,"focusX":0.5,"focusY":0.3,"rotation":"none"}]"#,
+            r#"[{"clipIndex":0,"startSec":1.0,"endSec":4.0,"scale":2.0,"focusX":0.5,"focusY":0.5,"rotation":"orbit","focusMode":"auto"},
+                {"clipIndex":0,"startSec":4.5,"endSec":8.0,"scale":2.0,"focusX":0.5,"focusY":0.5,"rotation":"iso"}]"#,
+        );
+        assert_ne!(json, zoomed_golden_scene_json(), "la substitution doit poser les deux régions");
+        let scene = Scene::from_json(&json).expect("scène");
+        let mut handover = None;
+        for k in 0..=600 {
+            let t = 4.0 + k as f32 / 600.0;
+            let g = plan_frame(&FrameGeometryInput { cursor: Some(track), timeline_t_override: Some(t), ..golden_input(&scene, &cfg) });
+            assert_eq!(g.camera_prev.is_some(), g.camera_prev.is_some_and(|p| p.weight > 0.0));
+            if g.camera.is_none() && g.camera_prev.is_some() {
+                handover = Some(g);
+                break;
+            }
+        }
+        let g = handover.expect("une frame où seule la frame d'avant a la caméra");
+        let trail = g.tilt_trail(render).expect("traînée");
+        let d = g.s_dst_prev;
+        let px = [d[2] * render[0], d[3] * render[1]];
+        let seen = crate::camera::View::new(px, g.camera_prev.unwrap()).quad(px);
+        let upright = crate::regions::rotated_quad_corners_px(px[0], px[1], g.zoom_rotation_prev, g.zoom_rotation_dyn);
+        let shape = |c: [(f32, f32); 4]| c.map(|(x, y)| (x - c[0].0, y - c[0].1));
+        let close = |a: [(f32, f32); 4], b: [(f32, f32); 4]| a.iter().zip(b).all(|(p, q)| (p.0 - q.0).abs() < 1e-3 && (p.1 - q.1).abs() < 1e-3);
+        assert!(close(shape(trail.corners), shape(seen.corners)), "la traînée n'est pas le plan de la caméra d'avant");
+        assert!(!close(shape(trail.corners), shape(upright.corners)), "la traînée est retombée sur un plan droit");
+    }
+
+    /// Le calque du mode 8 porte la traînée dans le repère de ses propres coins, y compris
+    /// reporté dans le slot d'un layout en bloc ; sans elle, rien de ce qu'il portait ne change.
+    #[test]
+    fn the_tilted_screen_cb_carries_its_trail_in_its_own_frame() {
+        let quad = crate::regions::rotated_quad_corners_px(800.0, 450.0, [-12.0, -18.0, -2.0], [0.0; 3]);
+        let moved = TiltTrail { corners: quad.corners.map(|(x, y)| (x * 0.9 + 3.0, y * 0.9 - 2.0)), mb: [6.0, 0.35] };
+        let mask = ScreenMask { rect: [0.1, 0.1, 0.6, 0.6], radius_px: 8.0, square_top: false };
+        let cb = |mask, trail| {
+            tilted_screen_cb(&quad, [800.0, 450.0], [600.0, 400.0], [0.0, 0.0, 1.0, 1.0], [0.5, 0.5], 12.0, 0.0, false, [1200.0, 800.0], mask, trail)
+        };
+        let corner = |c: [f32; 4], i: usize| [c[2 * i], c[2 * i + 1]];
+        for m in [None, Some(mask)] {
+            let (bare, with) = (cb(m, None), cb(m, Some(moved)));
+            assert_eq!((bare.trail_a, bare.trail_b, bare.trail_mb), ([0.0; 4], [0.0; 4], [0.0; 4]), "{m:?}");
+            assert_eq!((with.dst, with.fx, with.src_prev, with.dst_prev, with.mb), (bare.dst, bare.fx, bare.src_prev, bare.dst_prev, bare.mb));
+            assert_eq!(with.trail_mb, [6.0, 0.35, 0.0, 0.0]);
+            // Chaque coin de la traînée garde son écart au coin courant : même repère local.
+            let now = [corner(with.fx, 0), corner(with.fx, 1), corner(with.src_prev, 0), corner(with.src_prev, 1)];
+            let then = [corner(with.trail_a, 0), corner(with.trail_a, 1), corner(with.trail_b, 0), corner(with.trail_b, 1)];
+            for i in 0..4 {
+                let want = [moved.corners[i].0 - quad.corners[i].0, moved.corners[i].1 - quad.corners[i].1];
+                let got = [then[i][0] - now[i][0], then[i][1] - now[i][1]];
+                assert!((got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3, "{m:?} coin {i} : {got:?} != {want:?}");
+            }
+        }
+        // Sans mouvement, les deux quads coïncident au bit près.
+        let still = cb(None, Some(TiltTrail { corners: quad.corners, mb: [6.0, 0.35] }));
+        assert_eq!((still.trail_a, still.trail_b), (still.fx, still.src_prev));
+    }
+
+    /// Le zoom réactif rétrécit la caméra vers son ANCRE : une caméra de coin garde sa marge aux
+    /// deux bords, une caméra de milieu de bord reste centrée sur lui. Sans ancre, le centre.
+    #[test]
+    fn the_reactive_zoom_shrinks_the_camera_toward_its_anchor() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        // Caméra de 0,2 de côté posée par l'app, marge 0,03 ; zoom ×2 à 1,5 s → échelle 0,7.
+        let camera_at = |anchor: Option<&str>, x: f32, y: f32| {
+            let anchor = anchor.map(|a| format!(r#","webcamAnchor":"{a}""#)).unwrap_or_default();
+            let layout = format!(
+                r#""webcamReactiveZoom":true{anchor},"webcamRect":{{"x":{x},"y":{y},"width":0.2,"height":0.2}}}}"#
+            );
+            let json = zoomed_golden_scene_json().replace(r#""webcamReactiveZoom":false}"#, &layout);
+            let scene = Scene::from_json(&json).expect("scène");
+            plan_frame(&golden_input(&scene, &cfg)).w_dst
+        };
+        for (anchor, x, y, want) in [
+            (Some("bottom-right"), 0.77, 0.77, [0.83, 0.83]),
+            (Some("top-left"), 0.03, 0.03, [0.03, 0.03]),
+            (Some("bottom"), 0.4, 0.77, [0.43, 0.83]),
+            (Some("left"), 0.03, 0.4, [0.03, 0.43]),
+            (None, 0.77, 0.77, [0.80, 0.80]),
+        ] {
+            let w = camera_at(anchor, x, y);
+            let got = [w[0], w[1], w[2], w[3]];
+            let want = [want[0], want[1], 0.14, 0.14];
+            assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-5), "{anchor:?} : {got:?} au lieu de {want:?}");
+        }
+    }
+
+    /// Le rétrécissement réactif vise 70 % QUEL QUE SOIT le niveau de zoom : la caméra garde la
+    /// même taille à 1,25×, 2× et 5× (elle suivait 1/zoom, et rétrécissait d'autant plus que le
+    /// zoom était profond).
+    #[test]
+    fn the_camera_shrink_is_the_same_at_every_zoom_level() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let camera_at = |scale: &str| {
+            let layout = r#""webcamReactiveZoom":true,"webcamAnchor":"bottom-right","webcamRect":{"x":0.77,"y":0.77,"width":0.2,"height":0.2}}"#;
+            let json = zoomed_golden_scene_json()
+                .replace(r#""webcamReactiveZoom":false}"#, layout)
+                .replace(r#""scale":2.0"#, scale);
+            let scene = Scene::from_json(&json).expect("scène");
+            plan_frame(&golden_input(&scene, &cfg)).w_dst
+        };
+        for scale in [r#""scale":1.25"#, r#""scale":2.0"#, r#""scale":5.0"#] {
+            let w = camera_at(scale);
+            let got = [w[0], w[1], w[2], w[3]];
+            let want = [0.83, 0.83, 0.14, 0.14];
+            assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-5), "{scale} : {got:?} au lieu de {want:?}");
+        }
+    }
+
+    /// Une région de zoom à échelle 1 ne zoome rien : elle ne rétrécit pas la caméra.
+    #[test]
+    fn a_one_x_zoom_region_keeps_the_camera_at_its_size() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let layout = r#""webcamReactiveZoom":true,"webcamAnchor":"bottom-right","webcamRect":{"x":0.77,"y":0.77,"width":0.2,"height":0.2}}"#;
+        let json = zoomed_golden_scene_json()
+            .replace(r#""webcamReactiveZoom":false}"#, layout)
+            .replace(r#""scale":2.0"#, r#""scale":1.0"#);
+        let scene = Scene::from_json(&json).expect("scène");
+        let w = plan_frame(&golden_input(&scene, &cfg)).w_dst;
+        let got = [w[0], w[1], w[2], w[3]];
+        let want = [0.77, 0.77, 0.2, 0.2];
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-5), "{got:?} au lieu de {want:?}");
+    }
+
     /// La vitesse se mesure dans la coupe VISIBLE, zoom compris : sous un x2, le même geste
     /// traverse deux fois plus d'écran et penche donc plus le plan (hors saturation).
     #[test]
@@ -5002,9 +6734,10 @@ mod tests {
         assert!(zoomed > flat * 1.4, "zoom x2 : {zoomed} devrait dépasser {flat} nettement");
     }
 
-    /// L'impact du clic passe par `plan_frame` et chacune de ses portes l'éteint : région sans
-    /// l'option ou sans préset, curseur masqué (réglage ou région), clic hors du clip actif ou
-    /// de la coupe, vitesse ≥ 2×, masque de flou visible.
+    /// L'impact du clic passe par `plan_frame` et chacune de ses portes l'éteint : réglage absent,
+    /// curseur masqué (réglage ou région), clic hors du clip actif ou de la coupe, vitesse ≥ 2×,
+    /// masque de flou visible. Sous un angle fixe il fait basculer le plan ; sans préset, il fait
+    /// reculer l'écran droit, par les mêmes portes.
     #[test]
     fn every_gate_cancels_the_click_impact() {
         let cfg = crate::config::all().pop().expect("au moins une config");
@@ -5019,30 +6752,48 @@ mod tests {
         };
         let on_edge = track_at(0.6);
         let impact_json = zoomed_golden_scene_json()
-            .replace(r#""rotation":"none""#, r#""rotation":"iso","clickImpact":true"#);
-        let dyn_of = |edit: &dyn Fn(String) -> String, track| {
+            .replace(r#""rotation":"none""#, r#""rotation":"iso""#)
+            .replace(r#""cursor":{"#, r#""cursor":{"clickImpact":true,"#);
+        let plan_of = |edit: &dyn Fn(String) -> String, track| {
             let scene = Scene::from_json(&edit(impact_json.clone())).expect("scène");
             plan_frame(&FrameGeometryInput { cursor: Some(track), ..golden_input(&scene, &cfg) })
-                .zoom_rotation_dyn
         };
+        let dyn_of = |edit: &dyn Fn(String) -> String, track| plan_of(edit, track).zoom_rotation_dyn;
         let same = |s: String| s;
         let on = dyn_of(&same, on_edge);
-        assert!(on[1] > 1.5, "clic à droite → +Y : {on:?}");
+        assert!(on[1] > 0.75 * crate::regions::CLICK_IMPACT_DEG, "clic à droite → +Y : {on:?}");
+
+        // Sans préset, rien ne bascule : l'écran droit recule, puis revient.
+        let flat = |s: String| s.replace(r#""rotation":"iso""#, r#""rotation":"none""#);
+        let off = |s: String| s.replace(r#""clickImpact":true,"#, "");
+        assert_eq!(plan_of(&same, on_edge).s_dst, plan_of(&off, on_edge).s_dst, "le plan bascule, il ne recule pas");
+        let box_of = |edit: &dyn Fn(String) -> String, track| plan_of(&|s| flat(edit(s)), track).s_dst;
+        let rest = box_of(&off, on_edge);
+        let pushed = plan_of(&flat, on_edge);
+        assert_eq!(pushed.zoom_rotation_dyn, [0.0; 3]);
+        let shrink = [pushed.s_dst[2] / rest[2], pushed.s_dst[3] / rest[3]];
+        assert!(shrink[0] < 0.97 && (shrink[0] - shrink[1]).abs() < 1e-5, "{shrink:?}");
+        let centre = |b: [f32; 4]| [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5];
+        let (a, b) = (centre(pushed.s_dst), centre(rest));
+        assert!((a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5, "autour du centre : {a:?} {b:?}");
+        let prev = pushed.s_dst_prev[2] / plan_of(&|s| flat(off(s)), on_edge).s_dst_prev[2];
+        assert!((prev - shrink[0]).abs() < 1e-6, "hors du flou de mouvement : {prev} {shrink:?}");
+        assert_eq!(box_of(&same, track_at(0.9)), box_of(&off, track_at(0.9)), "clic hors du crop");
 
         let insert = |field: &'static str| {
             move |s: String| s.replace(r#""cursor":"#, &format!(r#"{field},"cursor":"#))
         };
-        let cases: [(&str, Box<dyn Fn(String) -> String>); 7] = [
-            ("option absente", Box::new(|s: String| s.replace(r#","clickImpact":true"#, ""))),
-            ("sans préset", Box::new(|s: String| s.replace(r#""rotation":"iso""#, r#""rotation":"none""#))),
+        let cases: [(&str, Box<dyn Fn(String) -> String>); 6] = [
+            ("option absente", Box::new(off)),
             ("curseur masqué", Box::new(|s: String| s.replace(r#""show":true"#, r#""show":false"#))),
-            ("région hideCursor", Box::new(|s: String| s.replace(r#""clickImpact":true"#, r#""clickImpact":true,"hideCursor":true"#))),
+            ("région hideCursor", Box::new(|s: String| s.replace(r#""rotation":"iso""#, r#""rotation":"iso","hideCursor":true"#))),
             ("clic avant le clip", Box::new(|s: String| s.replace(r#""sourceStartSec":0"#, r#""sourceStartSec":1.46"#))),
             ("vitesse 2x", Box::new(insert(r#""speedRegions":[{"clipIndex":0,"startSec":1.0,"endSec":2.0,"speed":2.0}]"#))),
             ("flou visible", Box::new(insert(r#""annotations":[{"id":"b","startSec":1.0,"endSec":2.0,"kind":"blur","x":0.1,"y":0.1,"w":0.2,"h":0.2,"blur":{"style":"mosaic","shape":"rectangle","color":"black","intensity":8,"blockSize":16}}]"#))),
         ];
         for (name, edit) in &cases {
             assert_eq!(dyn_of(edit.as_ref(), on_edge), [0.0; 3], "{name}");
+            assert_eq!(box_of(edit.as_ref(), on_edge), box_of(&|s| off(edit(s)), on_edge), "{name}, écran droit");
         }
         assert_eq!(dyn_of(&same, track_at(0.9)), [0.0; 3], "clic hors du crop");
 
@@ -5086,7 +6837,34 @@ mod tests {
         }
     }
 
-    /// `follow-cursor` passe par `plan_frame` : l'écran n'est pas incliné, la caméra vise et tourne
+    /// Un clic visible dont le pointeur disparaît juste après (un glisser sur un champ numérique)
+    /// garde tout son impact : l'éteindre au masquage ferait sauter l'écran en plein creux.
+    #[test]
+    fn a_click_hidden_right_after_keeps_its_impact() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let samples: Vec<_> = (0..=90).map(|i| (i as f32 / 30.0, 0.6, 0.3)).collect();
+        let track = |visibility| -> &'static crate::cursor::CursorTrack {
+            Box::leak(Box::new(crate::cursor::CursorTrack::new_with_visibility(
+                samples.clone(),
+                vec![1.45],
+                vec![],
+                visibility,
+            )))
+        };
+        let json = zoomed_golden_scene_json()
+            .replace(r#""rotation":"none""#, r#""rotation":"iso""#)
+            .replace(r#""cursor":{"#, r#""cursor":{"clickImpact":true,"#);
+        let scene = Scene::from_json(&json).expect("scène");
+        let tilt = |track| {
+            plan_frame(&FrameGeometryInput { cursor: Some(track), ..golden_input(&scene, &cfg) })
+                .zoom_rotation_dyn
+        };
+        let on = tilt(track(vec![]));
+        assert!(on[1] > 0.75 * crate::regions::CLICK_IMPACT_DEG, "garde : {on:?}");
+        assert_eq!(tilt(track(vec![(0.0, true), (1.48, false)])), on);
+    }
+
+    /// L'orbite en focus auto passe par `plan_frame` : l'écran n'est pas incliné, la caméra vise et tourne
     /// avec le pointeur lu dans le RECADRAGE, la boîte zoome sur son centre sans glisser, la mise au
     /// point suit la visée, un clic fait reculer l'œil sans presser l'écran, et curseur masqué
     /// (l'export n'a alors pas de piste) la caméra vise le centre, au repos.
@@ -5094,7 +6872,8 @@ mod tests {
     fn the_follow_camera_aims_at_the_pointer_in_the_crop() {
         let cfg = crate::config::all().pop().expect("au moins une config");
         let json = zoomed_golden_scene_json()
-            .replace(r#""rotation":"none""#, r#""rotation":"follow-cursor","clickImpact":true"#);
+            .replace(r#""rotation":"none""#, r#""rotation":"orbit","focusMode":"auto""#)
+            .replace(r#""cursor":{"#, r#""cursor":{"clickImpact":true,"#);
         let scene = Scene::from_json(&json).expect("scène");
         let parked = |x: f32, clicks: Vec<f32>| -> &'static crate::cursor::CursorTrack {
             Box::leak(Box::new(crate::cursor::CursorTrack::new(
@@ -5112,8 +6891,8 @@ mod tests {
         let left = plan(&scene, parked(0.05, vec![]));
         let (cr, cl) = (right.camera.expect("caméra"), left.camera.expect("caméra"));
         assert_eq!(cr.weight, 1.0);
-        // Zoom 2 : la vue reste dans l'écran tant que la visée reste dans [0,275 ; 0,725].
-        assert!(cr.aim[0] > 0.72 && cl.aim[0] < 0.28, "{:?} {:?}", cr.aim, cl.aim);
+        // Zoom 2 : la visée va jusqu'à [0,25 ; 0,75], la portée du gimbal.
+        assert!(cr.aim[0] > 0.74 && cl.aim[0] < 0.26, "{:?} {:?}", cr.aim, cl.aim);
         // L'orbite lit tout le recadrage, sans la borne du zoom : 0,55 y tombe à 0,9.
         assert!(cr.orbit[0] > 0.89 && cl.orbit[0] < 0.1, "{:?} {:?}", cr.orbit, cl.orbit);
         assert_eq!((cr.zoom, cr.press), (2.0, 0.0));
@@ -5145,15 +6924,49 @@ mod tests {
         assert_eq!((clicked.zoom_rotation, clicked.zoom_rotation_dyn), ([0.0; 3], [0.0; 3]));
         let pose = clicked.camera.expect("caméra");
         assert!(pose.press < -0.9, "{pose:?}");
+        assert_eq!(clicked.s_dst, right.s_dst, "la boîte ne recule pas, l'œil si");
         let pushed = clicked.screen_tilt(s_px).expect("caméra");
         assert!(pushed.half_extents_px().0 < 0.98 * qr.half_extents_px().0);
-        let off = Scene::from_json(&json.replace(r#","clickImpact":true"#, "")).expect("scène");
+        let off = Scene::from_json(&json.replace(r#""clickImpact":true,"#, "")).expect("scène");
         assert_eq!(plan(&off, parked(0.55, vec![1.45])).camera.expect("caméra").press, 0.0);
 
         let hidden = Scene::from_json(&json.replace(r#""show":true"#, r#""show":false"#)).expect("scène");
         let front = plan(&hidden, parked(0.55, vec![])).camera.expect("caméra au repos");
         assert!((front.aim[0] - 0.5).abs() < 1e-4 && (front.aim[1] - 0.5).abs() < 1e-4, "{:?}", front.aim);
         assert!((front.orbit[0] - 0.5).abs() < 1e-4 && (front.orbit[1] - 0.5).abs() < 1e-4, "{:?}", front.orbit);
+    }
+
+    /// En focus manuel, l'orbite passe par le même chemin, posée par le point de focus de la
+    /// région : déjà dans le recadrage, comme celui d'un zoom à plat. Le pointeur n'y change rien,
+    /// et curseur masqué (pas de piste) elle reste posée.
+    #[test]
+    fn the_manual_orbit_sits_on_its_focus_point_in_the_crop() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let json = zoomed_golden_scene_json().replace(
+            r#""focusX":0.5,"focusY":0.3,"rotation":"none""#,
+            r#""focusX":0.8,"focusY":0.3,"rotation":"orbit","focusMode":"manual""#,
+        );
+        assert_ne!(json, zoomed_golden_scene_json(), "la substitution doit poser l'orbite");
+        let scene = Scene::from_json(&json).expect("scène");
+        let hidden = Scene::from_json(&json.replace(r#""show":true"#, r#""show":false"#)).expect("scène");
+        let parked = |x: f32| -> &'static crate::cursor::CursorTrack {
+            Box::leak(Box::new(crate::cursor::CursorTrack::new(
+                (0..=90).map(|i| (i as f32 / 30.0, x, 0.3)).collect(),
+                vec![],
+                vec![],
+            )))
+        };
+        let pose = |scene: &Scene, x: f32| {
+            plan_frame(&FrameGeometryInput { cursor: Some(parked(x)), ..golden_input(scene, &cfg) })
+                .camera
+                .expect("caméra")
+        };
+        for p in [pose(&scene, 0.55), pose(&scene, 0.05), pose(&hidden, 0.55)] {
+            assert_eq!(p.weight, 1.0);
+            // Zoom 2 : l'œil sur l'orbite du point, la visée bornée à 0,75, la portée du gimbal.
+            assert!((p.orbit[0] - 0.8).abs() < 1e-3 && (p.orbit[1] - 0.3).abs() < 1e-3, "{:?}", p.orbit);
+            assert!((p.aim[0] - 0.75).abs() < 1e-3 && (p.aim[1] - 0.3).abs() < 1e-3, "{:?}", p.aim);
+        }
     }
 
     /// Sous un préset 3D, le masque est le quad du contenu, warpé comme le mode 8 le dessine.
@@ -5229,6 +7042,87 @@ mod tests {
                 assert!(inside(m.dst, x, y), "({x}, {y}) hors du masque {:?}", m.dst);
             }
         }
+    }
+
+    /// Le point `p` est dans le quad convexe `q` (TL, TR, BR, BL, px de sortie).
+    fn in_convex_quad(q: [[f32; 2]; 4], p: [f32; 2]) -> bool {
+        let side = |i: usize| {
+            let (a, b) = (q[i], q[(i + 1) % 4]);
+            (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+        };
+        (0..4).all(|i| side(i) >= -1e-3) || (0..4).all(|i| side(i) <= 1e-3)
+    }
+
+    /// Sous l'orbite, la caméra suit le pointeur et le flou de mouvement étale le contenu vers
+    /// sa position de la frame d'avant : le masque garde la perspective du contenu (un quad warpé
+    /// aux côtés parallèles aux siens, pas un rect droit) et couvre le secret aux deux frames.
+    #[test]
+    fn a_moving_tilted_mask_keeps_its_perspective() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let json = zoomed_golden_scene_json()
+            .replace(r#""rotation":"none""#, r#""rotation":"orbit","focusMode":"auto""#);
+        let scene = Scene::from_json(&json).expect("scène");
+        // Le pointeur file vers la droite : l'orbite le suit, la caméra bouge à chaque frame.
+        let track: &'static crate::cursor::CursorTrack = Box::leak(Box::new(crate::cursor::CursorTrack::new(
+            (0..=90).map(|i| (i as f32 / 30.0, 0.05 + 0.5 * i as f32 / 90.0, 0.3)).collect(),
+            vec![],
+            vec![],
+        )));
+        let g = plan_frame(&FrameGeometryInput { cursor: Some(track), ..golden_input(&scene, &cfg) });
+        let render = [1170.0, 658.0];
+        let quad = g.screen_tilt([g.s_dst[2] * render[0], g.s_dst[3] * render[1]]).expect("orbite");
+        let trail = g.tilt_trail(render).expect("garde : flou de mouvement actif sous l'orbite");
+        assert_ne!(trail.corners, quad.corners, "garde : la caméra doit bouger d'une frame à l'autre");
+        let a = blur_annotation("");
+        let m = g.privacy_mask(&a, render).expect("masque");
+        let warp = m.warp.expect("le masque d'un écran incliné qui bouge reste un quad warpé");
+        let origin = [m.dst[0] * render[0], m.dst[1] * render[1]];
+        let mask = warp.map(|[x, y]| [origin[0] + x, origin[1] + y]);
+        let centre = [(g.s_dst[0] + g.s_dst[2] * 0.5) * render[0], (g.s_dst[1] + g.s_dst[3] * 0.5) * render[1]];
+        let before = crate::regions::TiltedQuad { corners: trail.corners, ..quad };
+        for q in [quad, before] {
+            for (fx, fy) in [(a.x, a.y), (a.x + a.w, a.y), (a.x + a.w, a.y + a.h), (a.x, a.y + a.h)] {
+                let (px, py) = q.point_px(fx, fy);
+                let p = [centre[0] + px, centre[1] + py];
+                assert!(in_convex_quad(mask, p), "{p:?} hors du masque {mask:?}");
+            }
+        }
+        let (tl, tr) = (quad.point_px(a.x, a.y), quad.point_px(a.x + a.w, a.y));
+        let content = (tr.1 - tl.1) / (tr.0 - tl.0);
+        assert!(content.abs() > 1e-3, "garde : l'orbite doit incliner le haut du secret ({content})");
+        let top = (mask[1][1] - mask[0][1]) / (mask[1][0] - mask[0][0]);
+        assert!((top - content).abs() < 1e-3, "le haut du masque ({top}) doit suivre celui du contenu ({content})");
+        assert!(!m.oval_ok, "un masque élargi à la trace doit refuser l'ovale");
+    }
+
+    /// Le métrage que l'éditeur lit avec l'image : le rect zoomé à plat, le quad incliné du mode 8
+    /// sous un préset, l'homographie de ses coins sous la caméra réelle.
+    #[test]
+    fn the_footage_quad_is_where_masks_land() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let render = [1170.0, 658.0];
+        let flat = plan_frame(&golden_input(&zoomed_golden_scene(), &cfg));
+        let [x, y, w, h] = flat.s_dst;
+        assert_eq!(
+            flat.footage_quad(render),
+            FootageQuad { corners: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], projective: false }
+        );
+        let tilted = plan_frame(&golden_input(&tilted_golden_scene(), &cfg));
+        let q = tilted.footage_quad(render);
+        let quad = tilted.screen_tilt([tilted.s_dst[2] * render[0], tilted.s_dst[3] * render[1]]).expect("iso");
+        let centre = [
+            (tilted.s_dst[0] + tilted.s_dst[2] * 0.5) * render[0],
+            (tilted.s_dst[1] + tilted.s_dst[3] * 0.5) * render[1],
+        ];
+        for (k, (cx, cy)) in quad.corners.iter().enumerate() {
+            let want = [(centre[0] + cx) / render[0], (centre[1] + cy) / render[1]];
+            assert!((q.corners[k][0] - want[0]).abs() < 1e-5 && (q.corners[k][1] - want[1]).abs() < 1e-5, "coin {k}");
+        }
+        assert!(!q.projective);
+        let json = zoomed_golden_scene_json()
+            .replace(r#""rotation":"none""#, r#""rotation":"orbit","focusMode":"auto""#);
+        let orbit = plan_frame(&golden_input(&Scene::from_json(&json).expect("scène"), &cfg));
+        assert!(orbit.footage_quad(render).projective, "la caméra réelle warpe par homographie");
     }
 
     /// Une entrée mesurée sur le cadre de sortie n'est pas concernée par le zoom.
@@ -5316,18 +7210,91 @@ mod tests {
     /// Sans mouvement, les emplacements restent les zéros d'avant (dégradé inchangé) ; avec,
     /// le temps est replié sur la période commune et l'indice suit l'ordre du shader.
     #[test]
-    fn gradient_motion_slots_are_zero_when_still_and_wrap_the_clock() {
-        use crate::scene::GradientMotion as M;
-        assert_eq!(gradient_motion_slots(M::None, 37.5, 16.0 / 9.0), ([0.0, 0.0], [0.0; 4]));
-        let (fx, mb) = gradient_motion_slots(M::Drift, 125.0, 2.0);
+    fn wallpaper_motion_slots_are_zero_when_still_and_wrap_the_clock() {
+        use crate::scene::WallpaperMotion as M;
+        assert_eq!(wallpaper_motion_slots(M::None, 37.5, 16.0 / 9.0), ([0.0, 0.0], [0.0; 4]));
+        let (fx, mb) = wallpaper_motion_slots(M::Drift, 125.0, 2.0);
         assert_eq!(fx, [5.0, 1.0]);
         assert_eq!(mb, [2.0, 0.0, 0.0, 0.0]);
-        assert_eq!(gradient_motion_slots(M::Aurora, 0.0, 1.0).0[1], 2.0);
-        assert_eq!(gradient_motion_slots(M::Waves, 240.0, 1.0).0, [0.0, 3.0]);
+        assert_eq!(wallpaper_motion_slots(M::Aurora, 0.0, 1.0).0[1], 2.0);
+        assert_eq!(wallpaper_motion_slots(M::Waves, 240.0, 1.0).0, [0.0, 3.0]);
         // Chaque période du shader divise la période de repli : pas de raccord au bouclage.
-        for p in [20.0, 24.0, 30.0, 40.0, 12.0, 120.0] {
-            assert_eq!(GRADIENT_MOTION_PERIOD_S % p, 0.0, "période {p}");
+        for p in [6.0, 10.0, 12.0, 15.0, 20.0, 30.0] {
+            assert_eq!(WALLPAPER_MOTION_PERIOD_S % p, 0.0, "période {p}");
         }
+    }
+
+    const BLACK_TEST: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+    fn knots(cb: &LayerCB) -> [[f32; 4]; 4] {
+        [cb.color, cb.src_prev, cb.dst_prev, cb.src]
+    }
+
+    #[test]
+    fn gradient_layer_keeps_the_middle_stop_where_css_puts_it() {
+        // Le dégradé de l'ancien éditeur : trois stops rgb(), le milieu à 50 %.
+        let stops = ["rgb(255, 0, 0)", "rgb(0, 255, 0)", "rgb(0, 0, 255)"].map(String::from);
+        let cb = gradient_layer(&stops, &[0.0, 0.5, 1.0], BLACK_TEST);
+        assert_eq!(cb.mode, 5.0);
+        let k = knots(&cb);
+        assert_eq!(k[0], [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(k[1], [0.0, 1.0, 0.0, 0.5]);
+        assert_eq!(k[2], [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(k[3], [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn gradient_layer_premultiplies_a_translucent_stop() {
+        // Un stop à alpha 0 ne peint rien : le noir du dessous, pas un rouge opaque.
+        let stops = ["rgba(255, 0, 0, 0)", "rgba(0, 0, 255, 0.5)"].map(String::from);
+        let k = knots(&gradient_layer(&stops, &[0.0, 1.0], BLACK_TEST));
+        assert_eq!(k[0], [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(k[1], [0.0, 0.0, 0.5, 1.0]);
+        // Opaque : inchangé.
+        let k = knots(&gradient_layer(&["#ff0000".into()], &[0.0], BLACK_TEST));
+        assert_eq!(k[0], [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn gradient_layer_two_stops_render_the_old_ramp() {
+        // Scène d'avant les offsets : les stops se répartissent à 0 et 1, le reste répète la fin.
+        let cb = gradient_layer(&["#000000".into(), "#ffffff".into()], &[], BLACK_TEST);
+        let k = knots(&cb);
+        assert_eq!(k[0], [0.0, 0.0, 0.0, 0.0]);
+        for knot in &k[1..] {
+            assert_eq!(*knot, [1.0, 1.0, 1.0, 1.0]);
+        }
+    }
+
+    #[test]
+    fn gradient_layer_bounds_and_orders_offsets_and_skips_bad_stops() {
+        let stops = ["#ff0000", "nope", "#00ff00", "#0000ff"].map(String::from);
+        let cb = gradient_layer(&stops, &[-0.2, 0.3, 0.6, 0.4], BLACK_TEST);
+        let at: Vec<f32> = knots(&cb).iter().map(|k| k[3]).collect();
+        // -0.2 borné à 0 ; 0.4 derrière 0.6 ramené à 0.6 ; "nope" sauté.
+        assert_eq!(at, vec![0.0, 0.6, 0.6, 0.6]);
+        assert_eq!(knots(&cb)[1][1], 1.0, "le vert suit le rouge, le stop illisible est sauté");
+        let empty = gradient_layer(&[], &[], [0.2, 0.3, 0.4, 1.0]);
+        assert!(knots(&empty).iter().all(|k| *k == [0.2, 0.3, 0.4, 0.0]));
+    }
+
+    #[test]
+    fn gradient_layer_folds_a_long_preset_into_four_knots() {
+        // Un preset v1.5 à sept stops : les extrémités restent, les positions restent en ordre,
+        // et le stop retiré est celui que ses voisins reproduisaient déjà.
+        let stops = ["#fcc5e4", "#fda34b", "#ff7882", "#c8699e", "#7046aa", "#0c1db8", "#020f75"]
+            .map(String::from);
+        let offsets = [0.0, 0.15, 0.35, 0.52, 0.71, 0.87, 1.0];
+        let k = knots(&gradient_layer(&stops, &offsets, BLACK_TEST));
+        assert_eq!(k[0][3], 0.0);
+        assert_eq!(k[3][3], 1.0);
+        assert_eq!(&k[0][..3], &parse_hex("#fcc5e4").unwrap()[..3]);
+        assert_eq!(&k[3][..3], &parse_hex("#020f75").unwrap()[..3]);
+        assert!(k.windows(2).all(|w| w[0][3] <= w[1][3]));
+        // Un stop parfaitement sur la droite de ses voisins part en premier.
+        let straight = ["#000000", "#404040", "#808080", "#ff0000", "#ffffff"].map(String::from);
+        let k = knots(&gradient_layer(&straight, &[0.0, 0.25, 0.5, 0.75, 1.0], BLACK_TEST));
+        assert_eq!(k.iter().map(|k| k[3]).collect::<Vec<_>>(), vec![0.0, 0.5, 0.75, 1.0]);
     }
 
     /// Le contrat cross-backend, verrouillé octet par octet. Un shader qui lit un champ
@@ -5335,7 +7302,7 @@ mod tests {
     #[test]
     fn layer_cb_matches_the_shader_constant_buffer() {
         use std::mem::{align_of, offset_of, size_of};
-        assert_eq!(size_of::<LayerCB>(), 128);
+        assert_eq!(size_of::<LayerCB>(), 176);
         assert_eq!(align_of::<LayerCB>(), 16);
         for (name, got, want) in [
             ("dst", offset_of!(LayerCB, dst), 0),
@@ -5348,6 +7315,9 @@ mod tests {
             ("src_prev", offset_of!(LayerCB, src_prev), 80),
             ("dst_prev", offset_of!(LayerCB, dst_prev), 96),
             ("mb", offset_of!(LayerCB, mb), 112),
+            ("trail_a", offset_of!(LayerCB, trail_a), 128),
+            ("trail_b", offset_of!(LayerCB, trail_b), 144),
+            ("trail_mb", offset_of!(LayerCB, trail_mb), 160),
         ] {
             assert_eq!(got, want, "offset de `{name}`");
         }
@@ -5360,7 +7330,7 @@ mod tests {
     #[test]
     fn sprite_hotspot_stays_on_target_at_any_size() {
         let center = [0.4, 0.6];
-        let hotspot = [0.119, 0.0874]; // flèche intégrée : la pointe, près du coin haut-gauche
+        let hotspot = [0.1205, 0.0881]; // flèche intégrée : la pointe, près du coin haut-gauche
 
         for (w, h) in [(0.02, 0.04), (0.08, 0.16)] {
             let dst = cursor_sprite_dst(center, w, h, hotspot);
@@ -5743,6 +7713,8 @@ mod tests {
             zoom_rotation: [0.0, 0.0, 0.0],
             zoom_rotation_dyn: [0.0, 0.0, 0.0],
             camera: None,
+            zoom_rotation_prev: [0.0, 0.0, 0.0],
+            camera_prev: None,
             padding_scale: 1.0,
             cut: [0.0, 0.0, 1.0, 1.0],
             focus_plane: [0.5, 0.5],
@@ -5752,12 +7724,14 @@ mod tests {
             s_ann: [0.0, 0.0, 1.0, 1.0],
             s_radius: 0.0,
             frame_min_px: 1080.0,
+            screen_unit_px: 1080.0,
             w_dst: [0.0, 0.0, 0.0, 0.0],
             w_dst_prev: [0.0, 0.0, 0.0, 0.0],
             w_px: [0.0, 0.0],
             w_radius: 0.0,
             shape_fade: 0.0,
             window_frame: None,
+            screen_mask: None,
         }
     }
 
@@ -5891,8 +7865,8 @@ mod tests {
         .expect("plan cursor")
     }
 
-    const ISO: [f32; 3] = [-12.0, -18.0, -2.0];
-    const LEFT: [f32; 3] = [-8.0, -16.0, -1.0];
+    const LEFT: [f32; 3] = [-12.0, -18.0, -2.0];
+    const RIGHT: [f32; 3] = [-12.0, 18.0, 2.0];
 
     /// Le `LayerCB` du sprite incliné est, octet pour octet, celui que chaque backend construisait
     /// avant de le partager. La référence est le corps d'origine de `draw_cursor_sprite`.
@@ -5939,14 +7913,18 @@ mod tests {
                 fx: [tl0, tl1, tr0, tr1],
                 src_prev: [br0, br1, bl0, bl1],
                 dst_prev: clip,
+                // Le drapeau du warp : un angle fixe est maintenant projectif (`screen_tilt`),
+                // comme la caméra réelle l'était déjà.
+                mb: [quad.warp_flag(), 0.0, 0.0, 0.0],
                 ..Default::default()
             }
         }
         let bytes = |cb: &LayerCB| -> Vec<u8> {
-            // SAFETY: `LayerCB` est `repr(C)`, 128 octets de f32 sans padding (test d'offsets).
-            unsafe { std::slice::from_raw_parts(cb as *const LayerCB as *const u8, 128) }.to_vec()
+            // SAFETY: `LayerCB` est `repr(C)`, des f32 sans padding (test d'offsets).
+            let len = std::mem::size_of::<LayerCB>();
+            unsafe { std::slice::from_raw_parts(cb as *const LayerCB as *const u8, len) }.to_vec()
         };
-        for rot in [ISO, LEFT, [-8.0, 16.0, 1.0]] {
+        for rot in [LEFT, RIGHT] {
             let plan = plan_with(rot);
             let clip = [0.1, 0.2, 0.7, 0.6];
             let got = cursor_sprite_cb(
@@ -5967,17 +7945,17 @@ mod tests {
     /// Les seize états du thème par défaut et leurs hotspots (`DEFAULT_CURSOR_SPRITES`,
     /// `src/lib/cursor/cursorThemes.ts`).
     const DEFAULT_SPRITES: [(&str, [f32; 2]); 16] = [
-        ("arrow", [0.119, 0.0874]),
-        ("text", [0.4375, 0.5333]),
-        ("pointer", [0.3893, 0.0032]),
+        ("arrow", [0.1205, 0.0881]),
+        ("text", [0.4355, 0.5369]),
+        ("pointer", [0.3874, 0.0032]),
         ("crosshair", [0.4667, 0.4667]),
-        ("open-hand", [0.4375, 0.1781]),
-        ("closed-hand", [0.3889, 0.451]),
-        ("resize-ew", [0.4881, 0.4706]),
+        ("open-hand", [0.4375, 0.1724]),
+        ("closed-hand", [0.3889, 0.4455]),
+        ("resize-ew", [0.485, 0.4706]),
         ("resize-ns", [0.5, 0.5]),
         ("resize-nesw", [0.5, 0.5]),
         ("resize-nwse", [0.5, 0.5]),
-        ("move", [0.4444, 0.4444]),
+        ("move", [0.4437, 0.4437]),
         ("not-allowed", [0.5, 0.5]),
         ("wait", [0.5, 0.5]),
         ("app-starting", [0.05, 0.0537]),
@@ -6014,9 +7992,9 @@ mod tests {
         if o > 0.0 { o.hypot(d.max(0.0)) } else { d }
     }
 
-    /// Miroir CPU de `sd_model`, écrasé à `squash`.
-    fn sd_model(sdf: &crate::cursor_sdf::CursorSdf, shape: SpriteShape, squash: f32, p: [f32; 3]) -> f32 {
-        let half_t = MODEL_THICK * squash * 0.5;
+    /// Miroir CPU de `sd_model`.
+    fn sd_model(sdf: &crate::cursor_sdf::CursorSdf, shape: SpriteShape, p: [f32; 3]) -> f32 {
+        let half_t = shape.thick * 0.5;
         let w = [sd2(sdf, shape, [p[0], p[1]]) + MODEL_BEVEL, (p[2] + half_t).abs() - (half_t - MODEL_BEVEL)];
         w[0].max(w[1]).min(0.0) + w[0].max(0.0).hypot(w[1].max(0.0)) - MODEL_BEVEL
     }
@@ -6037,7 +8015,7 @@ mod tests {
             pose,
         );
         let l = plane_to_model(view.light(), pose);
-        let (lo, hi) = shape.model_box(pose.squash);
+        let (lo, hi) = shape.model_box();
         let (mut t0, mut t1) = (f32::MIN, f32::MAX);
         for k in 0..3 {
             let inv = 1.0 / if l[k].abs() > 1e-6 { l[k] } else { 1e-6 };
@@ -6049,7 +8027,7 @@ mod tests {
         if t0 < t1 && t1 > 0.0 {
             let mut t = t0.max(0.004);
             for _ in 0..32 {
-                let d = sd_model(sdf, shape, pose.squash, [q[0] + l[0] * t, q[1] + l[1] * t, q[2] + l[2] * t]);
+                let d = sd_model(sdf, shape, [q[0] + l[0] * t, q[1] + l[1] * t, q[2] + l[2] * t]);
                 lit = lit.min(MODEL_SOFTNESS * d / t);
                 if lit < 0.002 || t > t1 {
                     break;
@@ -6059,7 +8037,7 @@ mod tests {
             let r = lit.clamp(0.0, 1.0);
             lit = r * r * (3.0 - 2.0 * r);
         }
-        let u = (sd_model(sdf, shape, pose.squash, q) / MODEL_CONTACT_RADIUS).clamp(0.0, 1.0);
+        let u = (sd_model(sdf, shape, q) / MODEL_CONTACT_RADIUS).clamp(0.0, 1.0);
         let contact = 1.0 - u * u * (3.0 - 2.0 * u);
         ((1.0 - lit) * 0.5).max(contact * 0.5)
     }
@@ -6080,7 +8058,7 @@ mod tests {
                     continue;
                 }
                 let wx = (s + MODEL_BEVEL).max(0.0);
-                let z = -MODEL_THICK * view.pose.squash + MODEL_BEVEL - (MODEL_BEVEL * MODEL_BEVEL - wx * wx).sqrt();
+                let z = -shape.thick + MODEL_BEVEL - (MODEL_BEVEL * MODEL_BEVEL - wx * wx).sqrt();
                 lowest = lowest.min(view.model_to_plane([x, y, z])[2]);
             }
         }
@@ -6094,7 +8072,12 @@ mod tests {
         for (key, [hx, hy]) in DEFAULT_SPRITES {
             scene.cursor.cursor_sprites.insert(
                 key.into(),
-                crate::scene::SceneCursorSprite { path: sprite_path(key), hotspot_x: hx, hotspot_y: hy },
+                crate::scene::SceneCursorSprite {
+                    path: sprite_path(key),
+                    hotspot_x: hx,
+                    hotspot_y: hy,
+                    sculpt: None,
+                },
             );
         }
         scene
@@ -6118,7 +8101,7 @@ mod tests {
                 cfg: &cfg,
                 live: LiveParams {
                     cursor_model3d: model3d,
-                    cursor_bounce_scale: 2.5,
+                    cursor_bounce_scale: MODEL_CLICK_BOUNCE_REF,
                     ..LiveParams::default()
                 },
                 scene: Some(scene),
@@ -6149,46 +8132,63 @@ mod tests {
             vec![],
         );
         let times: Vec<f32> = (0..400).map(|k| k as f32 * 0.00731).collect();
-        let forward: Vec<CursorPose> = times.iter().map(|&t| cursor_pose(&track, t, 2.5, 1.0)).collect();
+        let forward: Vec<CursorPose> = times.iter().map(|&t| cursor_pose(&track, t, MODEL_CLICK_BOUNCE_REF, 1.0)).collect();
         let backward: Vec<CursorPose> =
-            times.iter().rev().map(|&t| cursor_pose(&track.clone(), t, 2.5, 1.0)).collect();
+            times.iter().rev().map(|&t| cursor_pose(&track.clone(), t, MODEL_CLICK_BOUNCE_REF, 1.0)).collect();
         assert!(forward.iter().eq(backward.iter().rev()), "l'ordre d'évaluation change la pose");
         // Continue : pas de saut d'une milliseconde à l'autre, même autour des clics.
         for k in 0..2999 {
             let (a, b) = (k as f32 * 0.001, (k + 1) as f32 * 0.001);
-            let (p, q) = (cursor_pose(&track, a, 2.5, 1.0), cursor_pose(&track, b, 2.5, 1.0));
+            let (p, q) = (cursor_pose(&track, a, MODEL_CLICK_BOUNCE_REF, 1.0), cursor_pose(&track, b, MODEL_CLICK_BOUNCE_REF, 1.0));
             assert!((p.yaw - q.yaw).abs() < 0.02, "lacet discontinu en {a} : {} -> {}", p.yaw, q.yaw);
             assert!((p.clearance - q.clearance).abs() < 0.03, "hauteur discontinue en {a}");
         }
     }
 
+    /// Le geste du clic, en vraie profondeur : élan au-dessus du survol pointe relevée, plongée
+    /// pointe la première jusqu'à toucher le plan AU clic, appui sur l'instant du contact que lisent
+    /// le plan et le rebond d'échelle, remontée au-delà du survol, repos. Animé sur une vingtaine
+    /// d'images à 30 i/s ; le niveau le règle, et « None » ne bouge pas.
     #[test]
-    fn the_model_touches_the_plane_on_the_click_contact() {
+    fn the_model_dives_onto_the_click() {
         let track = still_track(vec![0.5]);
-        let rest = cursor_pose(&track, 0.45, 2.5, 1.0);
+        let at = |ms: f32, level: f32| cursor_pose(&track, 0.5 + ms / 1000.0, level, 1.0);
+        let rest = at(-400.0, 1.0);
         assert_eq!(rest.clearance, MODEL_HOVER);
         assert!((rest.pitch - MODEL_PITCH_IDLE_DEG.to_radians()).abs() < 1e-6);
         assert_eq!(rest.yaw, 0.0, "immobile : pas de lacet");
-        // Au clic même, rien n'a encore bougé ; au creux, le modèle est posé, plus penché.
-        assert_eq!(cursor_pose(&track, 0.5, 2.5, 1.0).clearance, MODEL_HOVER);
-        let down = cursor_pose(&track, 0.5 + CONTACT_S, 2.5, 1.0);
-        assert_eq!(down.clearance, 0.0, "au creux du contact, le modèle touche le plan");
-        assert!(down.pitch > rest.pitch + 5f32.to_radians(), "la pression penche le modèle");
-        // Posé assez longtemps pour qu'au moins une image le montre, même à 24 i/s…
-        for ms in 30..=70 {
-            assert_eq!(cursor_pose(&track, 0.5 + ms as f32 / 1000.0, 2.5, 1.0).clearance, 0.0, "{ms} ms");
+        let peak = at(-120.0, 1.0);
+        assert!(peak.clearance > 1.8 * MODEL_HOVER && peak.pitch < rest.pitch, "élan : {peak:?}");
+        let down = at(0.0, 1.0);
+        assert_eq!(down.clearance, 0.0, "au clic, le modèle touche le plan");
+        assert!(down.pitch > rest.pitch + 5f32.to_radians(), "il plonge la pointe la première");
+        for ms in 0..=75 {
+            assert_eq!(at(ms as f32, 1.0).clearance, 0.0, "posé à {ms} ms");
         }
-        // …au même instant que la pression du rebond d'échelle, et relevé à la fin de la fenêtre.
         let press = (0..260).min_by(|&a, &b| {
             track.bounce(0.5 + a as f32 / 1000.0).total_cmp(&track.bounce(0.5 + b as f32 / 1000.0))
         });
-        let press_ms = press.expect("un creux") as f32;
-        assert_eq!(cursor_pose(&track, 0.5 + press_ms / 1000.0, 2.5, 1.0).clearance, 0.0);
-        assert_eq!(cursor_pose(&track, 0.5 + crate::regions::CLICK_IMPACT_WINDOW_S, 2.5, 1.0), rest);
-        // clickBounce règle la pression, pas le contact.
-        let soft = cursor_pose(&track, 0.5 + CONTACT_S, 0.0, 1.0);
-        assert_eq!(soft.clearance, 0.0);
-        assert!((soft.pitch - rest.pitch).abs() < 1e-6);
+        assert_eq!(at(press.expect("un creux") as f32, 1.0).clearance, 0.0, "au creux du rebond 2D");
+        assert!(at(200.0, 1.0).clearance > MODEL_HOVER, "il remonte au-delà du survol");
+        assert_eq!(at(450.0, 1.0), rest);
+        // Animé : à 30 i/s, une vingtaine d'images différentes, dont trois pendant la plongée.
+        let frames: Vec<f32> = (0..24).map(|k| at(-300.0 + k as f32 * 1000.0 / 30.0, 1.0).clearance).collect();
+        assert!(frames.windows(2).filter(|w| w[0] != w[1]).count() >= 18, "{frames:?}");
+        assert!((1..4).all(|k| { let c = at(-k as f32 * 1000.0 / 30.0, 1.0).clearance; c > 0.0 && c < peak.clearance }));
+        // « None » ne bouge pas ; « Strong » monte et rebondit plus haut, plonge plus vite et plus penché.
+        for ms in -350..450 {
+            assert_eq!(at(ms as f32, 0.0), rest, "None, {ms} ms");
+        }
+        let top = |level: f32, from: i32, to: i32| (from..to).map(|ms| at(ms as f32, level).clearance).fold(0.0, f32::max);
+        assert!(top(2.0, -300, 0) > top(1.0, -300, 0) + 0.15, "élan plus haut");
+        assert!(top(2.0, 80, 450) > top(1.0, 80, 450) + 0.1, "rebond plus haut");
+        assert!(at(0.0, 2.0).pitch > down.pitch + 5f32.to_radians(), "plus penché au contact");
+        assert!(at(-90.0, 2.0).clearance > at(-90.0, 1.0).clearance, "plongée plus tardive, donc plus vive");
+        // Un double clic ne remonte pas entre les deux : le geste le plus bas l'emporte.
+        let double = still_track(vec![0.5, 0.62]);
+        for ms in 0..200 {
+            assert!(cursor_pose(&double, 0.5 + ms as f32 / 1000.0, 1.0, 1.0).clearance <= MODEL_HOVER, "{ms} ms");
+        }
     }
 
     /// « Posé » veut dire posé, pour chaque état : au repos le point le plus bas du modèle est à
@@ -6198,9 +8198,10 @@ mod tests {
         let scene = model_scene();
         for key in MODEL_STATES {
             let (sdf, shape) = sprite_model(key);
-            for rot in [[0.0; 3], [-12.0, -18.0, -2.0]] {
+            for rot in [[0.0; 3], LEFT] {
                 let track = still_track_as(Some(key), vec![0.5]);
-                for (t, want) in [(0.3, MODEL_HOVER), (0.5 + CONTACT_S, 0.0)] {
+                // Au repos avant l'élan du clic, puis au contact.
+                for (t, want) in [(0.1, MODEL_HOVER), (0.5 + CONTACT_S, 0.0)] {
                     let plan = model_plan(rot, &scene, &track, t, true).expect("plan");
                     let pose = plan.model.expect("modèle");
                     let view = ModelView::new(plan.placement, plan.size_px, pose, shape).expect("vue");
@@ -6215,13 +8216,13 @@ mod tests {
     #[test]
     fn the_model_leans_towards_its_motion_and_its_click_target() {
         let still = still_track(vec![]);
-        assert_eq!(cursor_pose(&still, 1.0, 2.5, 1.0).yaw, 0.0);
+        assert_eq!(cursor_pose(&still, 1.0, MODEL_CLICK_BOUNCE_REF, 1.0).yaw, 0.0);
         let right = crate::cursor::CursorTrack::new(vec![(0.0, 0.1, 0.5), (2.0, 0.9, 0.5)], vec![], vec![]);
         let left = crate::cursor::CursorTrack::new(vec![(0.0, 0.9, 0.5), (2.0, 0.1, 0.5)], vec![], vec![]);
-        let (r, l) = (cursor_pose(&right, 1.0, 2.5, 1.0).yaw, cursor_pose(&left, 1.0, 2.5, 1.0).yaw);
+        let (r, l) = (cursor_pose(&right, 1.0, MODEL_CLICK_BOUNCE_REF, 1.0).yaw, cursor_pose(&left, 1.0, MODEL_CLICK_BOUNCE_REF, 1.0).yaw);
         assert!(r > 5f32.to_radians() && (r + l).abs() < 1e-5, "droite {r}, gauche {l}");
         let fast = crate::cursor::CursorTrack::new(vec![(0.0, 0.0, 0.5), (0.2, 1.0, 0.5)], vec![], vec![]);
-        let y = cursor_pose(&fast, 0.1, 2.5, 1.0).yaw;
+        let y = cursor_pose(&fast, 0.1, MODEL_CLICK_BOUNCE_REF, 1.0).yaw;
         assert!(y <= MODEL_YAW_MAX_DEG.to_radians() + 1e-6 && y > 20f32.to_radians(), "{y}");
         // Arrivée sur une cible à droite puis clic : juste avant, le modèle se tourne vers elle
         // plus que la même arrivée sans clic ; au repos, longtemps après, le lacet revient à 0.
@@ -6235,8 +8236,10 @@ mod tests {
             .collect();
         let clicked = crate::cursor::CursorTrack::new(samples.clone(), vec![1.1], vec![]);
         let quiet = crate::cursor::CursorTrack::new(samples, vec![], vec![]);
-        assert!(cursor_pose(&clicked, 1.05, 2.5, 1.0).yaw > cursor_pose(&quiet, 1.05, 2.5, 1.0).yaw + 1e-3);
-        assert!(cursor_pose(&clicked, 3.5, 2.5, 1.0).yaw.abs() < 1e-3);
+        assert!(cursor_pose(&clicked, 1.05, MODEL_CLICK_BOUNCE_REF, 1.0).yaw > cursor_pose(&quiet, 1.05, MODEL_CLICK_BOUNCE_REF, 1.0).yaw + 1e-3);
+        assert!(cursor_pose(&clicked, 3.5, MODEL_CLICK_BOUNCE_REF, 1.0).yaw.abs() < 1e-3);
+        // À « None », le clic ne fait rien tourner : seul le mouvement compte.
+        assert_eq!(cursor_pose(&clicked, 1.05, 0.0, 1.0).yaw, cursor_pose(&quiet, 1.05, 0.0, 1.0).yaw);
     }
 
     /// Les pointeurs penchent et tournent comme la flèche ; les curseurs centrés restent à plat et
@@ -6256,15 +8259,15 @@ mod tests {
             vec![1.0 - CONTACT_S],
             vec![],
         );
-        let (full, level) = (cursor_pose(&moving, 1.0, 2.5, 1.0), cursor_pose(&moving, 1.0, 2.5, 0.0));
+        let (full, level) = (cursor_pose(&moving, 1.0, MODEL_CLICK_BOUNCE_REF, 1.0), cursor_pose(&moving, 1.0, MODEL_CLICK_BOUNCE_REF, 0.0));
         assert!(full.pitch > 0.3 && full.yaw > 0.05, "{full:?}");
         assert_eq!((level.pitch, level.yaw), (0.0, 0.0));
         assert_eq!(level.clearance, full.clearance);
-        let half = cursor_pose(&moving, 1.0, 2.5, 0.5);
+        let half = cursor_pose(&moving, 1.0, MODEL_CLICK_BOUNCE_REF, 0.5);
         assert!((half.pitch - full.pitch * 0.5).abs() < 1e-6 && (half.yaw - full.yaw * 0.5).abs() < 1e-6);
         // À plat, le lift est l'épaisseur : toute la face du dessous est au sol.
         let (_, text) = sprite_model("text");
-        assert_eq!(text.contact_lift(0.0, 1.0), MODEL_THICK);
+        assert_eq!(text.contact_lift(0.0), MODEL_THICK);
     }
 
     #[test]
@@ -6275,7 +8278,7 @@ mod tests {
         assert!(off.model.is_none());
         assert!(matches!(off.placement, CursorPlacement::Upright { .. }), "réglage éteint : mode 7");
         let on = model_plan([0.0; 3], &scene, &track, 0.3, true).expect("plan");
-        assert_eq!(on.model, Some(cursor_pose(&track, 0.3, 2.5, 1.0)));
+        assert_eq!(on.model, Some(cursor_pose(&track, 0.3, MODEL_CLICK_BOUNCE_REF, 1.0)));
         let CursorPlacement::Tilted { quad, .. } = on.placement else { panic!("écran droit : plan identité") };
         assert_eq!((quad.scale, quad.rot), (1.0, [0.0; 3]));
         // Pas de rebond d'échelle en 3D : la taille au creux du clic est celle du repos.
@@ -6288,25 +8291,36 @@ mod tests {
         for (key, hotspot) in DEFAULT_SPRITES {
             let typed = still_track_as(Some(key), vec![]);
             let plan = model_plan([0.0; 3], &scene, &typed, 0.3, true).expect("plan");
-            assert_eq!(plan.model, Some(cursor_pose(&typed, 0.3, 2.5, pointing_factor(hotspot))), "{key}");
+            assert_eq!(plan.model, Some(cursor_pose(&typed, 0.3, MODEL_CLICK_BOUNCE_REF, pointing_factor(hotspot))), "{key}");
             assert_eq!(plan.cursor_type.as_deref(), Some(key));
         }
         // Un état sans sprite retombe sur la flèche, donc sur sa pose.
         let unknown = still_track_as(Some("zoom-in"), vec![]);
         assert_eq!(
             model_plan([0.0; 3], &scene, &unknown, 0.3, true).expect("plan").model,
-            Some(cursor_pose(&unknown, 0.3, 2.5, 1.0))
+            Some(cursor_pose(&unknown, 0.3, MODEL_CLICK_BOUNCE_REF, 1.0))
         );
-        // Un autre thème, ou pas de sprite du tout : le sprite plat.
+        // Un thème d'origine passe sa flèche sculptée : c'est elle que le mode 3D pose, le sprite
+        // plat restant l'art en 2D.
         let mut themed = model_scene();
-        themed.cursor.theme = "black-pixel".into();
-        assert!(model_plan([0.0; 3], &themed, &track, 0.3, true).expect("plan").model.is_none());
+        themed.cursor.theme = "studio-ink".into();
+        let themed_arrow = crate::scene::SceneCursorSprite {
+            path: "studio-ink/arrow.png".into(),
+            hotspot_x: 0.1947,
+            hotspot_y: 0.0656,
+            sculpt: Some("studio-ink/arrow".into()),
+        };
+        themed.cursor.cursor_sprites.insert("arrow".into(), themed_arrow.clone());
+        assert_eq!(
+            modelled_sprite(Some(&themed), None).and_then(|sprite| sprite.sculpt.as_deref()),
+            Some("studio-ink/arrow")
+        );
+        assert!(model_plan([0.0; 3], &themed, &track, 0.3, true).expect("plan").model.is_some());
+
+        // Sans aucun sprite résolu, il n'y a pas de modèle à dessiner.
         let bare = zoomed_golden_scene();
         assert!(model_plan([0.0; 3], &bare, &track, 0.3, true).expect("plan").model.is_none());
     }
-
-    const LEFT_ROT: [f32; 3] = [-8.0, -16.0, -1.0];
-    const ISO_ROT: [f32; 3] = [-12.0, -18.0, -2.0];
 
     /// Les poses d'essai, pour chaque état de `MODEL_STATES` : au repos, posé, tourné.
     fn model_cases() -> Vec<(String, CursorPlan, SpriteShape, crate::cursor_sdf::CursorSdf)> {
@@ -6319,7 +8333,7 @@ mod tests {
                 vec![],
                 vec![(0.0, key.to_string())],
             );
-            for (name, rot) in [("flat", [0.0; 3]), ("iso", ISO_ROT), ("left", LEFT_ROT), ("right", [-8.0, 16.0, 1.0])] {
+            for (name, rot) in [("flat", [0.0; 3]), ("left", LEFT), ("right", RIGHT)] {
                 for (pose, track, t) in [("hover", &clicked, 0.3), ("touch", &clicked, 0.5 + CONTACT_S), ("yaw", &moving, 1.0)] {
                     let plan = model_plan(rot, &scene, track, t, true).expect("plan");
                     let (sdf, shape) = sprite_model(key);
@@ -6370,7 +8384,7 @@ mod tests {
             let hotspot = [-x0 / size[0], -y0 / size[1]];
             assert!((hotspot[0] - shape.hotspot[0]).abs() < 1e-6 && (hotspot[1] - shape.hotspot[1]).abs() < 1e-6);
             assert!((size[0] - shape.size[0]).abs() < 1e-6 && (size[1] - shape.size[1]).abs() < 1e-6);
-            assert_eq!(cb.color[2], pose.squash, "{name}: écrasement");
+            assert_eq!(cb.color[2], 1.0, "{name}: jamais d'écrasement");
             assert_eq!([cb.mb[2], cb.mb[3]], view.offset, "{name}: translation du plan");
             assert!(shape.size[0].max(shape.size[1]) == 1.0, "{name}: {:?}", shape.size);
         }
@@ -6411,6 +8425,7 @@ mod tests {
     /// `plan_cursor`, scène dorée (recadrée, zoomée) sous `rotation`.
     fn model_frame(
         rotation: &str,
+        click_impact: bool,
         blur: f32,
         track: &'static crate::cursor::CursorTrack,
         t: f32,
@@ -6418,11 +8433,12 @@ mod tests {
         let cfg = crate::config::all().pop().expect("cfg");
         let json = zoomed_golden_scene_json().replace(r#""rotation":"none""#, rotation);
         let mut scene = Scene::from_json(&json).expect("scène");
+        scene.cursor.click_impact = click_impact;
         scene.cursor.theme = "default".into();
         scene.cursor.cursor_sprites = model_scene().cursor.cursor_sprites;
         let live = LiveParams {
             cursor_model3d: true,
-            cursor_bounce_scale: 2.5,
+            cursor_bounce_scale: MODEL_CLICK_BOUNCE_REF,
             cursor_motion_blur: blur,
             ..live_params_from_scene(&scene)
         };
@@ -6466,21 +8482,23 @@ mod tests {
 
     /// Au contact, la pointe du curseur modélisé tombe sur le pixel du clic BRUT, à 0,5 px près :
     /// quel que soit le lissage (le ressort traîne derrière la souris), la vitesse d'arrivée, un
-    /// départ immédiat, l'angle fixe (impact du plan compris), la caméra réelle, et la traînée de
-    /// flou (repliée sur la tête pendant le contact).
+    /// départ immédiat, la caméra (impact du clic compris : l'écran droit recule, l'angle fixe
+    /// bascule, l'œil de la caméra réelle recule), et la traînée de flou (repliée sur la tête
+    /// pendant le contact).
     #[test]
     fn the_modelled_tip_touches_the_raw_click_pixel() {
         const TC: f32 = 1.5;
         let presets = [
-            ("flat", r#""rotation":"none""#),
-            ("iso", r#""rotation":"iso","clickImpact":true"#),
-            ("left", r#""rotation":"left","clickImpact":true"#),
-            ("right", r#""rotation":"right","clickImpact":true"#),
-            ("follow", r#""rotation":"follow-cursor""#),
+            ("flat", r#""rotation":"none""#, false),
+            ("flat+impact", r#""rotation":"none""#, true),
+            ("iso", r#""rotation":"iso""#, true),
+            ("left", r#""rotation":"left""#, true),
+            ("right", r#""rotation":"right""#, true),
+            ("follow", r#""rotation":"orbit","focusMode":"auto""#, true),
         ];
         let (to, from, away) = ([0.3, 0.18], [0.08, 0.05], [0.45, 0.32]);
         let mut worst = 0.0f32;
-        for (name, rotation) in presets {
+        for (name, rotation, impact) in presets {
             for smoothing in [0.0, 0.25, 0.5, 1.0] {
                 for speed in [0.5, 2.0] {
                     for dwell in [0.0, 0.15] {
@@ -6493,7 +8511,7 @@ mod tests {
                             let shape = SpriteShape { hotspot: hotspot_of(key), ..shape };
                             for k in 0..=15 {
                                 let t = TC + 0.02 + k as f32 * 0.004;
-                                let (g, plan) = model_frame(rotation, 1.0, track, t);
+                                let (g, plan) = model_frame(rotation, impact, 1.0, track, t);
                                 let plan = plan.expect("curseur visible au contact");
                                 let pose = plan.model.expect("modèle");
                                 if pose.clearance > 0.0 {
@@ -6529,13 +8547,13 @@ mod tests {
         let track: &'static crate::cursor::CursorTrack = Box::leak(Box::new(raw.smoothed(0.5)));
         let quiet: &'static crate::cursor::CursorTrack =
             Box::leak(Box::new(crate::cursor::CursorTrack::new(vec![(0.0, 0.3, 0.18), (4.0, 0.3, 0.18)], vec![], vec![])));
-        for rotation in [r#""rotation":"none""#, r#""rotation":"iso""#, r#""rotation":"follow-cursor""#] {
-            let impacts = |track, t| model_frame(rotation, 0.0, track, t).1.expect("curseur").impacts;
+        for rotation in [r#""rotation":"none""#, r#""rotation":"iso""#, r#""rotation":"orbit","focusMode":"auto""#] {
+            let impacts = |track, t| model_frame(rotation, false, 0.0, track, t).1.expect("curseur").impacts;
             assert!(impacts(quiet, TC + 0.1).is_empty(), "{rotation}: pas de clic, pas d'impact");
             assert!(impacts(track, TC + 0.04).is_empty(), "{rotation}: avant le contact");
             assert!(impacts(track, TC + IMPACT_DELAY_S + IMPACT_S + 0.001).is_empty(), "{rotation}: après");
             for age in [0.06, 0.1, 0.2, 0.4] {
-                let (g, plan) = model_frame(rotation, 0.0, track, TC + age);
+                let (g, plan) = model_frame(rotation, false, 0.0, track, TC + age);
                 let cb = &plan.expect("curseur").impacts;
                 assert_eq!(cb.len(), 1, "{rotation} +{age}");
                 let cb = cb[0];
@@ -6586,21 +8604,7 @@ mod tests {
             .impacts
             .len()
         };
-        assert_eq!((plan(true, 2.5), plan(false, 2.5), plan(true, 0.0)), (1, 0, 0));
-    }
-
-    /// L'écrasement suit le contact : neutre au repos, l'épaisseur au plus bas au creux, un léger
-    /// rebond ensuite, et rien à `clickBounce` nul.
-    #[test]
-    fn the_model_squashes_on_the_click() {
-        let track = still_track(vec![0.5]);
-        assert_eq!(cursor_pose(&track, 0.45, 2.5, 1.0).squash, 1.0);
-        let down = cursor_pose(&track, 0.5 + CONTACT_S, 2.5, 1.0);
-        assert!((down.squash - (1.0 - MODEL_SQUASH)).abs() < 1e-3, "{down:?}");
-        let rebound = cursor_pose(&track, 0.5 + 0.165, 2.5, 1.0);
-        assert!(rebound.squash > 1.0 && rebound.squash < 1.06, "{rebound:?}");
-        assert_eq!(cursor_pose(&track, 0.5 + CONTACT_S, 0.0, 1.0).squash, 1.0);
-        assert!(cursor_pose(&track, 0.5 + CONTACT_S, 5.0, 1.0).squash >= MODEL_SQUASH_MIN);
+        assert_eq!((plan(true, MODEL_CLICK_BOUNCE_REF), plan(false, MODEL_CLICK_BOUNCE_REF), plan(true, 0.0)), (1, 0, 0));
     }
 
     #[test]
@@ -6612,7 +8616,7 @@ mod tests {
             let (x0, y0) = (cb.dst[0] * 1920.0, cb.dst[1] * 1080.0);
             let (x1, y1) = (x0 + cb.quad_px[0], y0 + cb.quad_px[1]);
             let inside = |p: [f32; 2]| p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1;
-            let (lo, hi) = shape.model_box(pose.squash);
+            let (lo, hi) = shape.model_box();
             let mut solid = 0;
             for i in 0..=20 {
                 for j in 0..=30 {
@@ -6622,7 +8626,7 @@ mod tests {
                             lo[1] + (hi[1] - lo[1]) * j as f32 / 30.0,
                             lo[2] + (hi[2] - lo[2]) * k as f32 / 6.0,
                         ];
-                        if sd_model(&sdf, shape, pose.squash, q) > 0.0 {
+                        if sd_model(&sdf, shape, q) > 0.0 {
                             continue;
                         }
                         solid += 1;
@@ -6685,5 +8689,109 @@ mod tests {
         assert_eq!(cpu.taps, 1);
         assert_eq!(cpu.prev_placement.upright_center(), cpu.placement.upright_center());
         assert_eq!(plan(false).for_backend(true).taps, plan(false).taps, "le sprite plat garde sa traînée");
+    }
+
+    /// Caché par l'application (`visible: false`), le curseur ne dessine rien, sprite plat comme
+    /// modèle (ombre et anneau compris), et sa traînée ne remonte pas dans la phase cachée à la
+    /// réapparition : il y filait à droite, il réapparaît là où il avait cliqué.
+    #[test]
+    fn a_hidden_phase_draws_no_cursor_and_no_trail_into_it() {
+        let scene = model_scene();
+        let cfg = crate::config::all().pop().expect("cfg");
+        let fg = full_frame_geometry();
+        let track = crate::cursor::CursorTrack::new_with_visibility(
+            vec![(0.0, 0.3, 0.6), (1.0, 0.3, 0.6), (1.1, 0.35, 0.6), (1.467, 0.9, 0.6), (1.5, 0.3, 0.6), (3.0, 0.3, 0.6)],
+            vec![1.0],
+            vec![],
+            vec![(0.0, true), (1.1, false), (1.5, true)],
+        );
+        let plan = |model3d: bool, t: f32| {
+            plan_cursor(
+                &fg,
+                &CursorPlanInput {
+                    render_px: [1920.0, 1080.0],
+                    u_max: 1.0,
+                    v_max: 1.0,
+                    cfg: &cfg,
+                    live: LiveParams {
+                        cursor_model3d: model3d,
+                        cursor_bounce_scale: MODEL_CLICK_BOUNCE_REF,
+                        cursor_motion_blur: 1.0,
+                        ..LiveParams::default()
+                    },
+                    scene: Some(&scene),
+                    track: &track,
+                    t,
+                },
+            )
+        };
+        for model3d in [false, true] {
+            assert!(plan(model3d, 1.05).is_some(), "model3d {model3d} : visible avant");
+            for t in [1.1, 1.2, 1.4, 1.49] {
+                assert!(plan(model3d, t).is_none(), "model3d {model3d} : dessiné caché à {t} s");
+            }
+            let back = plan(model3d, 1.505).expect("réapparu");
+            assert_eq!(back.taps, 1, "model3d {model3d} : traînée venue de la phase cachée");
+        }
+        assert!(!plan(true, 1.08).expect("visible").impacts.is_empty(), "garde : l'anneau du clic");
+    }
+
+    /// Sous un angle fixe, l'écran tourne autour du centre de sa boîte ZOOMÉE, réduit de son
+    /// containment : le curseur y perdait ~18 % au point de focus même, pendant que le zoom
+    /// grossissait l'image. Il y garde sa taille à plat, à la perspective de biais près ; ailleurs,
+    /// seule la perspective le change : plus grand du côté proche, plus petit du côté lointain.
+    #[test]
+    fn a_fixed_angle_keeps_the_cursor_size_at_the_zoom_focus() {
+        let cfg = crate::config::all().pop().expect("cfg");
+        // Taille apparente du modèle posé en `at` (repère du curseur) : différences centrées de sa
+        // projection autour de la pointe, en px de sortie par unité du modèle.
+        let size = |rotation: &str, zoom: f32, at: (f32, f32)| -> f32 {
+            let json = zoomed_golden_scene_json()
+                .replace(r#""rotation":"none""#, &format!(r#""rotation":"{rotation}""#))
+                .replace(r#""scale":2.0"#, &format!(r#""scale":{zoom}"#));
+            let mut scene = Scene::from_json(&json).expect("scène");
+            scene.cursor.theme = "default".into();
+            scene.cursor.cursor_sprites = model_scene().cursor.cursor_sprites;
+            let live = LiveParams { cursor_model3d: true, ..live_params_from_scene(&scene) };
+            let track: &'static crate::cursor::CursorTrack = Box::leak(Box::new(
+                crate::cursor::CursorTrack::new(vec![(0.0, at.0, at.1), (6.0, at.0, at.1)], vec![], vec![]),
+            ));
+            let g = plan_frame(&FrameGeometryInput { cursor: Some(track), live, ..golden_input(&scene, &cfg) });
+            let input = CursorPlanInput {
+                render_px: [1170.0, 658.0],
+                u_max: 1.0,
+                v_max: 1080.0 / 1088.0,
+                cfg: &cfg,
+                live,
+                scene: Some(&scene),
+                track,
+                t: 1.5,
+            };
+            let plan = plan_cursor(&g, &input).expect("plan");
+            let (_, shape) = sprite_model("arrow");
+            let view = ModelView::new(plan.placement, plan.size_px, plan.model.expect("modèle"), shape).expect("vue");
+            let e = 0.05 * view.unit;
+            let span = |d: [f32; 3]| {
+                let p = |k: f32| view.project([0, 1, 2].map(|i| view.tip[i] + k * d[i])).expect("projection");
+                let (a, b) = (p(e), p(-e));
+                (a[0] - b[0]).hypot(a[1] - b[1]) / (2.0 * e) * view.unit
+            };
+            (span([1.0, 0.0, 0.0]) * span([0.0, 1.0, 0.0])).sqrt()
+        };
+        // Le focus du zoom doré, (0,5 ; 0,3) du recadrage 0,61 : c'est là que regarde le zoom.
+        let focus = (0.305, 0.183);
+        for zoom in [1.25f32, 2.0, 3.5] {
+            let flat = size("none", zoom, focus);
+            for rotation in ["left", "right"] {
+                let ratio = size(rotation, zoom, focus) / flat;
+                println!("{rotation} ×{zoom} : {ratio:.3} de la taille à plat, au focus");
+                assert!((0.93..1.02).contains(&ratio), "{rotation} ×{zoom} : {ratio}");
+            }
+        }
+        // `left` amène le bord droit vers la caméra, `right` le bord gauche.
+        let at_focus = size("left", 2.0, focus);
+        let (near, far) = (size("left", 2.0, (0.43, 0.183)), size("left", 2.0, (0.18, 0.183)));
+        println!("left ×2 : {:.3} côté proche, {:.3} côté lointain", near / at_focus, far / at_focus);
+        assert!(near > 1.04 * at_focus && far < 0.96 * at_focus, "{near} {at_focus} {far}");
     }
 }

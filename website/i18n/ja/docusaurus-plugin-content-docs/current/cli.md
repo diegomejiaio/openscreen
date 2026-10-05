@@ -135,13 +135,13 @@ openscreen export demo.openscreen -o out.mp4 --auto-zoom --json
 | `--quality <medium\|good\|source>` | 出力サイズ。`medium` は 720p、`good` は 1080p、`source` はクロップ後のもっとも小さいクリップに合わせるため、アップスケールしません。GIF もこのサイズが出発点になります |
 | `--gif-fps <15\|20\|25\|30>` | GIF のフレームレート |
 | `--gif-size <medium\|large\|original>` | 上記のサイズに適用する GIF の高さの上限。720、1080、上限なしのいずれかです |
-| `--auto-zoom` | レンダリングの前に、記録されたポインターが止まった箇所にズームを追加します。エディターの[自動ズーム](/features/auto-zoom/)と同じエンジンを使います。既存のズームは保持され、新しいズームがそれと重なることはありません |
+| `--auto-zoom` | レンダリングの前に、記録されたクリックの箇所にズームを追加します。エディターの[自動ズーム](/features/auto-zoom/)と同じエンジンを使います。既存のズームは保持され、新しいズームはそれらを避けて配置されます |
 | `--audio <file>` | ナレーションのファイル（mp3、wav、m4a）を MP4 にミックスします。MP4 のみ |
 | `--audio-mode <mix\|replace>` | `mix`（既定）は録画の音声を 40% のゲインでナレーションの下に残し、`replace` は録画の音声を取り除きます |
 | `--audio-offset <seconds>` | ナレーションが始まるまでの遅延（既定値 0） |
 | `--json` | stdout に NDJSON で進行状況と結果を出力します |
 
-CLI からの MP4 エクスポートは、常に **H.264・60 fps** です。コーデックやフレームレートのオプションはありません。デスクトップアプリの[エクスポート](./export.md)ダイアログでは、H.265 と、24 または 30 fps も選べます。
+CLI からの MP4 エクスポートは、常に **H.264・60 fps** です。コーデックやフレームレートのオプションはありません。デスクトップアプリの[エクスポート](./export.md)ダイアログでは、24 または 30 fps も選べます。
 
 `--audio` はレンダリングのあとに処理されます。映像ストリームは手を加えずにコピーされ、新しい AAC トラックがミックスされて、同じ出力ファイルに上書きされます。
 
@@ -158,7 +158,7 @@ openscreen captions demo.openscreen --min-words 2 --max-words 7
 openscreen export demo.openscreen -o demo.mp4   # captions are burned into the video
 ```
 
-- `--min-words` と `--max-words` で、字幕 1 つあたりの単語数を設定します。既定値は 2 と 7 です。
+- `--min-words` と `--max-words` で、字幕 1 つあたりの単語数を設定します。どちらもエディターと同じ 1〜12 を指定できます。既定値は 2 と 7 です。
 - もう一度実行すると、以前に追加した字幕が置き換えられます。自分で追加した注釈は保持されます。
 - プロジェクトの画面動画には、音声トラックが必要です（たとえば `record --mic` で録音したもの）。
 - 字幕はエクスポートに焼き込まれます。字幕ファイルは出力されません。[字幕と文字起こし](./captions.md)を参照してください。
@@ -247,7 +247,7 @@ node -e '
   fs.writeFileSync("demo.openscreen", JSON.stringify(p, null, 2));
 '
 
-# 4. Render, with automatic zooms added where the pointer paused
+# 4. Render, with automatic zooms added on the recorded clicks
 openscreen export demo.openscreen -o demo.mp4 --auto-zoom --json
 ```
 

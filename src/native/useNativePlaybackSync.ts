@@ -13,9 +13,10 @@
  *    over free-run). So discrete seeks are only sent while *paused* — i.e. real
  *    scrub/step interactions. Pausing also re-snaps native to the app playhead.
  *
- * Known POC limitation: during free-run the native clock and the app clock can
- * drift (independent tickers); acceptable for the fixture (~6 s loop). A pause
- * re-aligns them.
+ * While playing, the two clocks are compared by `NativeCompositorOverlay`, from the
+ * position each native frame reports (`nativeSync.ts`). This hook only guesses the drift
+ * from the wall clock at 1× speed for an addon that reports no position: the guess
+ * re-seeked the view ten times a second inside a 2× speed region.
  */
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
@@ -26,6 +27,7 @@ import {
 	setNativeTime,
 	subscribeNativeCompositor,
 } from "./nativeCompositorStore";
+import { getNativePosition } from "./nativeSync";
 
 export function useNativePlaybackSync(
 	playing: boolean,
@@ -57,7 +59,8 @@ export function useNativePlaybackSync(
 		setNativePlaying(playing);
 	}, [active, playing]);
 
-	// Scrub/step while paused OR periodic resync during playback when drift > 100ms
+	// Scrub/step while paused, and drift while playing for an addon that reports no position.
+	// A clip change is `setActiveClip`'s, in the overlay.
 	const lastSyncedSourceTimeRef = useRef<number | null>(null);
 	const lastSyncedWallTimeRef = useRef<number>(0);
 	const lastActiveClipIdRef = useRef<string | null>(null);
@@ -67,22 +70,21 @@ export function useNativePlaybackSync(
 			return;
 		}
 		const now = performance.now();
-
-		// When clip changes, let setActiveClip handle the atomic clip-switch-and-seek.
 		if (lastActiveClipIdRef.current !== activeClipId) {
 			lastActiveClipIdRef.current = activeClipId;
 			lastSyncedSourceTimeRef.current = sourceTimeSec;
 			lastSyncedWallTimeRef.current = now;
 			return;
 		}
-
 		if (!playing) {
 			setNativeTime(sourceTimeSec);
 			lastSyncedSourceTimeRef.current = sourceTimeSec;
 			lastSyncedWallTimeRef.current = now;
 			return;
 		}
-		// While playing: periodically verify master clock alignment to prevent drift
+		if (getNativePosition() !== null) {
+			return;
+		}
 		if (lastSyncedSourceTimeRef.current === null || lastSyncedWallTimeRef.current === 0) {
 			lastSyncedSourceTimeRef.current = sourceTimeSec;
 			lastSyncedWallTimeRef.current = now;

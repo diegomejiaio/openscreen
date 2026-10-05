@@ -79,20 +79,103 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 
-echo "Fetching ${ARTIFACT} from the latest successful build-whisper-stt run..."
-# No run id: gh resolves the most recent run that published this artifact.
-# Artifacts expire (retention-days in build-whisper-stt.yml), so a stale branch
+# Which run: the most recent successful build of THIS commit's helper sources.
+# Not simply the most recent artifact, which is whatever branch last pushed a
+# helper change: on 2026-09-30 that was a PR branch built from main without the
+# fix 2.0.0-rc.2 was cut for, and rc.1 had shipped whatever main last built.
+# Sources are compared by git object id, so the release branch's cherry-pick of
+# a change matches the run built from main.
+SOURCES=(electron/native/whisper-stt scripts/build-whisper-stt.sh .github/workflows/build-whisper-stt.yml)
+# Prints the path's git object id at that commit, from the API, or nothing when
+# the commit is gone (the run of a branch rewritten since). Any other answer is
+# retried, then fatal: on 2026-10-01 two rc.5 jobs out of five rejected the very
+# run the other three matched, in silence, and an API hiccup must never read as
+# "no matching build".
+object_at() { # <commit> <path>
+  local attempt out
+  for attempt in 1 2 3; do
+    if out="$(gh api "repos/${REPO}/contents/$(dirname "$2")?ref=$1" \
+      --jq ".[] | select(.path == \"$2\") | .sha" 2>"${TMP}/api-err")"; then
+      if [ -n "${out}" ]; then echo "${out}"; return 0; fi
+    elif grep -q "HTTP 404" "${TMP}/api-err"; then
+      return 0
+    fi
+    sleep $((attempt * 2))
+  done
+  echo "FATAL: could not read $2 at $1 from the API: $(cat "${TMP}/api-err")" >&2
+  return 1
+}
+same_sources() { # <run> <commit>: were the helper's sources there the ones checked out here?
+  local path there here
+  for path in "${SOURCES[@]}"; do
+    there="$(object_at "$2" "${path}")" || exit 1
+    here="$(git rev-parse "HEAD:${path}")"
+    if [ "${there}" != "${here}" ]; then
+      echo "  run $1 (${2:0:8}): ${path} is ${there:-gone} there, ${here} here"
+      return 1
+    fi
+  done
+}
+# Every successful run, newest first by our own sort. The API's order is not to
+# be trusted: on 2026-10-01 the same `gh run list --limit 50` returned this
+# morning's runs first in one job and August's in another, so whether the
+# matching run made the cut depended on which job asked. Read into a file, so a
+# failed or partial listing stops here instead of passing for a complete one,
+# and with no `status=` filter: GitHub caps filtered queries at 1,000 results.
+list_successful_runs() {
+  local attempt
+  for attempt in 1 2 3; do
+    if gh api --paginate \
+      "repos/${REPO}/actions/workflows/build-whisper-stt.yml/runs?per_page=100" \
+      --jq '.workflow_runs[] | select(.conclusion == "success") | "\(.created_at) \(.id) \(.head_sha)"' \
+      >"${TMP}/runs" 2>"${TMP}/api-err"; then
+      sort -ru "${TMP}/runs" | cut -d' ' -f2- >"${TMP}/candidates"
+      return 0
+    fi
+    sleep $((attempt * 2))
+  done
+  echo "FATAL: could not list build-whisper-stt runs: $(cat "${TMP}/api-err")" >&2
+  exit 1
+}
+RUN_ID=""
+for attempt in 1 2; do
+  list_successful_runs
+  while read -r id sha; do
+    if same_sources "${id}" "${sha}"; then RUN_ID="${id}"; break; fi
+  done <"${TMP}/candidates"
+  if [ -n "${RUN_ID}" ] || [ "${attempt}" = 2 ]; then break; fi
+  echo "No match in the run list; reading it once more..."
+  sleep 10
+done
+if [ -z "${RUN_ID}" ]; then
+  cat >&2 <<EOF
+
+FATAL: no successful build-whisper-stt run was built from this commit's helper
+sources (${SOURCES[*]}).
+
+Run it on this branch or tag, wait for it, then re-run this build:
+
+  gh workflow run build-whisper-stt.yml --repo ${REPO} --ref <branch or tag>
+
+Refusing to package a helper built from other sources than the ones this
+release ships.
+EOF
+  exit 1
+fi
+
+echo "Fetching ${ARTIFACT} from build-whisper-stt run ${RUN_ID} (same helper sources)..."
+# Artifacts expire (retention-days in build-whisper-stt.yml), so an old commit
 # can legitimately find nothing — say so in terms someone can act on.
-if ! gh run download --repo "${REPO}" --name "${ARTIFACT}" --dir "${TMP}" 2>"${TMP}/err"; then
+if ! gh run download "${RUN_ID}" --repo "${REPO}" --name "${ARTIFACT}" --dir "${TMP}" 2>"${TMP}/err"; then
   cat "${TMP}/err" >&2
   cat >&2 <<EOF
 
 FATAL: could not fetch ${ARTIFACT}.
 
 The binaries come from the "Build whisper-stt binaries" workflow, and its
-artifacts expire. Re-run it against this branch, then re-run this build:
+artifacts expire. Re-run it against this branch or tag, then re-run this build:
 
-  gh workflow run build-whisper-stt.yml --repo ${REPO}
+  gh workflow run build-whisper-stt.yml --repo ${REPO} --ref <branch or tag>
 
 Refusing to package: the installer would ship with speech-to-text silently
 dead (no transcription, no captions).

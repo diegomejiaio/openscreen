@@ -22,14 +22,14 @@ Aufgenommen wird über das **HUD**, eine verschiebbare, pillenförmige Overlay-L
 
 Die Schaltfläche der Quellenauswahl zeigt den aktuell gewählten Bildschirm oder das Fenster (gekürzt) und ist deaktiviert, sobald die Aufnahme läuft. Ein Klick darauf öffnet ein eigenes Fenster mit zwei Tabs:
 
-- **Screens**: eine Karte pro Bildschirm.
-- **Windows**: eine Karte pro geöffnetem Fenster, mit dem Symbol der App.
+- **Bildschirme**: eine Karte pro Bildschirm.
+- **Fenster**: eine Karte pro geöffnetem Fenster, mit dem Symbol der App.
 
-Wähle ein Vorschaubild und klicke auf **Share**. Ist beim Klick auf Aufnahme keine Quelle gewählt, öffnet OpenScreen zuerst die Auswahl und startet die Aufnahme automatisch, sobald du eine Quelle gewählt hast.
+Wähle ein Vorschaubild und klicke auf **Teilen**. Unter macOS 15.2 und neuer öffnet die Schaltfläche stattdessen die Systemauswahl von Apple. Ist beim Klick auf Aufnahme keine Quelle gewählt, öffnet OpenScreen zuerst die Auswahl und startet die Aufnahme automatisch, sobald du eine Quelle gewählt hast.
 
 Eine Bereichsaufnahme gibt es nicht: Du nimmst einen ganzen Bildschirm oder ein Fenster auf und schneidest das Bild danach im Editor zu, Clip für Clip.
 
-Unter Linux zeigt das HUD keine Quellenauswahl, sondern nur *Your system will ask what to share*. Diese Wahl trifft das ScreenCast-Portal: Ein Klick auf Aufnahme öffnet vor dem Countdown den Freigabedialog deines Desktops, und er fragt bei jedem Take erneut.
+Unter Linux zeigt das HUD keine Quellenauswahl, sondern nur *Dein System fragt gleich, was du teilen möchtest*. Diese Wahl trifft das ScreenCast-Portal: Ein Klick auf Aufnahme öffnet vor dem Countdown den Freigabedialog deines Desktops, und er fragt bei jedem Take erneut.
 
 ## Audio {#audio}
 
@@ -49,7 +49,7 @@ Unter Windows, macOS und Linux wechselt ein Schalter für den Cursormodus zwisch
 
 Was das bearbeitbare Overlay erfasst, hängt von der Plattform ab:
 - **Windows**: die echte Cursorform und Klicks.
-- **macOS**: Cursorform und Klicks, wofür die Berechtigung „Bedienungshilfen“ nötig ist. Fehlt sie, öffnet ein Klick auf Aufnahme in diesem Modus einen Hinweis mit einem Link zur Einstellung, statt die Aufnahme zu starten (siehe [Installation unter macOS](./installation.md#macos)).
+- **macOS**: Cursorform und Klicks, wofür die Berechtigung „Bedienungshilfen“ nötig ist. Fehlt sie, öffnet ein Klick auf Aufnahme in diesem Modus das Berechtigungsfenster, statt die Aufnahme zu starten (siehe [Installation unter macOS](./installation.md#macos)).
 - **Linux**: Position und Form über das ScreenCast-Portal, dazu Linksklicks, wenn dein Benutzer in der Gruppe `input` ist (siehe [Mausklicks unter Wayland](./installation.md#mouse-clicks-on-wayland)).
 
 Ein Linux-Take, der auf die [Browser-Aufnahme](#native-vs-browser-capture) ausweicht, zeichnet den Systemcursor auf, egal welchen Modus du gewählt hast.
@@ -74,15 +74,15 @@ Ein Klick auf Aufnahme startet einen 3‑2‑1-Countdown, der als Overlay über 
 - **Language**: eine Sprachauswahl (13 Sprachen), die nur die Oberfläche von OpenScreen betrifft, nicht deine Aufnahme.
 - Fenster-Bedienelemente, um das HUD auszublenden oder die App zu beenden.
 
-## Aus dem Editor aufnehmen (Rec-Modus) {#recording-from-the-editor-rec-mode}
+## Aus dem Editor aufnehmen (Modus Aufnahme) {#recording-from-the-editor-rec-mode}
 
-Du musst nicht im HUD anfangen. Stelle im Editor die obere Leiste auf **Rec**, dann bekommst du statt der Leiste eine ganze Seite zur Vorbereitung:
+Du musst nicht im HUD anfangen. Stelle im Editor die obere Leiste auf **Aufnahme**, dann bekommst du statt der Leiste eine ganze Seite zur Vorbereitung:
 
-- **Source**: dieselbe Auswahl für Bildschirm oder Fenster, in einem modalen Dialog. Unter Linux steht auch in dieser Zeile *Your system will ask what to share*, und der Portal-Dialog übernimmt die Auswahl.
-- **System audio**, **Microphone**, **Camera**: jeweils eine Zeile mit Ein/Aus. Mikrofon und Kamera klappen zu einer Geräteliste auf, und die Kamera zeigt eine Live-Vorschau, damit du dich vor dem Start ins Bild rücken kannst.
-- **Cursor highlight**: Eingeschaltet steht für den bearbeitbaren Overlay-Cursor, ausgeschaltet für den einfachen Systemcursor.
+- **Quelle**: dieselbe Auswahl für Bildschirm oder Fenster, in einem modalen Dialog, unter macOS 15.2 und neuer die Systemauswahl von Apple. Unter Linux steht auch in dieser Zeile *Dein System fragt gleich, was du teilen möchtest*, und der Portal-Dialog übernimmt die Auswahl.
+- **Systemton**, **Mikrofon**, **Kamera**: jeweils eine Zeile mit Ein/Aus. Mikrofon und Kamera klappen zu einer Geräteliste auf, und die Kamera zeigt eine Live-Vorschau, damit du dich vor dem Start ins Bild rücken kannst.
+- **Bearbeitbarer Cursor**: Eingeschaltet steht für den bearbeitbaren Overlay-Cursor, ausgeschaltet für den einfachen Systemcursor.
 
-**Start recording** öffnet das Aufnahme-Widget und schließt das Editorfenster; ein Abbruch bringt dich zurück in den Modus **Edit**. Hier landest du auch über **New project → Screen recording**.
+**Aufnahme starten** öffnet das Aufnahme-Widget und schließt das Editorfenster; ein Abbruch bringt dich zurück in den Modus **Schnitt**. Hier landest du auch über **Neues Projekt → Bildschirmaufnahme**.
 
 ## Native Aufnahme und Browser-Aufnahme {#native-vs-browser-capture}
 

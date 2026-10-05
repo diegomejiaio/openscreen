@@ -5,6 +5,23 @@ that drew the whole editor at 1:1 in a 1920px scene and flew a camera over it;
 this note records what was wrong with that and what the rules are now, so the
 next pass does not rediscover either.
 
+The picture now starts as the hero's full-width, real-time loop. As soon as
+the reader scrolls, 0.28 viewport of scroll docks it into the editor and
+rewinds the displayed scene time to zero. The five beats then run as before.
+Scrolling back reverses the same movement and resumes the loop. The pause
+button controls the preview; reduced motion gets a still and stacked captions.
+One short scroll follower controls its position, scale and rewind, including
+the handoff into the editor. A large wheel increment passes through the dock
+seam instead of skipping it. The stage floats in viewport space until it can
+hand back to sticky at the same origin, so native scrolling cannot move it
+between animation frames.
+
+On desktop, the background frame follows the actual height of the caption and
+inspector on its left, including pane transitions. Its ratio can change with
+the viewport and the current beat. The recorded page keeps a separate 16:9
+canvas, fitted uniformly inside that frame; additional padding belongs to the
+background. ResizeObserver follows the column without per-frame layout reads.
+
 ## What the previous cut got wrong
 
 1. **The scene was bigger than the screen.** Authored at 1920px and shown in a
@@ -36,10 +53,10 @@ the right, the floor at the bottom in act two. The composite gets a hairline and
 a seated shadow, not a glow — a halo reads as a selection state on something
 that is not selected.
 
-**One clock.** Scroll position becomes scene seconds, scene seconds become
-document seconds in act two, and the playhead, the pill under it, the composite's
+**One score.** The preview clock, then scroll position, becomes scene seconds;
+scene seconds become document seconds in act two, and the playhead, the pill under it, the composite's
 magnification and the transcript's cue are four readings of that one number. No
-media element, no second timebase, nothing that can drift.
+independent playback clock for the picture or its pointers, nothing that can drift.
 
 **The beats touch.** A gap between beats is a stretch with no caption, no panel
 and no palette — which looks like breathing room on paper and like the left half
@@ -58,9 +75,15 @@ travel between two controls.
 
 - **The panels** are the app's, by locale key: `PANELS` for the titles,
   `CONTROLS` for every slider at this document's own setting, scaled and
-  suffixed the way `RightPanes.tsx` does it. Cursor size is `size * 10` over
-  5–100 with one decimal and no unit — a hand-written panel gets that wrong in a
-  way that looks entirely plausible.
+  suffixed the way `RightPanes.tsx` does it, and the rows of named levels
+  (shadow, click bounce) lifted out of that file. Cursor size shows no number at
+  all, because the app shows none — a hand-written panel gets that wrong in a
+  way that looks entirely plausible. The document predates the level rows: its
+  shadow sits between two levels, and the page presses the nearest one.
+- **The drawing follows the app's current direction**: Background is a section
+  of the Composition pane, settings are free rows under section labels, a fixed
+  choice is a row of buttons, and the timeline wears candy cards — the clip in
+  the brand's green with the app's own waveform paths, zooms in blue.
 - **The padding slider** moves the composite through `PreviewCanvas.tsx`'s own
   `clamp(1 - (padding/100) * 0.4, 0.4, 1)`, evaluated per frame.
 - **The wallpapers** are the app's own — twelve of the eighteen it ships, in the
@@ -94,7 +117,9 @@ exactly what it did for as long as lint-staged was formatting it.
 
 ## Verifying
 
-The in-app browser pane returns black frames for this page. Drive headless
-Chrome over CDP instead, scroll to a scene time, and look at the result — every
-defect in the list at the top of this file was visible in a screenshot and
+Check the preview, the midpoint of docking, and each of the five beats in a
+browser, at desktop and portrait sizes. Stop scrolling during docking: the
+picture should stay still. Scroll back: it should widen, undo the rewind and
+resume playing. Also check pause, reduced motion and the static no-JavaScript
+fallback. Every defect in the list above was visible in a screenshot and
 invisible in the source.

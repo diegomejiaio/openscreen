@@ -3,19 +3,57 @@ import { projectRawTimelineSecToPlayback } from "@/lib/ai-edition/document/timel
 import type { AxcutAudioTrack, AxcutClip, AxcutTrimRange } from "@/lib/ai-edition/schema";
 import {
 	applyPreviewAudioSettings,
+	MUSIC_DUCK,
+	nextMusicDuckDb,
+	PREVIEW_AUDIO_CEILING,
+	PREVIEW_AUDIO_HEADROOM,
 	type PreviewAudioGraph,
+	previewCeilingCurve,
 	resolveAudioTrackPlayback,
 	resolveTimelineAudioPlayback,
 	timelineAudioFadeAt,
 } from "./VirtualPreview";
 
-/** Minimal stand-in: the function only ever touches `gain.gain.value`. */
+/** Minimal stand-in: the function only ever touches the two nodes' `gain.value`. */
 function fakeGraph(): PreviewAudioGraph {
 	return {
 		context: {} as AudioContext,
 		gain: { gain: { value: Number.NaN } } as GainNode,
+		voice: { gain: { value: Number.NaN } } as GainNode,
+		analyser: {} as AnalyserNode,
+		headroom: {} as GainNode,
+		ceiling: {} as WaveShaperNode,
 	};
 }
+
+describe("nextMusicDuckDb", () => {
+	// The preview's side of the export's ducker (`duck_curve`): same depth, hold and
+	// release, stepped one frame at a time.
+	const frame = 1 / 60;
+	function run(fromDb: number, sinceVoiceAt: (t: number) => number, seconds: number) {
+		let db = fromDb;
+		for (let t = 0; t < seconds; t += frame) db = nextMusicDuckDb(db, sinceVoiceAt(t), frame);
+		return db;
+	}
+
+	it("dips to the export's depth over one attack once the voice is heard", () => {
+		expect(run(0, () => 0, MUSIC_DUCK.attackSec / 2)).toBeCloseTo(MUSIC_DUCK.depthDb / 2, 0);
+		expect(run(0, () => 0, MUSIC_DUCK.attackSec + frame)).toBe(MUSIC_DUCK.depthDb);
+		// And never deeper, however long the voice goes on.
+		expect(run(0, () => 0, 10)).toBe(MUSIC_DUCK.depthDb);
+	});
+
+	it("stays down through a pause shorter than the hold", () => {
+		expect(run(MUSIC_DUCK.depthDb, (t) => t, MUSIC_DUCK.holdSec - 0.05)).toBe(MUSIC_DUCK.depthDb);
+	});
+
+	it("comes back up over the release once the pause outlasts the hold", () => {
+		const pause = MUSIC_DUCK.holdSec + MUSIC_DUCK.releaseSec + 2 * frame;
+		expect(run(MUSIC_DUCK.depthDb, (t) => t, pause)).toBe(0);
+		// And never above the level the user set.
+		expect(run(0, () => 10, 1)).toBe(0);
+	});
+});
 
 describe("resolveAudioTrackPlayback", () => {
 	it("mirrors the video's time", () => {
@@ -82,6 +120,69 @@ describe("applyPreviewAudioSettings", () => {
 		applyPreviewAudioSettings(graph, [element], -6.0206);
 		expect(element.volume).toBe(0.25);
 		expect(graph.gain.gain.value).toBeCloseTo(0.5, 4);
+	});
+
+	it("levels the recording with the export's loudness gain, under the output trim", () => {
+		// The export multiplies each clip by `loudness_gain_db` of its file, then the whole
+		// mix by the trim. The preview has to play the same product, or the voice is heard
+		// at one level while editing and another in the file.
+		const graph = fakeGraph();
+		applyPreviewAudioSettings(graph, [], -6.0206, 9.5424);
+		expect(graph.voice.gain.value).toBeCloseTo(3, 3);
+		expect(graph.gain.gain.value).toBeCloseTo(0.5, 4);
+		// No measurement yet (or nothing to correct): unity, the file as recorded.
+		applyPreviewAudioSettings(graph, [], 0);
+		expect(graph.voice.gain.value).toBe(1);
+	});
+
+	it("folds the loudness gain into the element-volume fallback, still capped at unity", () => {
+		const element = { volume: Number.NaN } as HTMLAudioElement;
+		applyPreviewAudioSettings(null, [element], -12.0412, 6.0206);
+		expect(element.volume).toBeCloseTo(0.5, 4);
+		applyPreviewAudioSettings(null, [element], 0, 6.0206);
+		expect(element.volume).toBe(1);
+	});
+});
+
+describe("previewCeilingCurve", () => {
+	const curve = previewCeilingCurve();
+	/** What the preview plays for a mix at `level`: the headroom gain, then a WaveShaperNode as
+	 *  the Web Audio spec defines it (clamped to [-1, 1], linear between curve points). */
+	const played = (level: number) => {
+		const input = Math.min(1, Math.max(-1, level / PREVIEW_AUDIO_HEADROOM));
+		const position = ((input + 1) / 2) * (curve.length - 1);
+		const below = Math.floor(position);
+		const above = Math.min(curve.length - 1, below + 1);
+		return curve[below] + (curve[above] - curve[below]) * (position - below);
+	};
+
+	it("plays everything under the export's ceiling exactly as the export writes it", () => {
+		for (let level = -PREVIEW_AUDIO_CEILING; level <= PREVIEW_AUDIO_CEILING; level += 0.001) {
+			expect(Math.abs(played(level) - level)).toBeLessThan(1e-5);
+		}
+	});
+
+	it("keeps a boosted peak within full scale instead of letting the device clip it", () => {
+		// 1.226 is the measured case: a −7.1 dBFS peak under an 8.9 dB loudness boost. Far up
+		// the knee float32 rounds the curve onto 1 itself, which is full scale, not past it.
+		let previous = PREVIEW_AUDIO_CEILING;
+		for (const level of [0.9, 1, 1.226, 2, 4, 16, 64]) {
+			const out = played(level);
+			expect(out).toBeGreaterThanOrEqual(previous);
+			expect(out).toBeLessThanOrEqual(1);
+			expect(played(-level)).toBeCloseTo(-out, 9);
+			previous = out;
+		}
+		expect(played(1.226)).toBeLessThan(1);
+	});
+
+	it("leaves the identity without a corner", () => {
+		// Same slope on both sides of the knee, so the shaping starts as a bend, not a click.
+		const step = 1e-3;
+		const below = (played(PREVIEW_AUDIO_CEILING) - played(PREVIEW_AUDIO_CEILING - step)) / step;
+		const above = (played(PREVIEW_AUDIO_CEILING + step) - played(PREVIEW_AUDIO_CEILING)) / step;
+		expect(below).toBeCloseTo(1, 2);
+		expect(above).toBeCloseTo(1, 1);
 	});
 });
 

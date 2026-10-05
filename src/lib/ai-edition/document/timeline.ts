@@ -3,6 +3,7 @@
 // (store, exporter, agent) feeds an AxcutDocument and gets back intervals
 // or a new document with updated clips.
 
+import { clampToBound } from "../../projectDefaults";
 import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "../schema";
 
 /**
@@ -231,6 +232,23 @@ export interface PlaybackSpeedRegion {
 	startMs: number;
 	endMs: number;
 	speed: number;
+}
+
+/**
+ * The project's speed regions as every reader should see them. They live on the legacy editor
+ * envelope, which no schema checks, so this is where their bound applies: a region without a
+ * usable speed is dropped, as the scene always did, and one past the bound plays at it. A
+ * hand-edited or agent-written 100x can no longer reach the export while the preview stops at 16x.
+ */
+export function readSpeedRegions<T extends PlaybackSpeedRegion = PlaybackSpeedRegion>(
+	document: Pick<AxcutDocument, "legacyEditor">,
+): T[] {
+	const stored = (document.legacyEditor as { speedRegions?: unknown } | null | undefined)
+		?.speedRegions;
+	if (!Array.isArray(stored)) return [];
+	return (stored as T[])
+		.filter((r) => typeof r?.speed === "number" && Number.isFinite(r.speed) && r.speed > 0)
+		.map((r) => ({ ...r, speed: clampToBound(r.speed, "playbackSpeed") }));
 }
 
 /**
@@ -1110,6 +1128,53 @@ export function removeRegion(document: AxcutDocument, kind: RegionKind, id: stri
 			return document;
 		}
 	}
+}
+
+const legacyRegionCount = (document: AxcutDocument, key: string): number => {
+	const stored = (document.legacyEditor as Record<string, unknown> | null)?.[key];
+	return Array.isArray(stored) ? stored.length : 0;
+};
+const withLegacyRegionsCleared = (document: AxcutDocument, key: string): AxcutDocument =>
+	document.legacyEditor
+		? { ...document, legacyEditor: { ...document.legacyEditor, [key]: [] } }
+		: document;
+
+/**
+ * The edit regions "Clear timeline" empties: one entry per `RegionKind` but `audio`. A Record
+ * rather than a list, so a new kind is a compile error here until someone decides whether it
+ * is an edit. `audio` is deliberately absent, like everything that is not a region at all:
+ * clips, media, transcripts, captions and the pauses added words made are content the user
+ * put there on purpose. (`timeline.speedRanges` is not the speed lane's store; the lane and
+ * the export read `legacyEditor.speedRegions`.)
+ */
+const EDIT_REGIONS: Record<
+	Exclude<RegionKind, "audio">,
+	{ count: (d: AxcutDocument) => number; clear: (d: AxcutDocument) => AxcutDocument }
+> = {
+	zoom: { count: (d) => d.zoomRanges.length, clear: (d) => ({ ...d, zoomRanges: [] }) },
+	annotation: { count: (d) => d.annotations.length, clear: (d) => ({ ...d, annotations: [] }) },
+	trim: {
+		count: (d) => d.timeline.trimRanges.length,
+		clear: (d) => ({ ...d, timeline: { ...d.timeline, trimRanges: [] } }),
+	},
+	speed: {
+		count: (d) => legacyRegionCount(d, "speedRegions"),
+		clear: (d) => withLegacyRegionsCleared(d, "speedRegions"),
+	},
+	cameraFullscreen: {
+		count: (d) => legacyRegionCount(d, "cameraFullscreenRegions"),
+		clear: (d) => withLegacyRegionsCleared(d, "cameraFullscreenRegions"),
+	},
+};
+
+/** How many edit regions the document holds, stored rows and not pills. Pure. */
+export function countEditRegions(document: AxcutDocument): number {
+	return Object.values(EDIT_REGIONS).reduce((sum, kind) => sum + kind.count(document), 0);
+}
+
+/** The document with every edit region gone (see {@link EDIT_REGIONS}). Pure. */
+export function clearEditRegions(document: AxcutDocument): AxcutDocument {
+	return Object.values(EDIT_REGIONS).reduce((doc, kind) => kind.clear(doc), document);
 }
 
 /**

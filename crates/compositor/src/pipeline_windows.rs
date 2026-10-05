@@ -968,6 +968,25 @@ impl Decoder {
         }
     }
 
+    /// `seek_to`, mais une cible au-delà de la dernière image se pose sur cette dernière image au
+    /// lieu de ne rien rendre. L'audio d'un enregistrement dure souvent un peu plus que sa vidéo
+    /// (de 12 ms à près d'une demi-seconde mesurés) : son clip finit alors après la dernière
+    /// image, et y entrer par la fin, en scrubant de droite à gauche, demandait une image qui
+    /// n'existe pas. Le changement de clip échouait sans bruit, et la vue gardait la scène du
+    /// clip qu'on quittait.
+    pub(crate) unsafe fn seek_to_or_last(&mut self, seconds: f64) -> Result<*mut AVFrame> {
+        let frame = self.seek_to(seconds)?;
+        if !frame.is_null() {
+            return Ok(frame);
+        }
+        // Le seek a décodé jusqu'à l'EOF : `cur_pts` est celui de la dernière image. L'EOF a vidé
+        // la frame courante, donc il faut le seek complet : `take` écarte le chemin rapide.
+        match self.cur_pts.take() {
+            Some(last) => self.seek_to(last as f64 * self.tb_sec()),
+            None => Ok(frame),
+        }
+    }
+
     /// Déroule le décodeur en avant jusqu'à la première frame à `seconds` ou après, SANS
     /// jeter son état. Critère d'arrêt identique à celui du seek complet — c'est ce qui
     /// garantit que les deux chemins rendent exactement la même frame.
@@ -1598,16 +1617,20 @@ unsafe fn nv12_to_yuv420p(src: *mut AVFrame, dst: *mut AVFrame) {
 
 /// Résolution/cadence/codec de sortie. `fps: None` = dérivé du 1er clip (comportement
 /// historique) ; `width`/`height` doivent être pairs (NV12 4:2:0) — l'appelant napi arrondit.
+/// `bit_rate` (bits/s) : celui que l'app calcule d'après la taille ET la cadence
+/// (`calculateMp4ExportSettings`) ; `None` = le repli à la surface seule de `run_multi_inner`,
+/// que seuls le banc et les tests empruntent encore.
 pub struct ExportParams {
     pub width: u32,
     pub height: u32,
     pub fps: Option<u32>,
     pub codec: ExportCodec,
+    pub bit_rate: Option<i64>,
 }
 
 impl Default for ExportParams {
     fn default() -> Self {
-        Self { width: OUT_W, height: OUT_H, fps: None, codec: ExportCodec::H264 }
+        Self { width: OUT_W, height: OUT_H, fps: None, codec: ExportCodec::H264, bit_rate: None }
     }
 }
 
@@ -1659,9 +1682,12 @@ unsafe fn run_multi_inner(
     } else {
         make_enc_frames(gpu, out_w as i32, out_h as i32)?
     };
-    // débit proportionnel à la surface de sortie (référence : 8Mbps @ 1920x1080), plancher
-    // 2Mbps pour rester regardable sur les petites tailles.
-    let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
+    // Le débit vient de l'app, qui le calcule d'après la taille ET la cadence. Le repli
+    // (8Mbps @ 1920x1080 quelle que soit la cadence, plancher 2Mbps) ne sert plus qu'au banc et
+    // aux tests : c'est lui qui affamait un export 1080p60, deux fois plus d'images au même débit.
+    let bit_rate = params.bit_rate.unwrap_or_else(|| {
+        ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000)
+    });
     let mut enc = VideoEncoder::open(
         &params.codec,
         out_w as i32,
@@ -2831,6 +2857,29 @@ mod tests {
         println!(
             "CORE_ASSERTIONS_COMPLETED:current_frame_requires_pixels_and_recovers_after_eof_seek"
         );
+    }
+
+    #[test]
+    fn a_seek_past_the_last_frame_can_land_on_it() {
+        let Some(gpu) = strict_hardware_gpu("a_seek_past_the_last_frame_can_land_on_it") else {
+            return;
+        };
+        let path = encode_color(&["-c:v", "libopenh264", "-b:v", "200k"], "last-frame.mp4");
+        let mut dec = unsafe { Decoder::open(path.to_str().expect("utf8 path"), &gpu) }
+            .unwrap_or_else(|e| panic!("H.264 Decoder::open: {e:#}"));
+
+        let frame = unsafe { dec.seek_to_or_last(10.0) }.expect("seek past the end");
+        assert!(!frame.is_null(), "a target past the end must land on the last frame");
+        assert!(!dec.cur_frame().is_null(), "the last frame must be presentable");
+        assert!(
+            unsafe { dec.next() }.expect("decode after the last frame").is_null(),
+            "the frame it landed on must be the last one"
+        );
+        assert!(
+            unsafe { dec.seek_to(10.0) }.expect("plain seek past the end").is_null(),
+            "seek_to itself still reports no frame past the end"
+        );
+        println!("CORE_ASSERTIONS_COMPLETED:a_seek_past_the_last_frame_can_land_on_it");
     }
 
     /// Playhead crossing clips is `Decoder::open` of the next source on the

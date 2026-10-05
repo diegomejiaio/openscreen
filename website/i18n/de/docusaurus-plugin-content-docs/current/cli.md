@@ -135,13 +135,13 @@ openscreen export demo.openscreen -o out.mp4 --auto-zoom --json
 | `--quality <medium\|good\|source>` | Ausgabegröße: `medium` ist 720p, `good` ist 1080p, `source` richtet sich nach dem kleinsten Clip nach dem Zuschnitt und skaliert daher nie hoch. Auch ein GIF geht von dieser Größe aus |
 | `--gif-fps <15\|20\|25\|30>` | Bildrate des GIF |
 | `--gif-size <medium\|large\|original>` | Höhenbegrenzung des GIF, angewendet auf diese Größe: 720, 1080 oder keine |
-| `--auto-zoom` | Vor dem Rendern Zooms an den Stellen hinzufügen, an denen der aufgezeichnete Zeiger innehielt, mit derselben Engine wie die [automatischen Zooms](/features/auto-zoom/) des Editors. Vorhandene Zooms bleiben erhalten, und neue überlappen sie nie |
+| `--auto-zoom` | Vor dem Rendern Zooms auf die aufgezeichneten Klicks setzen, mit derselben Engine wie die [automatischen Zooms](/features/auto-zoom/) des Editors. Vorhandene Zooms bleiben erhalten, und neue halten Abstand zu ihnen |
 | `--audio <file>` | Eine Voice-over-Datei (mp3, wav oder m4a) ins MP4 mischen. Nur MP4 |
 | `--audio-mode <mix\|replace>` | `mix` (Standard) behält den Ton der Aufnahme mit 40 % Pegel unter dem Voice-over; `replace` entfernt ihn |
 | `--audio-offset <seconds>` | Verzögerung, bevor das Voice-over beginnt (Standard 0) |
 | `--json` | NDJSON für Fortschritt und Ergebnis auf stdout |
 
-MP4-Exporte aus der CLI sind immer **H.264 mit 60 fps**. Eine Option für Codec oder Bildrate gibt es nicht. Der [Export](./export.md)-Dialog der Desktop-App bietet zusätzlich H.265 sowie 24 oder 30 fps.
+MP4-Exporte aus der CLI sind immer **H.264 mit 60 fps**. Eine Option für Codec oder Bildrate gibt es nicht. Der [Export](./export.md)-Dialog der Desktop-App bietet zusätzlich 24 oder 30 fps.
 
 `--audio` greift nach dem Rendern: Der Videostream wird unverändert kopiert, und eine neue AAC-Spur wird gemischt und über dieselbe Ausgabedatei geschrieben.
 
@@ -158,7 +158,7 @@ openscreen captions demo.openscreen --min-words 2 --max-words 7
 openscreen export demo.openscreen -o demo.mp4   # captions are burned into the video
 ```
 
-- `--min-words` und `--max-words` legen die Wörter pro Untertitel fest. Standard: 2 und 7.
+- `--min-words` und `--max-words` legen die Wörter pro Untertitel fest. Erlaubt sind jeweils 1 bis 12, wie im Editor. Standard: 2 und 7.
 - Ein erneuter Lauf ersetzt die Untertitel, die der Befehl vorher hinzugefügt hat. Annotationen, die du selbst hinzugefügt hast, bleiben erhalten.
 - Das Bildschirmvideo des Projekts muss eine Audiospur haben, zum Beispiel aus `record --mic`.
 - Untertitel werden in den Export eingebrannt. Eine Ausgabe als Untertiteldatei gibt es nicht. Siehe [Untertitel](./captions.md).
@@ -247,7 +247,7 @@ node -e '
   fs.writeFileSync("demo.openscreen", JSON.stringify(p, null, 2));
 '
 
-# 4. Render, with automatic zooms added where the pointer paused
+# 4. Render, with automatic zooms added on the recorded clicks
 openscreen export demo.openscreen -o demo.mp4 --auto-zoom --json
 ```
 

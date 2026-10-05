@@ -15,15 +15,26 @@ Ce document tranche les décisions que la v1 laissait ouvertes et découpe les P
 
 ### A.1 Ce qui existe
 
-Un zoom porte **une attitude figée** (`rotationPreset` : `iso`, `left`, `right`), animée par
+Un zoom porte **une attitude figée** (`rotationPreset` : `left`, `right`), animée par
 deux effets qui partagent un unique budget d'angle dynamique (`DYNAMIC_TILT_BUDGET`
-= ±1,9° X, ±3,0° Y, 0° Z, `clamp_dynamic_tilt`) :
+= ±1,9° X, ±3° Y, 0° Z, `clamp_dynamic_tilt`) :
 
 - **la parallaxe** (`dynamic_tilt`, PR 1) : pilotée par la **vitesse** lissée du curseur ;
 - **l'impact du clic** (PR 2b) : piloté par la **position** du clic, `regions::tap`.
 
 `rotated_quad_corners_px(w, h, base, dyn)` projette les coins ; l'échelle de containment est
 calculée sur la **base seule** (« échelle gelée »), la part dynamique ne fait que reprojeter.
+
+**L'impact du clic est un réglage du curseur** (`cursor.clickImpact`, « Click impact » dans le
+panneau du curseur, éteint par défaut), pas une option de zoom : il vaut sous **toutes** les
+caméras, dans une région de zoom ou hors d'elle. Chaque caméra le rend à sa façon : l'angle fixe
+bascule du côté cliqué (ci-dessus), la caméra mobile recule l'œil (A.3), et l'écran droit
+**recule** : sa boîte rapetisse autour de son centre de `camera::PRESS` au contact (−3,8 %), sur la
+même courbe `tap()`, puis revient (`frame_geometry::plan_frame`). Pas de bascule depuis l'écran
+droit : elle mettrait des arêtes sur les axes (règle des 2°). Le recul prend le complément de la
+porte des angles fixes (`regions::tilt_gate`) et du poids de la caméra mobile, donc les trois se
+relaient sans saut pendant les transitions. Un document qui portait `clickImpact` sur un zoom
+allume le réglage du curseur à son ouverture (`liftZoomClickImpact`).
 
 ### A.2 Le modèle : une seule liste « caméra 3D »
 
@@ -33,32 +44,46 @@ deuxième fusionnait tout en un sélecteur avec trois caméras mobiles (`follow-
 `swing-clicks`, `orbit`) qui faisaient tourner **l'écran** sur un chemin de poses à roulis
 permanent (5,5 à 8,5°). Rejetées : « pour chacune, le métrage est de travers ». La troisième,
 une caméra pan-tilt-zoom sur un œil fixe, paraissait figée. Il reste **un** champ,
-`rotationPreset`, et **un** sélecteur « 3D camera » : les trois angles fixes et **une** caméra
-mobile, qui tourne autour de l'écran.
+`rotationPreset`, et **un** sélecteur « 3D camera » : **une** caméra mobile, qui tourne autour
+de l'écran, puis les deux angles fixes. La quatrième révision (26/09) donne à la caméra mobile le
+mode de focus de tout zoom : le pointeur en Auto, le point de focus en Manuel (A.3).
 
 | groupe | valeur | libellé (EN) | ce que ça fait |
 |---|---|---|---|
 | — | absent | Off | écran droit |
-| Angle fixe | `iso` | Angled from above | tourné vers la gauche, plongée marquée |
-| Angle fixe | `left` | Turned left | tourné vers la gauche |
-| Angle fixe | `right` | Turned right | tourné vers la droite |
-| Caméra mobile | `follow-cursor` | Orbits with the cursor | l'écran est immobile, une vraie caméra tourne autour de lui avec le curseur |
+| Caméra mobile | `orbit` | 3D Orbit | l'écran est immobile, une vraie caméra tourne autour de lui : avec le curseur en focus auto, posée par le point de focus en manuel |
+| Angle fixe | `left` | Screen turned left | tourné vers la gauche, vu d'en haut |
+| Angle fixe | `right` | Screen turned right | tourné vers la droite, vu d'en haut |
 
-`swing-clicks` et `orbit` sont retirés (jamais livrés). La caméra mobile qui reste est l'orbite
-ci-dessous, sous l'identifiant `follow-cursor`. Un projet qui les porte encore s'ouvre à plat
-(valeur inconnue).
+`swing-clicks` est retiré (jamais livré) : un projet qui le porte s'ouvre à plat (valeur
+inconnue). L'identifiant `orbit` d'une caméra retirée, jamais livrée non plus, nomme désormais
+l'orbite ci-dessous. Elle s'appelait `follow-cursor` (v1.13.0) quand elle suivait le curseur quel
+que soit le mode de focus : un zoom stocké ainsi se lit comme `orbit` en focus auto
+(`readFollowCursorAsAutoOrbit`), et rend comme avant.
 
-Les trois angles fixes gardent leurs valeurs et leur rendu **à l'octet** (vérifié contre le
-commit de base : présets, cadre, flou de confidentialité, profondeur de champ, parallaxe, impact
-du clic, flèche modélisée), avec la parallaxe de vitesse et l'impact du clic.
+`left` est l'`iso` de la v1.13.0, à l'identique : [−12, −18, −2], tourné vers la gauche et vu
+d'en haut, dessiné comme alors au warp **bilinéaire** de ses coins. `right` en est le miroir,
+[−12, 18, 2] (`regions::rotation3d_for`). `iso` n'est plus proposé, et un projet qui le porte se
+lit comme `left` (`readRotation3DPreset` et le schéma du document) : il rend exactement comme
+avant. Le budget dynamique (±1,9° / ±3°), la porte de la parallaxe et l'impact du clic sont
+ceux de la v1.13.0.
 
-« Turned right » veut dire que la face de l'écran regarde vers la droite : le bord droit
-recule. C'est ce que fait `right` [−8, 16, 1] depuis toujours.
+Un essai du 25/09 (sans roulis, warp projectif, puis [−23, ±25, 0]) a été retiré : il n'avait
+plus rien de l'ancien `iso`.
 
-### A.3 `follow-cursor` : une caméra en orbite
+« Screen turned right » veut dire que la face de l'écran regarde vers la droite : le bord droit
+recule. C'est ce que fait `right` [−12, 18, 2], vu d'en haut.
+
+### A.3 `orbit` : une caméra en orbite
 
 `crates/compositor/src/camera.rs`. **L'écran ne bouge pas** : c'est le plan z = 0 du monde, en
 px de sa boîte. **L'œil tourne autour de lui** sur une sphère et regarde toujours son point visé.
+
+**Le point qui la pose** : le mode de focus du zoom le choisit. En Auto, le pointeur lissé du
+cadreur (`camera::follow`, plus bas). En Manuel, le point de focus de la région, fixe
+(`camera::fixed`), comme un pointeur garé là : l'œil sur l'orbite de ce point, la visée bornée à
+la portée du zoom. Au centre, la caméra est presque de face (0° d'azimut, 4° d'élévation). Le
+manuel n'a pas besoin de piste : curseur masqué, la caméra reste posée.
 
 **Pourquoi une orbite.** La version précédente (pan-tilt-zoom : œil fixe, objectif de 12°, la
 caméra pivotait sur place) a été jugée « encore plus figée ». Depuis un œil fixe, tourner la caméra
@@ -84,9 +109,15 @@ ne se lit que si l'œil se déplace autour de l'écran.
   la boîte et du poids : un par région, l'écran ne respire pas. 16:9 : 0,83 (centré) au lieu de 0,77
   (sans centrage) ; au plus près, l'écran passe à 0,7 px du bord de sa boîte. Au repos, il en occupe
   85 % × 83 %.
-- **Cadrage au zoom** : le centrage et le containment s'effacent linéairement jusqu'au zoom 2. Au
-  delà, le point visé tombe au centre de l'image, grossi exactement du zoom. Le point visé reste dans
-  `0,5 ± max(0, 0,5 − 0,55/max(zoom, 1))`, comme avant : au centre au zoom 1.
+- **Cadrage au zoom** : le containment s'efface linéairement jusqu'au zoom 2 ; au-delà, l'écran est
+  grossi exactement du zoom. Le point visé va aussi loin que le focus d'un zoom à plat (le
+  gimbal) : `0,5 ± max(0, 0,5 − 0,5/max(zoom, 1))`, au centre au zoom 1. La vue atteint donc le bord
+  de l'écran et le padding montre ce qu'il y a au-delà, comme sous les autres caméras. La caméra
+  cadre la fenêtre du zoom (le centrage du zoom 1 appliqué à elle) comme un zoom à plat
+  (`camera::frame_window`) : centrée à mi-course, et en butée son bord au bord de l'image, car vu
+  de biais le côté proche grandit et viser le centre de la fenêtre le pousserait dehors. Dès le
+  zoom 2, le coin de l'écran tombe au coin de l'image, même sans padding (27/09 ; avant, une marge
+  de 10 % gardait la vue dans l'écran et cachait ses coins).
 - **Force 0** = le rendu plat, par le même chemin (mode 0).
 
 **Le cadreur** (`camera::follow`), pure fonction de `t`, sans zone morte : le pointeur, lu dans
@@ -103,12 +134,13 @@ impulsionnelle d'un ressort critique, `h(τ) = ω²·τ·e^(−ωτ)`, ω = 5 ra
 - Sur la vidéo de revue (8 s, zoom 1 puis 1,8) : azimut de −16° à +15°, élévation de −5° à +14°,
   au plus 1,8° d'azimut et 68 px de déplacement du centre par image à 30 i/s.
 
-Sans piste (curseur masqué : l'export ne la charge pas), la caméra vise le centre, au repos.
+En focus auto, curseur masqué, la caméra n'a pas de piste : elle vise le centre, au repos.
 
 **Ce qui suit la caméra** : l'écran (mode 8), son ombre (mode 12), le cadre de fenêtre (mode 14),
 le curseur plat (mode 13) et modélisé (mode 15), le flou de confidentialité (mode 10) et la
-profondeur de champ. La mise au point suit le **pointeur lissé**, pas le point visé : celui-ci reste
-au centre au zoom 1 et bute sur sa portée au zoom, alors que le spectateur regarde le pointeur.
+profondeur de champ. La mise au point suit le point qui pose l'œil (le **pointeur lissé** en auto,
+le point de focus en manuel), pas le point visé : celui-ci reste au centre au zoom 1 et bute sur
+sa portée au zoom, alors que le spectateur regarde le pointeur.
 L'ombre de l'écran tombe le long de la lumière de la flèche modélisée (haut-gauche). Une lampe posée
 sur la caméra éclaire un peu plus le côté proche : gain 0,2, soit ±4 % d'un bord à l'autre à 22°
 d'azimut (`CAMERA_LIGHT_GAIN`, 0,5 donnait ±10 % avec l'œil en orbite).
@@ -116,14 +148,14 @@ d'azimut (`CAMERA_LIGHT_GAIN`, 0,5 donnait ±10 % avec l'œil en orbite).
 **Impact du clic** : l'écran reste immobile, c'est **l'œil qui recule** de 4 % de sa distance au
 contact, sur la courbe `tap()` de l'impact des angles fixes (mêmes clics, mêmes portes : fenêtre du
 clip, clic visible, masque, vitesse, opacité du curseur), puis revient avec un léger rebond. Sur la
-vidéo, l'écran perd 2 à 3 % de taille pendant deux images : un tapotement, pas un saut. Le panneau
-l'active sous cette caméra, avec sa propre description.
+vidéo, l'écran perd 2 à 3 % de taille pendant deux images : un tapotement, pas un saut. C'est le
+réglage « Click impact » du curseur, le même sous toutes les caméras (A.1).
 
-Chaînée à un angle fixe, une région `follow-cursor` ne mélange jamais les deux modèles : la
-transition passe par l'écran droit à mi-course. Entre deux régions `follow-cursor`, le cadreur ne
+Chaînée à un angle fixe, une région `orbit` ne mélange jamais les deux modèles : la
+transition passe par l'écran droit à mi-course. Entre deux orbites en focus auto, le cadreur ne
 dépend pas de la région : l'orbite continue sans à-coup pendant que le zoom change.
 
-**Rendu exact.** Le warp bilinéaire des angles fixes s'écarte de la projection de cette caméra de
+**Rendu exact.** Le warp bilinéaire s'écarte de la projection de cette caméra de
 plusieurs centaines de px au pire pixel visible (703 px sur l'enveloppe, 264 px sur la grille
 rendue). Les modes 8, 10, 13 et 14 prennent donc un warp
 **projectif** exact sous cette caméra : l'homographie des quatre coins (forme de Heckbert) résolue à
@@ -162,8 +194,14 @@ lointain.
 - **`swing-clicks`** : à refaire sur `camera.rs`, l'orbite en donne la mécanique.
 - **`dolly`** (vertigo) : la distance de l'œil par frame, que `TiltedQuad::perspective` sait
   déjà transporter.
-- **Flou de mouvement sous la caméra** : le mode 8 n'en a pas. Le lissage borne le mouvement (voir
-  les mesures ci-dessus), sans limite de vitesse explicite.
+- **Flou de mouvement de la visée** : l'écran incliné a le flou de l'écran droit, borné à une frame,
+  vers le plan d'une frame plus tôt (boîte du zoom, rotation de base, caméra réelle d'avant ;
+  `FrameGeometry::tilt_trail`). Comme à plat, l'écran CADRÉ file en bloc : ombre, cadre, métrage et
+  appareil passent par le rendu isolé du mode 18, qui interpole les coins du plan et suit son warp,
+  bilinéaire ou projectif comme au mode 8 (`screen_trail_cb`). Seul un masque de bloc garde le flou
+  par pixel du mode 8
+  (`tilt_pixel_trail`, `LayerCB::trail_*`). La parallaxe et l'impact n'y entrent pas, comme le
+  focus au mode 0. Un masque de confidentialité couvre alors le secret aux deux frames.
 - **Lumière du curseur modélisé** : elle reste fixée à la caméra ; l'œil en orbite la déplace avec
   lui. À fixer au monde avec le propriétaire du mode 15.
 
@@ -172,7 +210,7 @@ lointain.
 Le natif porte la preview **et** l'export (`sceneDescription` → `scene.rs`). Le seul autre
 consommateur de l'attitude est `getRotation3D` (`types.ts`), lu par
 `computeRotation3DContainScale` via `zoomRegionUtils` — la preview CSS (`VirtualPreview.tsx`) ne
-porte **aucun** tilt. Pour `follow-cursor`, `getRotation3D` rend la pose de repos de l'orbite
+porte **aucun** tilt. Pour `orbit`, `getRotation3D` rend la pose de repos de l'orbite
 (X = −4° : caméra 4° au-dessus, le bord haut vient vers nous) : le chemin canvas n'a ni la piste ni
 la caméra.
 
@@ -194,24 +232,24 @@ inconnues sont ignorées).
 
 ### B.2 Le réglage
 
-**Un seul interrupteur**, `cursor.model3d` (« 3D cursor », **éteint par défaut**) : il remplace
-**chaque état** du thème par défaut (les seize de `DEFAULT_CURSOR_SPRITES` : flèche, I, main,
-croix, mains ouverte et fermée, redimensionnements, déplacement, interdit, attente…) par son
-sprite extrudé. Les autres thèmes gardent leur sprite plat ; l'indice du panneau le dit
-(« Default style: every cursor shape turns 3D »). Curseur masqué, l'interrupteur est grisé et
-son info-bulle dit pourquoi. Éteint, la frame est celle d'avant **à l'octet** (vérifié à plat et
-incliné contre le commit de base).
+**Un seul interrupteur**, `cursor.model3d` (« 3D cursor », **éteint par défaut**) : il passe
+**chaque état** du curseur en 3D. La flèche et la main des cinq thèmes d'origine deviennent
+leur modèle (B.3 bis) ; les autres états, et tous ceux du thème par défaut (les seize de `DEFAULT_CURSOR_SPRITES` : flèche, I, main, croix, mains
+ouverte et fermée, redimensionnements, déplacement, interdit, attente…), leur sprite extrudé.
+Curseur masqué, l'interrupteur est grisé et son info-bulle dit pourquoi. Éteint, la frame est
+celle d'avant **à l'octet** (vérifié à plat et incliné contre le commit de base).
 
 Tuyauterie : `CursorVisualSettings.model3d`, clé legacy `cursorModel3d`, préréglages (absent →
 éteint), `SceneCursor.model3d` (`serde(default)`), `LiveParams.cursor_model3d`, paramètre live
-`cursorModel3d`. Le contrat de scène ne gagne que ce champ optionnel, sans donnée de sprite
-neuve : le modèle se tire du sprite que la scène transporte déjà.
+`cursorModel3d`. Le contrat de scène gagne ce champ optionnel et, par sprite, le nom de son
+modèle sculpté (`SceneCursorSprite::sculpt`, `"<thème>/<état>"`, posé par `resolveCursorSprites`) ;
+un sprite sans ce nom est extrudé.
 
 ### B.3 Le modèle (mode 15)
 
 Un seul mode de shader, identique en HLSL, MSL et WGSL (`cursor_model`), lancé de rayons par
-pixel dans la boîte de dessin. **Aucune forme n'est modélisée à la main** : le modèle est la
-silhouette du sprite de l'état courant.
+pixel dans la boîte de dessin. Deux sortes de modèles : le curseur sculpté d'un thème d'origine
+(B.3 bis), sinon la silhouette du sprite de l'état courant, extrudée comme suit.
 
 - **Forme** : un champ de distance signé tiré de l'alpha du PNG, une fois au chargement
   (`cursor_sdf.rs`) : alpha suréchantillonné ×4 (bilinéaire), seuil 0,5, transformée de
@@ -230,8 +268,8 @@ silhouette du sprite de l'état courant.
 - **Matières** : celles du sprite. Le dessus porte son art (alpha droit, comme aux modes 7 et 13) ;
   le chanfrein, les flancs et le dessous lisent l'art à 1,5 texel à l'intérieur de la silhouette,
   le long du gradient du champ : la couleur du bord de CE sprite (filet blanc de la flèche, trait
-  noir des mains), jamais la frange mêlée au transparent. Lumière fixée à la **caméra**
-  (haut-gauche, devant), ambiante 0,36, diffuse 0,75, reflet sur les arrondis seulement.
+  noir des mains), jamais la frange mêlée au transparent. Éclairage : celui des curseurs sculptés
+  (B.3 bis), le reflet restant sur les arrondis.
 - **Ombre** : un rayon qui rate le modèle tombe sur le plan de l'écran. De là, marche vers la
   lumière (pénombre `k·d/t`, k = 6, bornée à 0,45 unité) et ombre de contact (0,12 unité autour
   du modèle). Opacité 0,5 chacune, et seulement à l'intérieur de l'écran.
@@ -245,6 +283,47 @@ polygone à 10 sommets était trop courte et trop droite). Sur les seize sprites
 coïncide avec l'alpha seuillé (IoU ≥ 0,9997 hors frange) ; sur un disque et un rectangle
 synthétiques, l'écart au champ exact reste sous 0,5 texel source dans la bande de 3 texels autour
 du bord (0,48 au pire), sous 1 texel au-delà (le flou arrondit les crêtes).
+
+### B.3 bis Les curseurs sculptés
+
+La flèche et la main des thèmes d'origine sont **modélisées à la main**, en fonctions de
+distance signée écrites dans les trois shaders (`sculpt_proto`, `sculpt_material`) : voxels
+pour Pixel Candy ; pour Studio Ink et Star Sprout des pièces qui gardent le trait de
+leur dessin : un plateau et un jonc de la couleur du trait, un coussin de couleur dedans
+(`s_rimmed`) ; pour Pop Coral les mêmes formes en papier découpé, des feuilles au dessus plat
+(`s_paper`). Prism Glow est à part : un **cristal en maillage**, ses facettes tracées sur son
+seul dessin 2D (`design/cursors/prism-glow/model/`), serti dans sa silhouette extrudée, marine.
+Le shader le lance de rayons, triangles rangés par boîtes englobantes (un rayon saute les
+boîtes qu'il rate) : réfraction par canal (une légère dispersion), réflexions totales internes,
+et sortie par son fond plat sur l'image sous le curseur ; chaque facette luit un peu de sa
+couleur du dessin, ses plis d'un liseré clair. Cette image est une copie de la frame composée
+prise juste avant le curseur : le métrage, puis ses flous de confidentialité, puis le curseur,
+net par-dessus. Seuls des pixels déjà floutés passent donc à travers le verre.
+`export_compositor.py` écrit le maillage dans `prism_mesh.rs` et dans les trois shaders. Le PNG
+du thème reste l'art en 2D. En 3D, la scène nomme le modèle ; `sculpt.rs` en tient la boîte, qui
+pose le hotspot (pointe de la flèche, bout de l'index), règle la garde au sol et borne la boîte
+de dessin. Emplacement du cbuffer : `trail_a` = [modèle, épaisseur sous z = 0, hauteur
+au-dessus, 0] (`cursor_model_cb`).
+Pixel Candy est un pixel art dessiné une fois, en grille, dans
+`scripts/generate-pixel-candy-voxels.mjs` : le script en tire ses PNG 2D et les tables des trois
+shaders, un cube par pixel plein, tous de même hauteur, colorés comme leur pixel (contour prune,
+rose, reflet rose pâle, ombre rose foncé).
+
+- **Éclairage**, sprites extrudés compris : une lampe proche en haut à gauche, qui met un dégradé
+  et un reflet même sur une face plane ; une lumière d'appoint faible ; le côté ombré teinté par
+  la matière ; occlusion ambiante, ombre propre douce vers la lampe, studio dans les reflets,
+  liseré de Fresnel ; tone map Khronos PBR Neutral.
+- **Ombre sur l'écran** : celle de B.3. Les voxels donnent de mauvaises distances loin de leur
+  surface (champ de grille) : l'ombre de Pixel Candy vient de sa forme extrudée.
+- **Antialiasing** : la silhouette l'est par la marche (la distance minimale frôlée, en pixels,
+  donne la couverture). Les bords intérieurs (deux matières, une arête, un arrondi serré, un
+  joint de voxels) sont suréchantillonnés : quatre sondes à un demi-pixel du point touché, dans
+  son plan tangent, et si la matière change ou que la surface s'en écarte, trois rayons de plus
+  dans le pixel, ombrés avec l'occlusion et les ombres du premier (`STAGE_EDGE`, `STAGE_SHADE`).
+  Sur un grand curseur, ~+50 % du coût du curseur (rendu logiciel), rien ailleurs.
+- **Coût de compilation** : FXC recopie chaque appel. La marche, les normales, l'occlusion et les
+  ombres forment donc une seule boucle à étapes avec un seul appel au modèle, et les thèmes
+  cerclés un seul appel pour leurs deux formes.
 
 ### B.4 La caméra et l'ancrage
 
@@ -267,15 +346,25 @@ Deux décisions :
 
 `cursor_pose`, puis la part « pointeur » du sprite :
 
-- **Hauteur** : 0,35 unité de garde au repos. Chaque clic le pose **au contact** avec la courbe
-  `tap()`, celle de l'impact du clic, dont le creux (49,5 ms) est celui de la pression de
-  `bounce()`. Gain 1,25 : posé de 27 à 74 ms, donc au moins une image au contact jusqu'à
-  21 i/s. Tous les états.
-- **Tangage** : queue relevée, pointe vers le bas, 18° au repos, jusqu'à +10° au creux de la
-  pression, fois `clickBounce / 2,5`.
+- **Hauteur** : 0,35 unité de garde au repos. Chaque clic est une **plongée** en vraie
+  profondeur (`click_height`), sur 720 ms, une vingtaine d'images à 30 i/s : **élan** de 0,4
+  unité au-dessus de la garde dès 300 ms avant le clic, **plongée** qui accélère en 120 ms
+  jusqu'à toucher le plan **au clic même**, **appui** 80 ms (il enjambe l'instant du contact
+  que lisent le plan, `bounce()` et l'impact : 49,5 ms), **remontée** 0,15 au-dessus de la
+  garde, puis repos. L'ombre s'écarte pendant l'élan et revient sous la pointe au contact ; la
+  perspective grossit un peu la flèche en haut. Tous les états.
+- **Le niveau `clickBounce` règle le geste**, comme le rebond d'échelle en 2D. « Light » (1, le
+  défaut) : ci-dessus. « Strong » (2) : moitié plus d'élan, plongée en 96 ms, deux fois plus de
+  tangage et de rebond. « None » : le modèle ne bouge pas au clic. Deux clics proches se
+  partagent le geste, l'appui l'emportant sur l'élan : un double clic reste posé entre les deux.
+  Retour produit du 27/09/2026 : l'ancienne descente, en `tap()`, tenait entre deux images et
+  ne faisait que pivoter.
+- **Tangage** : queue relevée, pointe vers le bas, 18° au repos. Il suit la hauteur : relevé
+  pendant l'élan (−5° par 0,4 d'élan), plongé vers la cible en descendant, jusqu'à +8° par
+  niveau au contact.
 - **Lacet** : vers la vitesse horizontale lissée (`follow_at`, différence centrée sur ±100 ms),
-  et vers la cible d'un clic dans les 300 ms qui le précèdent. Borné en douceur à ±25°
-  (`tanh`), nul au repos, continu en `t`.
+  et vers la cible d'un clic dans les 300 ms qui le précèdent (pas à « None », où le clic ne
+  fait rien bouger). Borné en douceur à ±25° (`tanh`), nul au repos, continu en `t`.
 - **Part « pointeur »** (`pointing_factor`), tirée du seul hotspot, sans table par état :
   distance du hotspot au centre du sprite rapportée au demi-côté (norme max), `smoothstep` de
   0,3 à 0,75. Tangage et lacet en sont multipliés. Flèche (0,83), main qui pointe, aide,
@@ -289,12 +378,10 @@ Deux décisions :
   repos, au plan au contact, jamais dessous. Mesuré sur huit états, à plat et iso : 0 pour les
   états centrés (face du dessous au sol), +1,6 à +1,8 % d'unité pour les pointeurs (le chanfrein
   arrondit le coin qui touche), sous le seuil testé de 2 %.
-- **Pas de rebond d'échelle** en 3D : le contact le remplace.
-- **Écrasement** : sur la même courbe `tap()`, l'épaisseur descend à 70 % au creux, puis le
-  rebond l'épaissit un instant (104,8 % à 165 ms). Fois `clickBounce / 2,5`, jamais sous 55 %
-  (deux chanfreins et un peu de flanc). Le dessus descend, le point le plus bas reste posé, le
-  hotspot reste sur son pixel. L'empreinte, elle, ne change pas : un étalement de 5 % défaisait
-  l'égalité « curseur centré posé = son sprite » de B.3.
+- **Ni rebond d'échelle ni écrasement** en 3D : la plongée les remplace, en vrai relief.
+  L'écrasement de l'épaisseur au contact a été retiré le 27/09/2026 : il aplatissait le volume
+  (les shaders reçoivent toujours 1 en `color.b`). L'empreinte ne change pas, d'où l'égalité
+  « curseur centré posé = son sprite » de B.3.
 
 ### B.5.1 Le contact tombe sur le pixel cliqué
 
@@ -344,7 +431,7 @@ cliqué brut :
 `tap()`, `bounce()` et de l'impact du plan) et dure 400 ms. À 30 i/s, la première image du
 contact (33 ms) montre le curseur posé, la suivante (67 ms) l'anneau naissant.
 **Taille** : le carré a un demi-côté de 0,7 taille de curseur (l'anneau finit donc à 0,56
-taille, ~40 px pour un curseur de taille 4 en 720p). **Réglage** : `clickBounce / 2,5`
+taille, ~40 px pour un curseur de taille 4 en 720p). **Réglage** : `clickBounce`
 multiplie les opacités (plafond 1) et règle la taille (`0,75 + 0,25 × force`) ; 0 = rien.
 Seulement quand `model3d` est allumé (un curseur sans modèle n'a pas de contact).
 
@@ -376,7 +463,7 @@ de la pastille ; plus rien après sa fenêtre.
   dans les mêmes conditions. Une lecture de texture coûte moins que les dix arêtes du polygone.
 - **Mémoire** : un champ par sprite chargé, sans éviction ; les seize sprites du thème pèsent
   ~2,6 Mo de R16F.
-- **`LayerCB`** reste à 128 octets ; l'emploi des emplacements aux modes 15 et 16 est documenté
+- **`LayerCB`** fait 176 octets (les trois derniers vec4 portent la traînée du mode 8) ; l'emploi des emplacements aux modes 15 et 16 est documenté
   en tête des sections « Curseur modélisé » et « Impact du clic » de `frame_geometry.rs` et dans
   les trois structs de shader.
 - **Traînée au contact** : elle lit la position convergée (B.5.1), donc se replie sur une seule
@@ -384,8 +471,7 @@ de la pastille ; plus rien après sa fenêtre.
 
 ### B.7 Limites
 
-- Seul le thème par défaut est modélisé ; les thèmes sweezy (art de 128 px, bords non
-  détourés) restent plats.
+- Seul le thème par défaut est modélisé ; un thème de curseur ajouté plus tard resterait plat.
 - Un pointeur basculé montre le flanc de sa queue, de la couleur de son bord : la main qui
   pointe gagne un liseré noir au bas de la paume. C'est la 3D, pas un défaut.
 - Un dessus plat (curseur centré) reçoit 0,88 de la lumière : son blanc sort gris clair (226),
@@ -423,7 +509,7 @@ C'est le cadre qui s'adapte au métrage — jamais l'inverse : un téléphone au
 est un téléphone COUCHÉ, avec son œil de caméra sur le bord qui est devenu son haut.
 
 **Roundness sous un cadre.** Le slider parcourt 0 → le plafond du cadre choisi (C.5) et se lit
-en **%** de cette course, avec l'infobulle « La course s'adapte au cadre » (`roundnessFrameHelp`,
+en **%** de cette course, avec l'infobulle « La course dépend du cadre » (`roundnessFrameHelp`,
 15 langues). La valeur stockée reste en px ; le natif en relit la position (`roundnessFrac` ×
 petit côté de la sortie ÷ `ROUNDNESS_SLIDER_MAX_PX` = 64, miroir de `paramUnits.ts`). Sans cadre,
 le slider reste en px et le rendu est celui d'avant, à l'octet.
@@ -435,19 +521,29 @@ lisent encore, et se dédoublent en `window` + le thème qu'ils nommaient : côt
 un projet écrit par une version antérieure s'ouvre avec le cadre ET le thème qu'il avait, et une
 valeur qu'aucune de ces deux familles ne connaît se lit « aucun cadre » des deux côtés.
 
-### C.2 Le métrage ne bouge pas
+### C.2 Le compositeur ne touche pas au métrage, le layout fait place au cadre
 
-**Le métrage a la même boîte et la même coupe avec et sans cadre**, quel qu'il soit. Son rayon, lui,
-suit la course de Roundness propre au cadre (C.5).
-Le cadre pousse vers l'EXTÉRIEUR : dans le padding, et au-delà du canevas s'il le faut, où la sortie
-le coupe. Il n'y a plus de `fit_in_window_frame` ni de `fit_in_device_frame` : rétrécir l'image
-pour loger un objet décoratif, c'était l'inverse de ce qu'on veut. Tout ce qui s'ancre sur `s_dst`
-— ombre de l'écran, masques de confidentialité, annotations, curseurs — n'a donc rien à rattraper,
-et l'overlay de l'éditeur pose ses poignées sur `layout.screenRect` tel quel (le portage TS
-`fitInWindowFrame` a disparu avec lui).
+**Le compositeur donne au métrage la même boîte et la même coupe avec et sans cadre**, quel qu'il
+soit. Son rayon, lui, suit la course de Roundness propre au cadre (C.5). Le cadre pousse vers
+l'EXTÉRIEUR de la boîte qu'il reçoit : il n'y a plus de `fit_in_window_frame` ni de
+`fit_in_device_frame`. Tout ce qui s'ancre sur `s_dst` (ombre de l'écran, masques de
+confidentialité, annotations, curseurs) n'a donc rien à rattraper, et l'overlay de l'éditeur pose
+ses poignées sur `layout.screenRect` tel quel.
 
-Épinglé par `the_footage_box_is_the_same_under_every_frame` (chaque cadre × plat, iso, orbite ×
-zoom 1 et 2, au bit près) et `a_framed_privacy_mask_covers_what_the_overlay_shows`.
+**C'est le layout de l'app qui fait place au cadre, dans tous les layouts** (27/09/2026). Le padding
+se mesure depuis le bord extérieur de tout ce que le cadre dessine : barre de fenêtre, socle du
+portable, pied du moniteur (`centerScreen`, `compositeLayout.ts`). L'ensemble tient dans la zone
+paddée et c'est lui qui est centré. Avant, le cadre débordait dans le padding et au-delà du canevas :
+à padding 0 aucun cadre n'était visible, au padding par défaut le pied du moniteur était coupé à
+moitié, et un cadre asymétrique décentrait l'ensemble (moniteur 96 px trop bas en 1080p). Le prix est
+assumé : sous un cadre, le métrage est plus petit (clip 16:9 en sortie 16:9 : −4 % sous la fenêtre
+et le téléphone, −17 % sous le portable, −21 % sous le moniteur). Auto épouse l'appareil de la même
+façon (`autoFormatAspect`).
+
+Épinglé côté compositeur par `the_footage_box_is_the_same_under_every_frame` (chaque cadre × plat,
+iso, orbite × zoom 1 et 2, au bit près) et `a_framed_privacy_mask_covers_what_the_overlay_shows` ;
+côté layout par les tests « the whole frame fits and centres » et « even border around every
+frame » de `compositeLayout.test.ts`.
 
 ### C.2 bis L'unité du cadre
 
@@ -682,8 +778,8 @@ dans la boîte de dessin.
 - **Emplacements du cbuffer** : en tête de `device_frame_cb` (`frame_geometry.rs`), qui fait foi.
   `radius_px` / `color.b` = rayons des coins hauts / bas, concentriques, calculés côté Rust ;
   `dst_prev` = (angle du socle, rayon de l'ouverture, recouvrement, pénombre de l'ombre). Le plan
-  proche n'a pas d'emplacement : les shaders le tirent de `src.z / src.w` et de `mb.xy`. `LayerCB`
-  reste à 128 octets.
+  proche n'a pas d'emplacement : les shaders le tirent de `src.z / src.w` et de `mb.xy`.
+  (`LayerCB` n'y gagne rien.)
 
 ### C.8 Limites
 

@@ -8,6 +8,8 @@ export type NativeMacRecordingRequest = {
 	recordingId?: number;
 	/** Main-process injected native BrowserWindow IDs excluded from display capture. */
 	excludedWindowIds?: number[];
+	/** Display captures: leave Finder's desktop icons out. Notifications are always left out. */
+	hideDesktopIcons?: boolean;
 	source: {
 		type: NativeMacSourceType;
 		sourceId: string;
@@ -64,6 +66,8 @@ export type NativeMacHelperRecordingStartedEvent = {
 export type NativeMacHelperRecordingStoppedEvent = {
 	event: "recording-stopped";
 	screenPath: string;
+	/** Frames the writer was not ready for or refused. Absent from helpers built before #937. */
+	droppedVideoFrames?: number;
 };
 
 export type NativeMacHelperWarningEvent = {
@@ -92,6 +96,8 @@ export type NativeMacRecordingStartResult = {
 	helperPath?: string;
 	/** The helper could not resolve the selected device and is using the system default. */
 	microphoneDefaulted?: boolean;
+	/** The microphone was asked for, but this macOS cannot capture it: the take has no voice. */
+	microphoneUnavailable?: boolean;
 	error?: string;
 };
 

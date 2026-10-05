@@ -12,6 +12,7 @@ import {
 	type AiEditionLlmDisconnectResult,
 	type AiEditionLlmProviderModelsResult,
 	type AiEditionLlmSnapshot,
+	type AiEditionMcpStatus,
 	type AiEditionProjectSummary,
 	type CursorCapabilities,
 	type CursorRecordingData,
@@ -256,6 +257,34 @@ export const nativeBridgeClient = {
 				action: "llm.listProviderModels",
 				payload: { providerId },
 			}),
+		mcpGetStatus: () =>
+			requireNativeBridgeData<AiEditionMcpStatus>({
+				domain: "aiEdition",
+				action: "mcp.getStatus",
+			}),
+		mcpSetEnabled: (enabled: boolean) =>
+			requireNativeBridgeData<AiEditionMcpStatus>({
+				domain: "aiEdition",
+				action: "mcp.setEnabled",
+				payload: { enabled },
+			}),
+		mcpSetPort: (port: number) =>
+			requireNativeBridgeData<AiEditionMcpStatus>({
+				domain: "aiEdition",
+				action: "mcp.setPort",
+				payload: { port },
+			}),
+		mcpSetAllowEdits: (allowEdits: boolean) =>
+			requireNativeBridgeData<AiEditionMcpStatus>({
+				domain: "aiEdition",
+				action: "mcp.setAllowEdits",
+				payload: { allowEdits },
+			}),
+		mcpRegenerateToken: () =>
+			requireNativeBridgeData<AiEditionMcpStatus>({
+				domain: "aiEdition",
+				action: "mcp.regenerateToken",
+			}),
 		chatRun: (
 			projectId: string,
 			sessionId: string,
@@ -377,6 +406,12 @@ export const nativeBridgeClient = {
 			requireNativeBridgeData<StylePresetDeleteResult>({
 				domain: "presets",
 				action: "delete",
+				payload: { id },
+			}),
+		setForNewProjects: (id: string | null) =>
+			requireNativeBridgeData<{ success: true }>({
+				domain: "presets",
+				action: "setForNewProjects",
 				payload: { id },
 			}),
 		reveal: (id: string) =>

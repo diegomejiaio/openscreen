@@ -1,15 +1,20 @@
 {
 	"tooltips": {
 		"hideHUD": "Ocultar HUD",
+		"hideHUDTip": "Ocultar la barra. Vuelve a mostrarla desde el icono de la bandeja del sistema.",
 		"closeApp": "Cerrar aplicación",
-		"restartRecording": "Reiniciar grabación",
-		"cancelRecording": "Cancelar grabación",
+		"restartRecording": "Eliminar esta grabación y empezar una nueva",
+		"cancelRecording": "Detener y eliminar esta grabación",
 		"pauseRecording": "Pausar grabación",
 		"resumeRecording": "Reanudar grabación",
 		"useVerticalTray": "Usar bandeja vertical",
 		"useHorizontalTray": "Usar bandeja horizontal",
-		"openStudio": "Abrir Studio",
-		"openNotes": "Abrir notas",
+		"changeSource": "Elegir otra pantalla o ventana",
+		"systemAudio": "Audio del sistema: graba el sonido que reproduce tu equipo",
+		"microphone": "Micrófono: graba tu voz",
+		"camera": "Cámara: te graba en una capa aparte que puedes mover en el editor",
+		"openStudio": "Abrir Studio: el editor de tus grabaciones",
+		"openNotes": "Abrir notas: texto para leer mientras grabas",
 		"openNotesPlaceholder": "Escribe tus notas aquí...",
 		"notesToolbar": {
 			"bold": "Negrita",
@@ -27,34 +32,30 @@
 			"fontSize": "Tamaño de fuente",
 			"decreaseFontSize": "Reducir tamaño de fuente",
 			"increaseFontSize": "Aumentar tamaño de fuente",
-			"mirror": "Reflejar horizontalmente"
+			"mirror": "Reflejar horizontalmente",
+			"mirrorTip": "Refleja el texto para poder leerlo en un espejo"
 		}
 	},
 	"audio": {
-		"enableSystemAudio": "Activar audio del sistema",
-		"disableSystemAudio": "Desactivar audio del sistema",
-		"enableMicrophone": "Activar micrófono",
-		"disableMicrophone": "Desactivar micrófono",
-		"defaultMicrophone": "Micrófono predeterminado",
 		"systemAudio": "Audio del sistema",
 		"microphone": "Micrófono",
-		"on": "Activado",
-		"off": "Desactivado",
 		"inputDevice": "Dispositivo de entrada"
 	},
 	"webcam": {
-		"enableWebcam": "Activar cámara web",
-		"disableWebcam": "Desactivar cámara web",
-		"defaultCamera": "Cámara predeterminada",
 		"searching": "Buscando...",
 		"noneFound": "No se encontró cámara",
 		"unavailable": "Cámara no disponible",
 		"camera": "Cámara",
-		"cameraDevice": "Dispositivo de cámara"
+		"cameraDevice": "Dispositivo de cámara",
+		"quality": "Calidad de la cámara",
+		"quality1080p": "1080p",
+		"quality1440p": "1440p",
+		"quality2160p": "4K"
 	},
 	"cursor": {
-		"useEditableCursor": "Usar cursor editable",
-		"useSystemCursor": "Usar cursor del sistema"
+		"name": "Cursor editable",
+		"editableTip": "Cursor editable: se graba por separado, así puedes cambiar su estilo y usar el zoom automático en el editor",
+		"systemTip": "Cursor del sistema: tu cursor real, grabado en el video. Sin cambios de estilo ni zoom automático."
 	},
 	"sourceSelector": {
 		"loading": "Cargando fuentes...",
@@ -68,10 +69,12 @@
 	"recording": {
 		"selectSource": "Por favor selecciona una fuente para grabar",
 		"systemPicker": "El sistema te preguntará qué compartir",
-		"inProgress": "Grabando",
+		"start": "Iniciar grabación",
+		"stop": "Detener y guardar la grabación",
 		"saving": "Guardando..."
 	},
 	"language": "Idioma",
+	"languageWithName": "Idioma: {{language}}",
 	"systemLanguagePrompt": {
 		"title": "¿Usar el idioma del sistema?",
 		"description": "Detectamos {{language}} como idioma de tu sistema. ¿Quieres cambiar OpenScreen a {{language}}?",
@@ -86,7 +89,7 @@
 	},
 	"deviceSettings": {
 		"title": "Ajustes de dispositivos",
-		"done": "Listo",
+		"close": "Cerrar",
 		"micLevel": "Nivel de entrada",
 		"micHint": "Habla para probar tu micrófono",
 		"noMicrophones": "No se encontró ningún micrófono",
@@ -95,5 +98,60 @@
 		"about": "Acerca de",
 		"version": "Versión {{version}}",
 		"checkingForUpdates": "Buscando…"
+	},
+	"permissions": {
+		"title": "OpenScreen necesita algunos permisos",
+		"subtitle": "macOS te pide concederlos una sola vez. Puedes cambiarlos en cualquier momento en Ajustes del Sistema.",
+		"level": {
+			"required": "Obligatorio",
+			"recommended": "Recomendado",
+			"optional": "Opcional"
+		},
+		"rows": {
+			"screen": {
+				"name": "Pantalla y audio del sistema",
+				"description": "Para grabar tu pantalla y el sonido de tu Mac."
+			},
+			"systemAudio": {
+				"name": "Audio del sistema",
+				"description": "Para grabar el sonido de tu Mac. Elegir una pantalla o una ventana no necesita ningún permiso."
+			},
+			"accessibility": {
+				"name": "Accesibilidad",
+				"description": "Para mostrar el cursor correcto (flecha, texto) en tus grabaciones."
+			},
+			"microphone": {
+				"name": "Micrófono",
+				"description": "Para grabar tu voz."
+			},
+			"camera": {
+				"name": "Cámara",
+				"description": "Para añadir tu webcam a tus grabaciones."
+			}
+		},
+		"status": {
+			"granted": "Permitido",
+			"restricted": "Gestionado por tu organización"
+		},
+		"actions": {
+			"continue": "Continuar",
+			"allow": "Permitir",
+			"openSettings": "Abrir Ajustes",
+			"restart": "Reiniciar OpenScreen",
+			"start": "Empezar"
+		},
+		"help": {
+			"screenPrompt": "Después, macOS te pedirá que actives OpenScreen en Ajustes del Sistema.",
+			"screenSettings": "En Ajustes del Sistema, activa OpenScreen. Si macOS ofrece cerrarlo y volver a abrirlo, acepta: esta ventana volverá.",
+			"screenNotListed": "¿OpenScreen no aparece en la lista? Haz clic en + y elige OpenScreen en Aplicaciones.",
+			"screenRestart": "Permitido. OpenScreen debe reiniciarse para poder usarlo.",
+			"screenRecurring": "En tu primera grabación, macOS te preguntará si OpenScreen puede acceder directamente a tu pantalla, sin el selector del sistema. Haz clic en Permitir. macOS vuelve a preguntar de vez en cuando; es normal.",
+			"systemAudioPrompt": "macOS te pedirá que permitas a OpenScreen grabar el sonido de tu Mac.",
+			"systemAudioRequested": "Si lo rechazaste, activa OpenScreen en «Solo grabación del audio del sistema» en Ajustes del Sistema."
+		},
+		"footer": {
+			"screenRequired": "Se necesita la grabación de pantalla para grabar.",
+			"ready": "Todo listo."
+		}
 	}
 }

@@ -1,15 +1,20 @@
 {
 	"tooltips": {
 		"hideHUD": "Nascondi",
+		"hideHUDTip": "Nascondi la barra. Puoi mostrarla di nuovo dall'icona nell'area di notifica.",
 		"closeApp": "Chiudi app",
-		"restartRecording": "Riavvia registrazione",
-		"cancelRecording": "Annulla registrazione",
+		"restartRecording": "Elimina questa registrazione e iniziane una nuova",
+		"cancelRecording": "Interrompi ed elimina questa registrazione",
 		"pauseRecording": "Metti in pausa registrazione",
 		"resumeRecording": "Riprendi registrazione",
 		"useVerticalTray": "Usa barra verticale",
 		"useHorizontalTray": "Usa barra orizzontale",
-		"openStudio": "Apri Studio",
-		"openNotes": "Apri note",
+		"changeSource": "Scegli un altro schermo o un'altra finestra",
+		"systemAudio": "Audio di sistema: registra il suono riprodotto dal computer",
+		"microphone": "Microfono: registra la tua voce",
+		"camera": "Fotocamera: ti registra come livello separato che puoi spostare nell'editor",
+		"openStudio": "Apri Studio: l'editor per le tue registrazioni",
+		"openNotes": "Apri note: testo da leggere durante la registrazione",
 		"openNotesPlaceholder": "Scrivi le tue note qui...",
 		"notesToolbar": {
 			"bold": "Grassetto",
@@ -27,34 +32,30 @@
 			"fontSize": "Dimensione carattere",
 			"decreaseFontSize": "Riduci dimensione carattere",
 			"increaseFontSize": "Aumenta dimensione carattere",
-			"mirror": "Specchia orizzontalmente"
+			"mirror": "Specchia orizzontalmente",
+			"mirrorTip": "Specchia il testo per leggerlo in uno specchio"
 		}
 	},
 	"audio": {
-		"enableSystemAudio": "Abilita audio di sistema",
-		"disableSystemAudio": "Disabilita audio di sistema",
-		"enableMicrophone": "Abilita microfono",
-		"disableMicrophone": "Disabilita microfono",
-		"defaultMicrophone": "Microfono predefinito",
 		"systemAudio": "Audio di sistema",
 		"microphone": "Microfono",
-		"on": "Attivo",
-		"off": "Disattivo",
 		"inputDevice": "Dispositivo di input"
 	},
 	"webcam": {
-		"enableWebcam": "Abilita webcam",
-		"disableWebcam": "Disabilita webcam",
-		"defaultCamera": "Fotocamera predefinita",
 		"searching": "Ricerca in corso...",
 		"noneFound": "Nessuna fotocamera trovata",
 		"unavailable": "Fotocamera non disponibile",
 		"camera": "Fotocamera",
-		"cameraDevice": "Dispositivo fotocamera"
+		"cameraDevice": "Dispositivo fotocamera",
+		"quality": "Qualità della fotocamera",
+		"quality1080p": "1080p",
+		"quality1440p": "1440p",
+		"quality2160p": "4K"
 	},
 	"cursor": {
-		"useEditableCursor": "Usa cursore modificabile",
-		"useSystemCursor": "Usa cursore di sistema"
+		"name": "Cursore modificabile",
+		"editableTip": "Cursore modificabile: registrato separatamente, così puoi cambiarne lo stile e usare lo zoom automatico nell'editor",
+		"systemTip": "Cursore di sistema: il tuo cursore reale, registrato nel video. Nessun cambio di stile, nessuno zoom automatico."
 	},
 	"sourceSelector": {
 		"loading": "Caricamento sorgenti...",
@@ -68,10 +69,12 @@
 	"recording": {
 		"selectSource": "Seleziona una sorgente da registrare",
 		"systemPicker": "Il sistema ti chiederà cosa condividere",
-		"inProgress": "Registrazione in corso",
+		"start": "Avvia registrazione",
+		"stop": "Interrompi e salva la registrazione",
 		"saving": "Salvataggio..."
 	},
 	"language": "Lingua",
+	"languageWithName": "Lingua: {{language}}",
 	"systemLanguagePrompt": {
 		"title": "Usare la lingua del sistema?",
 		"description": "Abbiamo rilevato {{language}} come lingua del sistema. Vuoi passare OpenScreen a {{language}}?",
@@ -86,7 +89,7 @@
 	},
 	"deviceSettings": {
 		"title": "Impostazioni dispositivi",
-		"done": "Fatto",
+		"close": "Chiudi",
 		"micLevel": "Livello di ingresso",
 		"micHint": "Parla per testare il microfono",
 		"noMicrophones": "Nessun microfono trovato",
@@ -95,5 +98,60 @@
 		"about": "Info",
 		"version": "Versione {{version}}",
 		"checkingForUpdates": "Controllo…"
+	},
+	"permissions": {
+		"title": "OpenScreen ha bisogno di alcuni permessi",
+		"subtitle": "macOS ti chiede di concederli una sola volta. Puoi modificarli in qualsiasi momento in Impostazioni di Sistema.",
+		"level": {
+			"required": "Obbligatorio",
+			"recommended": "Consigliato",
+			"optional": "Facoltativo"
+		},
+		"rows": {
+			"screen": {
+				"name": "Schermo e audio di sistema",
+				"description": "Per registrare lo schermo e l'audio del tuo Mac."
+			},
+			"systemAudio": {
+				"name": "Audio di sistema",
+				"description": "Per registrare l'audio del tuo Mac. Scegliere uno schermo o una finestra non richiede alcun permesso."
+			},
+			"accessibility": {
+				"name": "Accessibilità",
+				"description": "Per mostrare il cursore giusto (freccia, testo) nelle registrazioni."
+			},
+			"microphone": {
+				"name": "Microfono",
+				"description": "Per registrare la tua voce."
+			},
+			"camera": {
+				"name": "Fotocamera",
+				"description": "Per aggiungere la webcam alle registrazioni."
+			}
+		},
+		"status": {
+			"granted": "Consentito",
+			"restricted": "Gestito dalla tua organizzazione"
+		},
+		"actions": {
+			"continue": "Continua",
+			"allow": "Consenti",
+			"openSettings": "Apri Impostazioni",
+			"restart": "Riavvia OpenScreen",
+			"start": "Inizia"
+		},
+		"help": {
+			"screenPrompt": "Poi macOS ti chiederà di attivare OpenScreen in Impostazioni di Sistema.",
+			"screenSettings": "In Impostazioni di Sistema, attiva OpenScreen. Se macOS propone di chiuderlo e riaprirlo, accetta: questa finestra tornerà.",
+			"screenNotListed": "OpenScreen non è nell'elenco? Fai clic su +, poi scegli OpenScreen in Applicazioni.",
+			"screenRestart": "Consentito. OpenScreen deve riavviarsi per poterlo usare.",
+			"screenRecurring": "Alla prima registrazione, macOS ti chiederà se OpenScreen può accedere direttamente allo schermo, senza il selettore di sistema. Fai clic su Consenti. macOS lo richiede di tanto in tanto: è normale.",
+			"systemAudioPrompt": "macOS ti chiederà di consentire a OpenScreen di registrare l'audio del tuo Mac.",
+			"systemAudioRequested": "Se hai rifiutato, attiva OpenScreen in “Solo registrazione audio di sistema” in Impostazioni di Sistema."
+		},
+		"footer": {
+			"screenRequired": "Per registrare serve la registrazione dello schermo.",
+			"ready": "È tutto pronto."
+		}
 	}
 }

@@ -113,6 +113,12 @@ const { buildClipSection, isSilenceWord, SILENCE_THRESHOLD_SEC } = await appModu
 const { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID, resolveCursorSprites } = await appModule(
 	"src/lib/cursor/cursorThemes.ts",
 );
+// The empty-lane hints take their key through {{key}} since the app learned to
+// show the bound shortcut (358c3383). The recreation shows a fresh install, so
+// the default bindings, formatted the way the app formats them. No import of
+// its own, so it loads as-is like cursorThemes.ts.
+const { DEFAULT_SHORTCUTS, formatBinding } = await appModule("src/lib/shortcuts.ts");
+const shortcutKey = (action) => ({ key: formatBinding(DEFAULT_SHORTCUTS[action], true) });
 
 // ── locale access that fails loudly ─────────────────────────────────────
 const locale = (ns) =>
@@ -182,20 +188,23 @@ const fmtTick = new Function(
 		.replace(/\): string/, ")")}; return fmtTick;`,
 )();
 
-/** ClipWaveform's three expressions, in its own words. */
-const waveBarCount = new Function(
+/** ClipWaveform's sample count, its height per sample and the shape it draws, in its own words. */
+const waveSampleCount = new Function(
 	"sourceStartSec",
 	"sourceEndSec",
-	`return ${lift(/const barCount = ([^;]+);/, "waveform barCount")};`,
+	`return ${lift(/const sampleCount = ([^;]+);/, "waveform sampleCount")};`,
 );
-const waveBarHeightPct = new Function(
-	"amplitude",
-	`return ${lift(/height: `\$\{([^}]+)\}%`/, "waveform bar height")};`,
+const waveHeightPct = new Function(
+	"h",
+	"gain",
+	`return ${lift(/levels\.map\(\(h\) => (.+)\),\n/, "waveform height")};`,
 );
-const waveBarOpacity = new Function(
-	"amplitude",
-	`return ${lift(/opacity: ([^,\n]+),\n/, "waveform bar opacity")};`,
-);
+const waveformPaths = new Function(
+	`${lift(/(function waveformPaths\([\s\S]*?\n\})/, "waveformPaths")
+		.replace(/\): \{ area: string; line: string \}/, ")")
+		.replace(/: readonly number\[\]/, "")
+		.replace(/: number/g, "")}; return waveformPaths;`,
+)();
 
 // ── the fixture ─────────────────────────────────────────────────────────
 if (ARGS.has("--vendor")) vendorFixture();
@@ -263,14 +272,14 @@ function vendorFixture() {
 }
 
 /**
- * The 320 bar amplitudes the app's clip card draws.
+ * The 320 amplitudes the app's clip card draws its waveform through.
  *
  * `audioPeaksWorker.ts` is a Web Worker whose only entry point is
  * `self.onmessage`, so it cannot be imported the way `format.ts` can. Its block
  * arithmetic is reproduced here — the one piece of app logic this file
  * duplicates rather than runs, and the reason it is written out in full instead
- * of summarised. Everything downstream of it (bar count, bar height, bar
- * opacity) is lifted from V4Timeline.tsx and evaluated, not retyped.
+ * of summarised. Everything downstream of it (sample count, height, the curve)
+ * is lifted from V4Timeline.tsx and evaluated, not retyped.
  */
 function decodePeaks(asset) {
 	const pcm = execFileSync(
@@ -302,16 +311,16 @@ function decodePeaks(asset) {
 		peaks[i * 2 + 1] = maxVal;
 	}
 
-	// V4Timeline.tsx ClipWaveform: reduce the blocks to one amplitude per bar.
+	// V4Timeline.tsx ClipWaveform: reduce the blocks to one amplitude per sample.
 	const durationSec = asset.durationSec;
-	const barCount = waveBarCount(0, durationSec);
+	const sampleCount = waveSampleCount(0, durationSec);
 	const blocksPerSec = N / durationSec;
 	const endBlock = Math.min(N, Math.ceil(durationSec * blocksPerSec));
 	const rangeBlocks = Math.max(1, endBlock);
 	const amps = [];
-	for (let i = 0; i < barCount; i++) {
-		const blockStart = Math.floor((i / barCount) * rangeBlocks);
-		const blockEnd = Math.max(blockStart + 1, Math.floor(((i + 1) / barCount) * rangeBlocks));
+	for (let i = 0; i < sampleCount; i++) {
+		const blockStart = Math.floor((i / sampleCount) * rangeBlocks);
+		const blockEnd = Math.max(blockStart + 1, Math.floor(((i + 1) / sampleCount) * rangeBlocks));
 		let amp = 0;
 		for (let b = blockStart; b < blockEnd && b < N; b++) {
 			amp = Math.max(amp, Math.abs(peaks[b * 2]), Math.abs(peaks[b * 2 + 1]));
@@ -323,7 +332,7 @@ function decodePeaks(asset) {
 		source: asset.originalPath.replace(/^.*\//, ""),
 		sampleRateHz: 48000,
 		blocks: N,
-		barCount,
+		sampleCount,
 		amps,
 	};
 }
@@ -403,11 +412,36 @@ const trimPills = trims.map((r) => ({
 }));
 
 const LANE_ORDER = [
-	{ id: "annotation", hintKey: "timeline:hints.pressAnnotation", pills: [] },
-	{ id: "speed", hintKey: "timeline:hints.pressSpeed", pills: [] },
-	{ id: "trim", hintKey: "timeline:hints.pressTrim", pills: trimPills },
-	{ id: "zoom", hintKey: "timeline:hints.pressZoom", pills: zoomPills },
-	{ id: "cameraFullscreen", hintKey: "timeline:hints.pressCameraFullscreen", pills: [] },
+	{
+		id: "annotation",
+		hintKey: "timeline:hints.pressAnnotation",
+		hintVars: shortcutKey("addAnnotation"),
+		pills: [],
+	},
+	{
+		id: "speed",
+		hintKey: "timeline:hints.pressSpeed",
+		hintVars: shortcutKey("addSpeed"),
+		pills: [],
+	},
+	{
+		id: "trim",
+		hintKey: "timeline:hints.pressTrim",
+		hintVars: shortcutKey("addTrim"),
+		pills: trimPills,
+	},
+	{
+		id: "zoom",
+		hintKey: "timeline:hints.pressZoom",
+		hintVars: shortcutKey("addZoom"),
+		pills: zoomPills,
+	},
+	{
+		id: "cameraFullscreen",
+		hintKey: "timeline:hints.pressCameraFullscreen",
+		hintVars: shortcutKey("addCameraFullscreen"),
+		pills: [],
+	},
 ];
 
 // Cross-check against the document rather than trusting the table above: a lane
@@ -430,7 +464,7 @@ for (const lane of LANE_ORDER) {
 
 const LANES = LANE_ORDER.map((lane) => ({
 	id: lane.id,
-	hint: lane.pills.length === 0 ? t(lane.hintKey) : null,
+	hint: lane.pills.length === 0 ? t(lane.hintKey, lane.hintVars) : null,
 	pills: lane.pills,
 }));
 const PILLS = LANES.flatMap((lane) => lane.pills);
@@ -485,41 +519,21 @@ const RULER = {
 };
 
 // ── waveform ────────────────────────────────────────────────────────────
-// 320 bars are 320 elements for a shape nobody can resolve at 2 px. They become
-// five <path>s, one per opacity bucket: the app's own `0.5 + amp*0.5` rounded
-// down to the nearest tenth, which is the whole of the declared quantisation.
-// Geometry is left in ruler units — one unit per bar slot, 100 units tall — so
-// the component can stretch it with `preserveAspectRatio="none"` and keep the
-// bars at the app's literal 2 px with `vector-effect: non-scaling-stroke`.
-const OPACITY_BUCKETS = [0.5, 0.6, 0.7, 0.8, 0.9];
-
+// The clip card's two paths, built by the app's own `waveformPaths`: a filled
+// area and the line along its top, one unit per sample and 100 units tall, which
+// the component stretches with `preserveAspectRatio="none"` as `.tlWave` does.
+// Gain 1: the document leaves the output gain at 0 dB.
 function buildWaveform() {
 	const amps = doc.vendoredWaveform.amps;
-	const buckets = OPACITY_BUCKETS.map(() => []);
-	for (let i = 0; i < amps.length; i++) {
-		const h = amps[i];
-		const exact = Number(waveBarOpacity(h));
-		const bucket = Math.min(OPACITY_BUCKETS.length - 1, Math.floor((exact - 0.5) / 0.1 + 1e-9));
-		const heightPct = waveBarHeightPct(h);
-		const y0 = (100 - heightPct) / 2;
-		const y1 = y0 + heightPct;
-		buckets[bucket].push(`M${i + 0.5} ${trimNum(y0)}V${trimNum(y1)}`);
-	}
+	const { area, line } = waveformPaths(amps.map((h) => waveHeightPct(h, 1)));
 	return {
-		viewBox: `0 0 ${amps.length} 100`,
-		barCount: amps.length,
-		strokeWidthPx: 2,
-		gapPx: 1,
-		note: "preserveAspectRatio=none; stroke-width 2 with vector-effect:non-scaling-stroke reproduces .tlWave span {max-width:2px}",
-		paths: buckets.map((segments, i) => ({
-			opacity: OPACITY_BUCKETS[i],
-			bars: segments.length,
-			d: segments.join(""),
-		})),
+		viewBox: `0 0 ${amps.length - 1} 100`,
+		sampleCount: amps.length,
+		area,
+		line,
 	};
 }
 
-const trimNum = (n) => String(Number(n.toFixed(1)));
 const WAVEFORM = buildWaveform();
 
 // ── chat ────────────────────────────────────────────────────────────────
@@ -723,16 +737,48 @@ const EFFECTS = {
 };
 
 /**
- * Every slider and toggle on the two panels, at the document's own settings and
- * with the range, suffix and precision RightPanes.tsx gives it.
+ * Every slider, toggle and row of named levels on the two panels, at the
+ * document's own settings and with the range, suffix and precision RightPanes.tsx
+ * gives it.
  *
- * The app stores most of these as fractions and displays them scaled — cursor
- * size is `size * 10` over 5–100 with one decimal and no suffix, smoothing is
- * `smoothing * 100` with a per-cent sign — so a panel that showed the stored
- * number would be wrong in a way that looks entirely plausible. The scaling
- * lives here, next to the value it scales.
+ * The app stores most of these as fractions and displays them scaled — smoothing
+ * is `smoothing * 100` with a per-cent sign, cursor size is shown as no number at
+ * all — so a panel that showed the stored number would be wrong in a way that
+ * looks entirely plausible. The scaling lives here, next to the value it scales.
  */
 const le = doc.legacyEditor;
+
+/**
+ * The named levels RightPanes.tsx offers where a number would mean nothing to a
+ * user (shadow, click bounce). Lifted as source, like `wallpaper.ts` below: that
+ * file reaches React and the `@/` alias and cannot be imported.
+ */
+const RIGHT_PANES_SRC = readFileSync(
+	resolve(APP, "src/components/ai-edition/RightPanes.tsx"),
+	"utf8",
+);
+function liftLevels(name) {
+	const body = new RegExp(`const ${name} = \\[([\\s\\S]*?)\\] as const;`).exec(
+		RIGHT_PANES_SRC,
+	)?.[1];
+	const levels = [...(body ?? "").matchAll(/value: ([\d.]+), labelKey: "([\w.]+)"/g)].map((m) => ({
+		value: Number(m[1]),
+		label: t(`settings:${m[2]}`),
+	}));
+	if (levels.length < 2) throw new Error(`could not lift ${name} out of RightPanes.tsx`);
+	return levels;
+}
+/** The level whose value is nearest. The document predates the rows: its shadow
+ *  (0.35) sits between two levels, where the app presses no button at all. A row
+ *  with nothing pressed reads as broken on a page, so the page presses the
+ *  nearest one and says so here. */
+const nearestLevel = (levels, v) =>
+	levels.reduce((a, b) => (Math.abs(b.value - v) < Math.abs(a.value - v) ? b : a)).value;
+
+const { SETTING_BOUNDS, DEFAULT_PROJECT_APPEARANCE, readBackgroundBlur } = await appModule(
+	"src/lib/projectDefaults.ts",
+);
+const { ROUNDNESS_SLIDER_MAX_PX } = await appModule("src/native/paramUnits.ts");
 const defaultsSrc = [
 	[
 		"src/components/video-editor/types.ts",
@@ -763,10 +809,22 @@ const slider = (label, value, min, max, suffix, display) => ({
 	display,
 });
 
+const blurBg = readBackgroundBlur(le, 0);
+const SHADOW_LEVELS = liftLevels("SHADOW_LEVELS");
+const CLICK_BOUNCE_LEVELS = liftLevels("CLICK_BOUNCE_LEVELS");
+
 const CONTROLS = {
-	// RightPanes.tsx:1443, :1397, :1412, :1427 — Video Effects, in its order.
+	// RightPanes.tsx VideoEffectsPane — the Background section's blur, then the
+	// Frame section (shadow, padding, roundness), then Motion.
+	// The document stores the old `showBlur` switch; the app reads it through
+	// `readBackgroundBlur`, and so does this.
+	blurBg: slider(t("settings:effects.blurBg"), blurBg * 100, 0, 100, "%", asPercent(blurBg)),
+	shadow: {
+		label: t("settings:effects.shadow"),
+		levels: SHADOW_LEVELS,
+		value: nearestLevel(SHADOW_LEVELS, le.shadowIntensity),
+	},
 	padding: slider(t("settings:effects.padding"), le.padding, 0, 100, "%", `${le.padding}%`),
-	blurBg: { label: t("settings:effects.blurBg"), on: le.showBlur },
 	motionBlur: slider(
 		t("settings:effects.motionBlur"),
 		le.motionBlurAmount * 100,
@@ -775,37 +833,26 @@ const CONTROLS = {
 		"%",
 		asPercent(le.motionBlurAmount),
 	),
-	shadow: slider(
-		t("settings:effects.shadow"),
-		le.shadowIntensity * 100,
-		0,
-		100,
-		"%",
-		asPercent(le.shadowIntensity),
-	),
 	roundness: slider(
 		t("settings:effects.roundness"),
 		le.borderRadius,
 		0,
-		64,
+		ROUNDNESS_SLIDER_MAX_PX,
 		"px",
 		`${le.borderRadius}px`,
 	),
-	// RightPanes.tsx:1755, :1771 — Cursor. `show` and `clipToBounds` are not in
-	// this document, so they are the app's own defaults rather than a guess.
+	// RightPanes.tsx CursorPane. `show` is not in this document, so it is the
+	// app's own default rather than a guess.
 	cursorShow: { label: t("settings:cursor.show"), on: defaultBool("cursorShow") },
-	clipToBounds: {
-		label: t("settings:cursor.clipToBounds"),
-		on: defaultBool("DEFAULT_CURSOR_CLIP_TO_BOUNDS"),
-	},
-	cursorTheme: { label: t("settings:cursor.theme"), value: le.cursorTheme },
+	// Over SETTING_BOUNDS, with no value shown: the slider has no unit, and the
+	// app does not print a number nobody can act on.
 	cursorSize: slider(
 		t("settings:cursor.size"),
-		le.cursorSize * 10,
-		5,
-		100,
+		le.cursorSize,
+		SETTING_BOUNDS.cursorSize[0],
+		SETTING_BOUNDS.cursorSize[1],
 		"",
-		(le.cursorSize * 10).toFixed(1),
+		"",
 	),
 	smoothing: slider(
 		t("settings:cursor.smoothing"),
@@ -815,11 +862,18 @@ const CONTROLS = {
 		"%",
 		asPercent(le.cursorSmoothing),
 	),
+	// Not in this document either: the app's default level.
+	clickBounce: {
+		label: t("settings:cursor.clickBounce"),
+		levels: CLICK_BOUNCE_LEVELS,
+		value: DEFAULT_PROJECT_APPEARANCE.cursor.clickBounce,
+	},
 };
 
 /**
- * The cursor packs the Cursor panel's picker shows, and the two macOS shapes the
- * demonstration pointer swaps to.
+ * The cursor art the page draws: the application's default pack, and the two
+ * macOS shapes the demonstration pointer swaps to. The editor shows no theme
+ * picker while the default is the only pack it ships, so the page shows none.
  *
  * Every one is a pack the application actually ships in `public/cursors/`, with
  * the hotspot the application actually uses — which is the whole reason to read
@@ -831,18 +885,7 @@ const CONTROLS = {
  * arrow tip, and reads as the sprite's right edge if taken for a fraction — so
  * the application's own `resolveCursorSprites` does the conversion here too.
  */
-const CURSOR_PICKER = [
-	DEFAULT_CURSOR_THEME_ID,
-	"pink-glossy-arrow-and-hand-3d",
-	"spring-gradient",
-	"black-and-rainbow-stroke-gradient-animated",
-	"among-us-sus-knife-and-red-animated",
-	"hollow-knight-and-game-arrow",
-	"mickey-mouse-black-hand-inflated-glove",
-	"sanrio-kuromi-skull-arrow",
-	"old-roblox",
-	"pokemon-neon-gengar",
-];
+const CURSOR_PACKS = [DEFAULT_CURSOR_THEME_ID];
 
 const round4 = (v) => Number(v.toFixed(4));
 
@@ -868,8 +911,7 @@ function cursorSprite(id, kind) {
 }
 
 const CURSORS = {
-	themeCount: CURSOR_THEMES.length + 1,
-	themes: CURSOR_PICKER.map((id, i) => ({
+	themes: CURSOR_PACKS.map((id, i) => ({
 		id,
 		...cursorSprite(id, "arrow"),
 		src: `/img/cursors/${String(i).padStart(2, "0")}-arrow.png`,
@@ -886,11 +928,16 @@ const CURSORS = {
 const PANELS = {
 	background: {
 		title: t("settings:background.title"),
+		// WallpaperPicker's order: image, gradient, colour.
 		tabs: [
 			t("settings:background.image"),
-			t("settings:background.color"),
 			t("settings:background.gradient"),
+			t("settings:background.color"),
 		],
+		motion: t("settings:background.motion"),
+		motions: ["motionNone", "motionDrift", "motionAurora", "motionWaves"].map((k) =>
+			t(`settings:background.${k}`),
+		),
 		uploadCustom: t("settings:background.uploadCustom"),
 		wallpaperCount: WALLPAPER_COUNT,
 		swatchLabels: Array.from({ length: WALLPAPER_COUNT }, (_, i) =>
@@ -899,6 +946,8 @@ const PANELS = {
 	},
 	effects: {
 		title: t("settings:effects.title"),
+		frame: t("settings:effects.frame"),
+		motion: t("settings:effects.motion"),
 		padding: t("settings:effects.padding"),
 		blurBg: t("settings:effects.blurBg"),
 		motionBlur: t("settings:effects.motionBlur"),
@@ -908,10 +957,9 @@ const PANELS = {
 	cursor: {
 		title: t("settings:cursor.title"),
 		show: t("settings:cursor.show"),
-		clipToBounds: t("settings:cursor.clipToBounds"),
-		theme: t("settings:cursor.theme"),
 		size: t("settings:cursor.size"),
 		smoothing: t("settings:cursor.smoothing"),
+		clickBounce: t("settings:cursor.clickBounce"),
 	},
 };
 
@@ -1037,7 +1085,7 @@ const PROVENANCE = [
 	})),
 	...LANES.filter((l) => l.hint).map((l) => ({
 		shown: l.hint,
-		source: `timeline.json hints.press${l.id[0].toUpperCase()}${l.id.slice(1)} — rendered because the document holds no ${l.id} regions`,
+		source: `computed: timeline.json hints.press${l.id[0].toUpperCase()}${l.id.slice(1)} with {{key}} = the default binding (shortcuts.ts DEFAULT_SHORTCUTS, formatBinding) — rendered because the document holds no ${l.id} regions`,
 	})),
 	{
 		shown: RULER.variants[0].labels.map((l) => l.text).join(" "),
@@ -1070,11 +1118,11 @@ const PROVENANCE = [
 	},
 	{
 		shown: PANELS.background.tabs[1],
-		source: "src/i18n/locales/en/settings.json → background.color",
+		source: "src/i18n/locales/en/settings.json → background.gradient",
 	},
 	{
 		shown: PANELS.background.tabs[2],
-		source: "src/i18n/locales/en/settings.json → background.gradient",
+		source: "src/i18n/locales/en/settings.json → background.color",
 	},
 	{
 		shown: PANELS.background.uploadCustom,
@@ -1098,16 +1146,30 @@ const PROVENANCE = [
 	},
 	{ shown: PANELS.cursor.title, source: "src/i18n/locales/en/settings.json → cursor.title" },
 	{ shown: PANELS.cursor.show, source: "src/i18n/locales/en/settings.json → cursor.show" },
-	{
-		shown: PANELS.cursor.clipToBounds,
-		source: "src/i18n/locales/en/settings.json → cursor.clipToBounds",
-	},
-	{ shown: PANELS.cursor.theme, source: "src/i18n/locales/en/settings.json → cursor.theme" },
 	{ shown: PANELS.cursor.size, source: "src/i18n/locales/en/settings.json → cursor.size" },
 	{
 		shown: PANELS.cursor.smoothing,
 		source: "src/i18n/locales/en/settings.json → cursor.smoothing",
 	},
+	{
+		shown: PANELS.cursor.clickBounce,
+		source: "src/i18n/locales/en/settings.json → cursor.clickBounce",
+	},
+	{
+		shown: PANELS.background.motion,
+		source: "src/i18n/locales/en/settings.json → background.motion",
+	},
+	...PANELS.background.motions.map((shown) => ({
+		shown,
+		source: "src/i18n/locales/en/settings.json → background.motion{None,Drift,Aurora,Waves}",
+	})),
+	{ shown: PANELS.effects.frame, source: "src/i18n/locales/en/settings.json → effects.frame" },
+	{ shown: PANELS.effects.motion, source: "src/i18n/locales/en/settings.json → effects.motion" },
+	...[...CONTROLS.shadow.levels, ...CONTROLS.clickBounce.levels].map((level) => ({
+		shown: level.label,
+		source:
+			"lifted: SHADOW_LEVELS / CLICK_BOUNCE_LEVELS in RightPanes.tsx, labels from settings.json",
+	})),
 ];
 
 // A string that claims a locale source but is not in the locale files is the
@@ -1270,7 +1332,7 @@ export const PILLS: RecreationPill[] = ${litRows(PILLS)};
 /** The ruler, re-derived per breakpoint the way the app re-derives it per zoom. */
 export const RULER = ${litRuler(RULER)} as const;
 
-/** ${WAVEFORM.barCount} bars in five opacity buckets, five paths. */
+/** ${WAVEFORM.sampleCount} samples as one smooth area under a line, the clip card's two paths. */
 export const WAVEFORM = ${lit(WAVEFORM)} as const;
 
 /** The conversation. */
@@ -1292,8 +1354,8 @@ export const EFFECTS = ${lit(EFFECTS)} as const;
  *  and suffixed the way RightPanes.tsx scales and suffixes it. */
 export const CONTROLS = ${lit(CONTROLS)} as const;
 
-/** The cursor packs the picker shows, each with the application's own hotspot,
- *  normalised to a fraction of the sprite. */
+/** The cursor art the page draws, each sprite with the application's own
+ *  hotspot, normalised to a fraction of the sprite. */
 export const CURSORS = ${lit(CURSORS)} as const;
 
 export const TRANSPORT = ${lit(TRANSPORT)} as const;
@@ -1332,7 +1394,7 @@ if (CHECK) {
 	console.log(
 		`wrote ${GENERATED}\n  ${WORDS.length} transcript entries (${INSPECTOR.wordCount} words, ${INSPECTOR.silenceCount} silences)\n` +
 			`  ${PILLS.length} pills, ${LANES.filter((l) => l.hint).length} hints, ${RULER.variants[0].labels.length}/${RULER.variants[1].labels.length} ruler labels\n` +
-			`  ${WAVEFORM.barCount} waveform bars in ${WAVEFORM.paths.length} paths, ${PROVENANCE.length} provenance entries`,
+			`  ${WAVEFORM.sampleCount} waveform samples, ${PROVENANCE.length} provenance entries`,
 	);
 }
 

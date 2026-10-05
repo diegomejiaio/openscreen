@@ -4,6 +4,7 @@
 		"save": "Uložit",
 		"delete": "Smazat",
 		"close": "Zavřít",
+		"resetToDefault": "Obnovit výchozí hodnotu",
 		"share": "Sdílet",
 		"done": "Hotovo",
 		"open": "Otevřít",
@@ -45,7 +46,10 @@
 		"hide": "Skrýt OpenScreen",
 		"hideOthers": "Skrýt ostatní",
 		"unhide": "Zobrazit vše",
-		"saveDiagnostics": "Uložit diagnostiku"
+		"saveDiagnostics": "Uložit diagnostiku",
+		"starOnGithub": "Dát hvězdu na GitHubu",
+		"permissions": "Oprávnění…",
+		"closeNotification": "Zavřít oznámení"
 	},
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} je k dispozici. Používáte verzi {{currentVersion}}.",

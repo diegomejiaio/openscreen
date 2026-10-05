@@ -22,7 +22,7 @@ Switch to **Media** in the top bar. The stage shows one card per source in the p
 
 Select a card to open its detail panel:
 
-- **Source Transcript** — the full text for that asset, with its status (No transcript / Pending transcription / Downloading speech model / Starting speech model / Transcribing / Transcript ready / No speech detected / No audio track / Transcription failed) and the detected language.
+- **Transcript** — the full text for that asset, with its status (No transcript / Pending transcription / Downloading speech model / Starting speech model / Transcribing / Transcript ready / No speech detected / No audio track / Transcription failed) and the detected language.
 - **Regenerate as** — re-run local Whisper for this asset, either on **Auto** detection or forced to one of the 100 languages Whisper supports.
 
 **Import media** adds a video from disk. The file dialog accepts `webm`, `mp4`, `mov`, `avi`, `mkv`, `m4v`, `wmv`, `flv`, and `ts`. This stage holds video only: music and other audio files go in from the timeline toolbar's **Add audio** menu, and images go in as [image annotations](./editing-timeline.md#annotations).
@@ -42,13 +42,13 @@ Clips are always contiguous — no gaps, no overlaps. Removing or reordering one
 
 ## Output size
 
-The **Format** control in the **Composition** facet sets the shape of the frame; **Original** lists the actual shapes of the clips in your project. Every clip gets fitted into that frame, so mixing a 16:9 screen recording with a 9:16 phone capture in one timeline works — see [Export](./export.md#resolution) for what resolution comes out.
+The **Format** control in the **Composition** facet sets the shape of the frame; **Original** lists the actual shapes of the clips in your project. Every clip gets fitted into that frame, so mixing a 16:9 screen recording with a 9:16 phone capture in one timeline works — see [Export](./export.md#resolution) for what resolution comes out. **Auto** is offered only while every clip shares one shape and camera layout: it then wraps the frame around them, with the padding.
 
 ## Starting a project
 
 **New project** asks for a name and a starting point:
 
-- **Screen recording** — jumps straight into [Rec mode](./recording.md#recording-from-the-editor-rec-mode).
+- **Screen recording** — jumps straight into [Record mode](./recording.md#recording-from-the-editor-rec-mode).
 - **Import media** — opens the file picker.
 
 **Open project** lists your recent `.openscreen` files with a search box, keyboard navigation, and a **Browse files…** escape hatch. You can also drop a `.openscreen` file onto the empty editor.

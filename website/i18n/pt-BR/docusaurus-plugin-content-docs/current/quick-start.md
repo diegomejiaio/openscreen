@@ -22,7 +22,7 @@ Ao abrir o OpenScreen, aparece uma pequena cápsula flutuante (o HUD) fixada na 
 
 ## 2. Escolha o que gravar {#2-pick-what-to-record}
 
-Clique no seletor de fonte (ícone de tela) para abrir a seleção de fontes. Ela lista suas **Telas** e **Janelas** em duas abas — escolha uma miniatura e clique em **Compartilhar**.
+Clique no seletor de fonte (ícone de tela) para abrir a seleção de fontes. Ela lista suas **Telas** e **Janelas** em duas abas — escolha uma miniatura e clique em **Compartilhar**. No macOS 15.2 e posterior, em vez disso, você escolhe a tela ou a janela no seletor do sistema da Apple.
 
 No Linux, o HUD não tem seletor de fonte. Ele mostra *O sistema perguntará o que compartilhar*: quando você aperta gravar, a própria caixa de diálogo de compartilhamento do seu ambiente de desktop pergunta qual tela ou janela usar, antes da contagem regressiva e de novo a cada tomada.
 
@@ -49,7 +49,7 @@ Clique em **Abrir Studio** (ou ele abre sozinho quando você encerra a gravaçã
 ## 6. Recorte e exporte {#6-trim-and-export}
 
 - Posicione o cursor de reprodução onde quer um corte e pressione `T` (ou o botão de tesoura) — uma região de recorte de dois segundos aparece ali. Arraste as bordas dela para ajustar o que será removido.
-- Clique em **Exportar** na barra superior, escolha **MP4** ou **GIF**, selecione uma qualidade e clique em **Exportar**.
+- Clique em **Exportar** na barra superior, confira o formato e a qualidade e clique em **Exportar**.
 - Quando terminar, clique em **Mostrar na pasta** para encontrar o arquivo.
 
 Esse é o ciclo básico. Para o conjunto completo de ferramentas de edição — zooms, mudanças de velocidade, anotações, estilo do cursor, layout da webcam —, veja [Edição e linha do tempo](./editing-timeline.md). Para juntar várias tomadas em um só vídeo, veja [Biblioteca de mídia](./media-library.md).

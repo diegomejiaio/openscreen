@@ -9,11 +9,16 @@ keywords:
   - auto subtitles screen recording
 ---
 
+import DemoLoop from "@site/src/components/DemoLoop";
+import DemoLoopPair from "@site/src/components/DemoLoop/Pair";
+
 # A screen recorder with captions made on your machine
 
 OpenScreen is a free, MIT-licensed screen recorder with captions for Windows, macOS and Linux. It transcribes your recording on your own computer with Whisper, after a one-time model download of about 264 MB, and burns styled captions into the exported video. If you need separate SRT or VTT subtitle files for a course platform or an accessibility requirement, Cap or Camtasia is the better choice.
 
 This page is published by the OpenScreen project. The Cap, Camtasia and Screen Studio details come from cap.so, techsmith.com and screen.studio and were checked in September 2026. The sources are listed at the end.
+
+<DemoLoop name="automatic-subtitles" />
 
 ## At a glance
 
@@ -52,11 +57,18 @@ Captions are a live view of the transcript, not a copy of it. Cut words from the
 
 The preview and the export use the same layout, so the captions you see are the ones burned into the video. **Show captions** turns them off for an export without them. Full reference in [Captions & transcript](/docs/captions/).
 
+<DemoLoop name="caption-styles" />
+
 ### Cutting by deleting words
 
 The **Transcript** panel shows the words of every clip on the timeline. Select a word or a passage and press Delete: that span is cut from playback and export, like a trim on the timeline. Cut words show struck through, and you can restore them. Silences are marked in the text and can be cut or restored the same way.
 
 Whisper reports word times a little late. OpenScreen pulls each word boundary back onto the audio, so a cut starts where the spoken word starts rather than a syllable later. See [Transcript editing](/docs/captions/#transcript-editing).
+
+<DemoLoopPair>
+  <DemoLoop name="edit-by-transcript" />
+  <DemoLoop name="tighten-pauses" />
+</DemoLoopPair>
 
 ### Translation with your own key
 
